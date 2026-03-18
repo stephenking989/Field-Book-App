@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#1C3829" />
+  <meta name="description" content="Digital field notebook for land surveyors" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="FieldBook" />
+
+  <title>FieldBook</title>
+
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./icon.svg" />
+
+  <!-- Tailwind CSS (Play CDN — loads all utilities) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Tailwind custom config -->
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'fb': {
+              'dark':    '#1C3829',
+              'mid':     '#2D6A4F',
+              'light':   '#52B788',
+              'pale':    '#D8F3DC',
+              'cream':   '#FDFAF4',
+              'cream2':  '#F0EBE0',
+              'border':  '#DDD6C8',
+              'text':    '#2C2C2C',
+              'muted':   '#6B7280',
+            }
+          },
+          fontFamily: {
+            'data': ['"Courier New"', 'Courier', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- React 18 UMD -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+
+  <!-- Babel Standalone (JSX transform) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    /* ── Base reset ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body, #root { height: 100%; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1C3829;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior: none;
+    }
+
+    /* ── Page grid background ───────────────────────────── */
+    .page-grid {
+      background-color: #FDFAF4;
+      background-image:
+        linear-gradient(rgba(180,165,140,0.25) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(180,165,140,0.25) 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+
+    /* ── Horizontal scroll table ────────────────────────── */
+    .fieldbook-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 13px;
+    }
+    .fieldbook-table th {
+      background: #2D6A4F;
+      color: white;
+      padding: 8px 6px;
+      text-align: center;
+      white-space: nowrap;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+    .fieldbook-table td {
+      padding: 10px 6px;
+      border-bottom: 1px solid #DDD6C8;
+      text-align: center;
+      color: #2C2C2C;
+      vertical-align: middle;
+    }
+    .fieldbook-table tr:nth-child(even) td {
+      background: rgba(221, 214, 200, 0.15);
+    }
+    .fieldbook-table td.notes-col {
+      text-align: left;
+      padding-left: 10px;
+    }
+    .fieldbook-table td.point-col {
+      font-weight: 700;
+      color: #1C3829;
+    }
+
+    /* ── Scrollbar styling ──────────────────────────────── */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #DDD6C8; border-radius: 4px; }
+
+    /* ── Transitions ────────────────────────────────────── */
+    .screen-enter { animation: slideUp 0.2s ease-out; }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── Modal backdrop ─────────────────────────────────── */
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(2px);
+      z-index: 50;
+      display: flex; align-items: flex-end; justify-content: center;
+    }
+    .modal-sheet {
+      background: white;
+      width: 100%; max-width: 600px;
+      border-radius: 20px 20px 0 0;
+      padding: 24px 20px 40px;
+      animation: sheetUp 0.25s ease-out;
+    }
+    @keyframes sheetUp {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef } = React;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // LOCAL STORAGE DATA LAYER
+    // Phase 3 will replace this with IndexedDB / Dexie.js
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const DB = {
+      getProjects() {
+        try { return JSON.parse(localStorage.getItem('fb_projects') || '[]'); }
+        catch { return []; }
+      },
+      saveProjects(projects) {
+        localStorage.setItem('fb_projects', JSON.stringify(projects));
+      },
+      createProject(data) {
+        const projects = DB.getProjects();
+        const project = {
+          id: Date.now().toString(),
+          ...data,
+          createdAt: new Date().toISOString(),
+          pages: [],
+        };
+        DB.saveProjects([project, ...projects]);
+        return project;
+      },
+      getProject(id) {
+        return DB.getProjects().find(p => p.id === id) || null;
+      },
+      addPage(projectId) {
+        const projects = DB.getProjects();
+        const idx = projects.findIndex(p => p.id === projectId);
+        if (idx === -1) return null;
+        const page = {
+          id: Date.now().toString(),
+          pageNumber: projects[idx].pages.length + 1,
+          date: new Date().toISOString().split('T')[0],
+          station: '',
+          weather: '',
+          notes: '',
+          rows: [],
+        };
+        projects[idx].pages.push(page);
+        DB.saveProjects(projects);
+        return page;
+      },
+      getPage(projectId, pageId) {
+        const p = DB.getProject(projectId);
+        return p ? p.pages.find(pg => pg.id === pageId) : null;
+      },
+      deleteProject(id) {
+        DB.saveProjects(DB.getProjects().filter(p => p.id !== id));
+      },
+    };
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SIMPLE HASH ROUTER
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function useRouter() {
+      const [hash, setHash] = useState(window.location.hash || '#/');
+      useEffect(() => {
+        const handler = () => setHash(window.location.hash || '#/');
+        window.addEventListener('hashchange', handler);
+        return () => window.removeEventListener('hashchange', handler);
+      }, []);
+      return hash;
+    }
+
+    function navigate(path) {
+      window.location.hash = path;
+    }
+
+    function parseRoute(hash) {
+      const path = hash.replace('#', '') || '/';
+      // /project/:id/page/:pageId
+      const pageMatch = path.match(/^\/project\/([^/]+)\/page\/([^/]+)$/);
+      if (pageMatch) return { view: 'page', projectId: pageMatch[1], pageId: pageMatch[2] };
+      // /project/:id
+      const projMatch = path.match(/^\/project\/([^/]+)$/);
+      if (projMatch) return { view: 'project', projectId: projMatch[1] };
+      return { view: 'home' };
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ICONS (inline SVG components)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const IconPlus = () => (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    );
+    const IconBack = () => (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="15 18 9 12 15 6"/>
+      </svg>
+    );
+    const IconBook = () => (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+      </svg>
+    );
+    const IconTrash = () => (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+      </svg>
+    );
+    const IconChevronRight = () => (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="9 18 15 12 9 6"/>
+      </svg>
+    );
+    const IconPage = () => (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+        <line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/>
+      </svg>
+    );
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // NAV BAR
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function NavBar({ title, onBack, action }) {
+      return (
+        <header className="sticky top-0 z-40 bg-fb-dark text-white px-4 py-3 flex items-center gap-3 shadow-lg" style={{ paddingTop: 'max(12px, env(safe-area-inset-top))' }}>
+          {onBack && (
+            <button onClick={onBack} className="p-1 rounded-lg active:bg-white/10 transition-colors -ml-1">
+              <IconBack />
+            </button>
+          )}
+          <h1 className="flex-1 text-lg font-semibold tracking-wide truncate">{title}</h1>
+          {action && action}
+        </header>
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // NEW PROJECT MODAL
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function NewProjectModal({ onClose, onCreate }) {
+      const [form, setForm] = useState({
+        name: '', jobNumber: '', client: '', surveyor: '',
+      });
+      const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+      function handleCreate() {
+        if (!form.name.trim()) return;
+        const project = DB.createProject({
+          name: form.name.trim(),
+          jobNumber: form.jobNumber.trim(),
+          client: form.client.trim(),
+          surveyor: form.surveyor.trim() || 'Surveyor',
+          date: new Date().toISOString().split('T')[0],
+        });
+        onCreate(project);
+      }
+
+      return (
+        <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+          <div className="modal-sheet">
+            <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-6" />
+            <h2 className="text-xl font-bold text-fb-dark mb-5">New Project</h2>
+
+            <div className="space-y-4">
+              <Field label="Project Name *" value={form.name} onChange={v => set('name', v)} placeholder="Murphy Property Survey" autoFocus />
+              <Field label="Job Number" value={form.jobNumber} onChange={v => set('jobNumber', v)} placeholder="2026-0001" mono />
+              <Field label="Client" value={form.client} onChange={v => set('client', v)} placeholder="Client name" />
+              <Field label="Surveyor" value={form.surveyor} onChange={v => set('surveyor', v)} placeholder="Your name" />
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button onClick={onClose}
+                className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold active:bg-gray-50 transition-colors">
+                Cancel
+              </button>
+              <button onClick={handleCreate}
+                className="flex-1 py-3 rounded-xl text-white font-semibold transition-colors active:opacity-90"
+                style={{ background: form.name.trim() ? '#2D6A4F' : '#9CA3AF' }}>
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Field({ label, value, onChange, placeholder, mono, autoFocus }) {
+      return (
+        <div>
+          <label className="block text-xs font-semibold text-fb-muted uppercase tracking-wider mb-1">{label}</label>
+          <input
+            type="text"
+            value={value}
+            onChange={e => onChange(e.target.value)}
+            placeholder={placeholder}
+            autoFocus={autoFocus}
+            className={`w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-fb-mid outline-none text-fb-text transition-colors ${mono ? 'font-data' : ''}`}
+          />
+        </div>
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // HOME — PROJECT LIST
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function HomePage() {
+      const [projects, setProjects] = useState([]);
+      const [showNew, setShowNew] = useState(false);
+      const [deleteTarget, setDeleteTarget] = useState(null);
+
+      useEffect(() => { setProjects(DB.getProjects()); }, []);
+
+      function handleCreate(project) {
+        setShowNew(false);
+        setProjects(DB.getProjects());
+        navigate(`#/project/${project.id}`);
+      }
+
+      function handleDelete(e, id) {
+        e.stopPropagation();
+        setDeleteTarget(id);
+      }
+
+      function confirmDelete() {
+        DB.deleteProject(deleteTarget);
+        setProjects(DB.getProjects());
+        setDeleteTarget(null);
+      }
+
+      return (
+        <div className="flex flex-col h-full bg-fb-dark">
+          <NavBar
+            title="FieldBook"
+            action={
+              <button onClick={() => setShowNew(true)}
+                className="p-2 rounded-xl bg-fb-mid active:bg-fb-light transition-colors">
+                <IconPlus />
+              </button>
+            }
+          />
+
+          <div className="flex-1 overflow-y-auto" style={{ background: '#F4F0E8' }}>
+            {projects.length === 0 ? (
+              <EmptyState onNew={() => setShowNew(true)} />
+            ) : (
+              <div className="p-4 space-y-3 screen-enter">
+                <p className="text-xs font-semibold text-fb-muted uppercase tracking-widest px-1 pt-1">
+                  {projects.length} Project{projects.length !== 1 ? 's' : ''}
+                </p>
+                {projects.map(p => (
+                  <ProjectCard key={p.id} project={p} onDelete={(e) => handleDelete(e, p.id)} />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {showNew && <NewProjectModal onClose={() => setShowNew(false)} onCreate={handleCreate} />}
+
+          {deleteTarget && (
+            <div className="modal-backdrop" onClick={() => setDeleteTarget(null)}>
+              <div className="modal-sheet" onClick={e => e.stopPropagation()}>
+                <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-6" />
+                <h2 className="text-lg font-bold text-fb-dark mb-2">Delete Project?</h2>
+                <p className="text-fb-muted mb-6">This cannot be undone. All pages and entries will be permanently deleted.</p>
+                <div className="flex gap-3">
+                  <button onClick={() => setDeleteTarget(null)}
+                    className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold">
+                    Cancel
+                  </button>
+                  <button onClick={confirmDelete}
+                    className="flex-1 py-3 rounded-xl bg-red-500 text-white font-semibold">
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function ProjectCard({ project, onDelete }) {
+      const pageCount = project.pages?.length || 0;
+      const date = new Date(project.createdAt).toLocaleDateString('en-CA');
+      return (
+        <div
+          onClick={() => navigate(`#/project/${project.id}`)}
+          className="bg-white rounded-2xl shadow-sm border border-fb-border overflow-hidden active:scale-[0.98] transition-transform cursor-pointer">
+          {/* Green left accent bar */}
+          <div className="flex">
+            <div className="w-1.5 bg-fb-mid flex-shrink-0" />
+            <div className="flex-1 p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-bold text-fb-text text-base leading-tight truncate">{project.name}</h3>
+                  {project.client && <p className="text-sm text-fb-muted mt-0.5 truncate">{project.client}</p>}
+                </div>
+                <button onClick={onDelete} className="p-1.5 text-gray-300 active:text-red-400 transition-colors flex-shrink-0">
+                  <IconTrash />
+                </button>
+              </div>
+              <div className="flex items-center gap-3 mt-3">
+                {project.jobNumber && (
+                  <span className="font-data text-xs bg-fb-pale text-fb-mid px-2 py-1 rounded-lg font-semibold">
+                    #{project.jobNumber}
+                  </span>
+                )}
+                <span className="flex items-center gap-1 text-xs text-fb-muted">
+                  <IconPage /> {pageCount} page{pageCount !== 1 ? 's' : ''}
+                </span>
+                <span className="text-xs text-fb-muted ml-auto">{date}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function EmptyState({ onNew }) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full px-8 py-20 text-center screen-enter">
+          <div className="w-20 h-20 rounded-3xl bg-fb-dark flex items-center justify-center mb-6 shadow-xl">
+            <IconBook />
+          </div>
+          <h2 className="text-xl font-bold text-fb-dark mb-2">No Projects Yet</h2>
+          <p className="text-fb-muted text-sm leading-relaxed mb-8 max-w-xs">
+            Create your first project to start recording field observations.
+          </p>
+          <button onClick={onNew}
+            className="flex items-center gap-2 px-6 py-3 rounded-2xl text-white font-semibold text-base shadow-lg active:scale-95 transition-transform"
+            style={{ background: '#2D6A4F' }}>
+            <IconPlus /> New Project
+          </button>
+        </div>
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PROJECT COVER VIEW
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function ProjectView({ projectId }) {
+      const [project, setProject] = useState(null);
+
+      useEffect(() => { setProject(DB.getProject(projectId)); }, [projectId]);
+
+      if (!project) return (
+        <div className="flex flex-col h-full bg-fb-dark">
+          <NavBar title="Project" onBack={() => navigate('#/')} />
+          <div className="flex-1 flex items-center justify-center text-white opacity-50">Project not found.</div>
+        </div>
+      );
+
+      function handleAddPage() {
+        const page = DB.addPage(project.id);
+        if (page) navigate(`#/project/${project.id}/page/${page.id}`);
+      }
+
+      const pageCount = project.pages?.length || 0;
+
+      return (
+        <div className="flex flex-col h-full" style={{ background: '#1C3829' }}>
+          <NavBar title={project.name} onBack={() => navigate('#/')} />
+
+          <div className="flex-1 overflow-y-auto p-4 screen-enter">
+
+            {/* Fieldbook cover card */}
+            <div className="rounded-2xl overflow-hidden shadow-2xl mb-4" style={{ background: '#1C3829', border: '2px solid #2D6A4F' }}>
+              {/* Cover header */}
+              <div className="px-5 py-4 border-b border-fb-mid/40">
+                <p className="text-fb-light text-xs font-semibold uppercase tracking-widest mb-1">Field Book</p>
+                <h2 className="text-white text-xl font-bold leading-tight">{project.name}</h2>
+              </div>
+              {/* Cover data grid */}
+              <div className="px-5 py-4 grid grid-cols-2 gap-x-4 gap-y-3">
+                <CoverField label="Job No." value={project.jobNumber || '—'} mono />
+                <CoverField label="Date" value={project.date || '—'} mono />
+                <CoverField label="Client" value={project.client || '—'} />
+                <CoverField label="Surveyor" value={project.surveyor || '—'} />
+                <CoverField label="Pages" value={pageCount.toString()} mono />
+                <CoverField label="Started" value={new Date(project.createdAt).toLocaleDateString('en-CA')} mono />
+              </div>
+            </div>
+
+            {/* Pages list */}
+            {pageCount > 0 && (
+              <div className="mb-4">
+                <p className="text-white/60 text-xs font-semibold uppercase tracking-widest mb-3 px-1">Pages</p>
+                <div className="space-y-2">
+                  {project.pages.map(page => (
+                    <button key={page.id}
+                      onClick={() => navigate(`#/project/${project.id}/page/${page.id}`)}
+                      className="w-full bg-white/10 hover:bg-white/15 active:bg-white/20 rounded-xl px-4 py-3 flex items-center gap-3 transition-colors text-left">
+                      <span className="font-data text-fb-light text-sm font-bold w-8">P{page.pageNumber}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white text-sm font-medium">{page.station || `Page ${page.pageNumber}`}</p>
+                        <p className="text-white/50 text-xs">{page.date} · {page.rows?.length || 0} entries</p>
+                      </div>
+                      <span className="text-white/30"><IconChevronRight /></span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Add page button */}
+            <button onClick={handleAddPage}
+              className="w-full py-4 rounded-2xl border-2 border-dashed border-fb-mid text-fb-light font-semibold flex items-center justify-center gap-2 active:bg-fb-mid/10 transition-colors">
+              <IconPlus /> Add New Page
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    function CoverField({ label, value, mono }) {
+      return (
+        <div>
+          <p className="text-fb-light/60 text-[10px] font-semibold uppercase tracking-widest mb-0.5">{label}</p>
+          <p className={`text-white text-sm font-medium truncate ${mono ? 'font-data' : ''}`}>{value}</p>
+        </div>
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // FIELDBOOK PAGE VIEW
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Column definitions — which columns are shown in the table
+    const COLUMNS = [
+      { key: 'point',     label: 'Point',  width: 70,  align: 'left',  className: 'point-col' },
+      { key: 'bs',        label: 'B.S.',   width: 64,  align: 'right'  },
+      { key: 'fs',        label: 'F.S.',   width: 64,  align: 'right'  },
+      { key: 'hi',        label: 'H.I.',   width: 72,  align: 'right'  },
+      { key: 'elev',      label: 'Elev.',  width: 80,  align: 'right'  },
+      { key: 'dist',      label: 'Dist.',  width: 70,  align: 'right'  },
+      { key: 'angle',     label: 'Angle',  width: 80,  align: 'right'  },
+      { key: 'notes',     label: 'Notes',  width: 160, align: 'left',  className: 'notes-col' },
+    ];
+
+    function PageView({ projectId, pageId }) {
+      const [project, setProject] = useState(null);
+      const [page, setPage] = useState(null);
+      const [rows, setRows] = useState([]);
+      const [editingRow, setEditingRow] = useState(null);
+      const [pageNotes, setPageNotes] = useState('');
+
+      useEffect(() => {
+        const proj = DB.getProject(projectId);
+        setProject(proj);
+        if (proj) {
+          const pg = proj.pages.find(p => p.id === pageId);
+          setPage(pg || null);
+          setRows(pg?.rows || []);
+          setPageNotes(pg?.notes || '');
+        }
+      }, [projectId, pageId]);
+
+      function saveRows(newRows) {
+        setRows(newRows);
+        // Persist to localStorage
+        const projects = DB.getProjects();
+        const pIdx = projects.findIndex(p => p.id === projectId);
+        if (pIdx === -1) return;
+        const pgIdx = projects[pIdx].pages.findIndex(pg => pg.id === pageId);
+        if (pgIdx === -1) return;
+        projects[pIdx].pages[pgIdx].rows = newRows;
+        DB.saveProjects(projects);
+      }
+
+      function addRow() {
+        const newRow = {
+          id: Date.now().toString(),
+          point: '', bs: '', fs: '', hi: '', elev: '', dist: '', angle: '', notes: '',
+        };
+        const updated = [...rows, newRow];
+        saveRows(updated);
+        setEditingRow(newRow.id);
+      }
+
+      function updateCell(rowId, col, value) {
+        const updated = rows.map(r => r.id === rowId ? { ...r, [col]: value } : r);
+        saveRows(updated);
+      }
+
+      function deleteRow(rowId) {
+        saveRows(rows.filter(r => r.id !== rowId));
+      }
+
+      if (!page) return (
+        <div className="flex flex-col h-full bg-fb-cream">
+          <NavBar title="Page" onBack={() => navigate(`#/project/${projectId}`)} />
+          <div className="flex-1 flex items-center justify-center text-fb-muted">Page not found.</div>
+        </div>
+      );
+
+      return (
+        <div className="flex flex-col h-full bg-fb-cream">
+          <NavBar
+            title={`${project?.name || 'Project'} · P.${page.pageNumber}`}
+            onBack={() => navigate(`#/project/${projectId}`)}
+          />
+
+          <div className="flex-1 overflow-y-auto screen-enter">
+
+            {/* Page Header */}
+            <div className="bg-fb-cream2 border-b border-fb-border px-4 py-3">
+              <div className="grid grid-cols-3 gap-3 text-xs">
+                <PageHeaderField label="Page" value={`${page.pageNumber}`} mono />
+                <PageHeaderField label="Date" value={page.date} mono />
+                <PageHeaderField label="Weather" value={page.weather || '—'} />
+                <div className="col-span-3">
+                  <PageHeaderField label="Station / Location" value={page.station || 'Unspecified'} />
+                </div>
+              </div>
+            </div>
+
+            {/* Table */}
+            <div className="overflow-x-auto page-grid min-h-48">
+              <table className="fieldbook-table">
+                <thead>
+                  <tr>
+                    {COLUMNS.map(col => (
+                      <th key={col.key} style={{ minWidth: col.width }}>{col.label}</th>
+                    ))}
+                    <th style={{ minWidth: 40 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.length === 0 && (
+                    <tr>
+                      <td colSpan={COLUMNS.length + 1} className="text-center text-fb-muted py-10 italic text-sm">
+                        Tap + to add first entry
+                      </td>
+                    </tr>
+                  )}
+                  {rows.map((row, idx) => (
+                    <TableRow
+                      key={row.id}
+                      row={row}
+                      columns={COLUMNS}
+                      isEditing={editingRow === row.id}
+                      onEdit={() => setEditingRow(row.id === editingRow ? null : row.id)}
+                      onChange={(col, val) => updateCell(row.id, col, val)}
+                      onDelete={() => deleteRow(row.id)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Add Row Button */}
+            <div className="px-4 py-3 bg-fb-cream2/60 border-t border-fb-border">
+              <button onClick={addRow}
+                className="flex items-center gap-2 text-fb-mid font-semibold text-sm active:opacity-70 transition-opacity">
+                <IconPlus /> Add Row
+              </button>
+            </div>
+
+            {/* Notes Section */}
+            <div className="mx-4 my-4 rounded-xl border border-fb-border overflow-hidden">
+              <div className="bg-fb-cream2 px-4 py-2 border-b border-fb-border">
+                <p className="text-xs font-semibold text-fb-muted uppercase tracking-wider">Notes</p>
+              </div>
+              <textarea
+                className="w-full px-4 py-3 bg-fb-cream font-data text-sm text-fb-text resize-none outline-none min-h-[100px]"
+                placeholder="Field notes, sketch descriptions, conditions..."
+                value={pageNotes}
+                onChange={e => setPageNotes(e.target.value)}
+              />
+            </div>
+
+            {/* Bottom padding for safe area */}
+            <div style={{ height: 'max(20px, env(safe-area-inset-bottom))' }} />
+          </div>
+        </div>
+      );
+    }
+
+    function PageHeaderField({ label, value, mono }) {
+      return (
+        <div>
+          <p className="text-[9px] font-semibold text-fb-muted uppercase tracking-widest">{label}</p>
+          <p className={`text-fb-dark font-semibold text-xs mt-0.5 ${mono ? 'font-data' : ''}`}>{value}</p>
+        </div>
+      );
+    }
+
+    function TableRow({ row, columns, isEditing, onEdit, onChange, onDelete }) {
+      if (isEditing) {
+        return (
+          <tr className="bg-fb-pale/40">
+            {columns.map(col => (
+              <td key={col.key} className={col.className || ''}>
+                <input
+                  type="text"
+                  value={row[col.key] || ''}
+                  onChange={e => onChange(col.key, e.target.value)}
+                  className={`w-full bg-transparent outline-none border-b-2 border-fb-mid text-center px-1 py-0.5 font-data text-sm ${col.align === 'left' ? 'text-left' : 'text-right'}`}
+                  style={{ minWidth: col.width - 12 }}
+                  placeholder="—"
+                />
+              </td>
+            ))}
+            <td>
+              <button onClick={onDelete} className="p-1 text-red-400 active:text-red-600">
+                <IconTrash />
+              </button>
+            </td>
+          </tr>
+        );
+      }
+
+      return (
+        <tr onClick={onEdit} className="cursor-pointer active:bg-fb-pale/30 transition-colors">
+          {columns.map(col => (
+            <td key={col.key} className={`${col.className || ''} ${col.align === 'left' ? 'text-left' : 'text-right'}`}>
+              <span className={`font-data ${!row[col.key] ? 'text-fb-border' : ''}`}>
+                {row[col.key] || '—'}
+              </span>
+            </td>
+          ))}
+          <td></td>
+        </tr>
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ROOT APP
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function App() {
+      const hash = useRouter();
+      const route = parseRoute(hash);
+
+      // Register service worker
+      useEffect(() => {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.register('./sw.js')
+            .then(reg => console.log('[FieldBook] SW registered', reg.scope))
+            .catch(err => console.warn('[FieldBook] SW registration failed', err));
+        }
+      }, []);
+
+      return (
+        <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {route.view === 'home'    && <HomePage />}
+          {route.view === 'project' && <ProjectView projectId={route.projectId} />}
+          {route.view === 'page'    && <PageView projectId={route.projectId} pageId={route.pageId} />}
+        </div>
+      );
+    }
+
+    // Mount
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

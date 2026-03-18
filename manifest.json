@@ -1,0 +1,20 @@
+{
+  "name": "FieldBook",
+  "short_name": "FieldBook",
+  "description": "Digital field notebook for land surveyors",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#1C3829",
+  "theme_color": "#1C3829",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["utilities", "productivity"],
+  "lang": "en-US"
+}
