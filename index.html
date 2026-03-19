@@ -8,51 +8,42 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="FieldBook" />
-
   <title>FieldBook</title>
-
   <link rel="manifest" href="./manifest.json" />
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="./icon.svg" />
 
-  <!-- Tailwind CSS (Play CDN — loads all utilities) -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Tailwind custom config -->
   <script>
     tailwind.config = {
       theme: {
         extend: {
           colors: {
-            'fb': {
-              'dark':    '#1C3829',
-              'mid':     '#2D6A4F',
-              'light':   '#52B788',
-              'pale':    '#D8F3DC',
-              'cream':   '#FDFAF4',
-              'cream2':  '#F0EBE0',
-              'border':  '#DDD6C8',
-              'text':    '#2C2C2C',
-              'muted':   '#6B7280',
+            fb: {
+              dark:   '#1C3829',
+              mid:    '#2D6A4F',
+              light:  '#52B788',
+              pale:   '#D8F3DC',
+              cream:  '#FDFAF4',
+              cream2: '#F0EBE0',
+              border: '#DDD6C8',
+              text:   '#2C2C2C',
+              muted:  '#6B7280',
             }
           },
           fontFamily: {
-            'data': ['"Courier New"', 'Courier', 'monospace'],
+            data: ['"Courier New"', 'Courier', 'monospace'],
           }
         }
       }
     }
   </script>
 
-  <!-- React 18 UMD -->
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-
-  <!-- Babel Standalone (JSX transform) -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <style>
-    /* ── Base reset ─────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; }
     html, body, #root { height: 100%; margin: 0; padding: 0; }
     body {
@@ -62,68 +53,114 @@
       overscroll-behavior: none;
     }
 
-    /* ── Page grid background ───────────────────────────── */
-    .page-grid {
+    /* ── Ruled notebook paper ──────────────────────────────────── */
+    .page-ruled {
       background-color: #FDFAF4;
-      background-image:
-        linear-gradient(rgba(180,165,140,0.25) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(180,165,140,0.25) 1px, transparent 1px);
-      background-size: 24px 24px;
+      background-image: linear-gradient(
+        transparent calc(32px - 1px),
+        rgba(180,165,140,0.45) calc(32px - 1px),
+        rgba(180,165,140,0.45) 32px,
+        transparent 32px
+      );
+      background-size: 100% 32px;
     }
 
-    /* ── Horizontal scroll table ────────────────────────── */
-    .fieldbook-table {
+    /* ── Fine blue engineering grid ────────────────────────────── */
+    .page-grid-blue {
+      background-color: #FEFEFE;
+      background-image:
+        linear-gradient(rgba(80,120,200,0.22) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(80,120,200,0.22) 1px, transparent 1px),
+        linear-gradient(rgba(80,120,200,0.08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(80,120,200,0.08) 1px, transparent 1px);
+      background-size: 25mm 25mm, 25mm 25mm, 5mm 5mm, 5mm 5mm;
+    }
+
+    /* ── Fieldbook data table ───────────────────────────────────── */
+    .fb-table {
       width: 100%;
       border-collapse: collapse;
       font-family: 'Courier New', Courier, monospace;
       font-size: 13px;
     }
-    .fieldbook-table th {
-      background: #2D6A4F;
-      color: white;
-      padding: 8px 6px;
+    .fb-table th {
+      background: rgba(253,250,244,0.97);
+      border-bottom: 2px solid #2D6A4F;
+      border-right: 1px solid rgba(180,165,140,0.5);
+      padding: 7px 5px 5px;
       text-align: center;
-      white-space: nowrap;
-      font-weight: 600;
-      letter-spacing: 0.03em;
-      font-size: 11px;
+      font-weight: 700;
+      font-size: 10px;
       text-transform: uppercase;
+      color: #2D6A4F;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      position: sticky;
+      top: 0;
+      z-index: 2;
     }
-    .fieldbook-table td {
-      padding: 10px 6px;
-      border-bottom: 1px solid #DDD6C8;
+    .fb-table th:last-child { border-right: none; }
+    .fb-table td {
+      padding: 0;
+      border-right: 1px solid rgba(180,165,140,0.38);
+      border-bottom: 1px solid rgba(180,165,140,0.55);
       text-align: center;
       color: #2C2C2C;
       vertical-align: middle;
+      height: 32px;
     }
-    .fieldbook-table tr:nth-child(even) td {
-      background: rgba(221, 214, 200, 0.15);
+    .fb-table td:last-child { border-right: none; }
+    .fb-table td.td-action { width: 32px; }
+    .fb-table tr:nth-child(even) td { background: rgba(221,214,200,0.12); }
+    .fb-table td > input {
+      display: block;
+      width: 100%;
+      height: 32px;
+      padding: 0 5px;
+      background: transparent;
+      border: none;
+      outline: none;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 13px;
+      text-align: center;
+      color: #2C2C2C;
+      -webkit-appearance: none;
     }
-    .fieldbook-table td.notes-col {
-      text-align: left;
-      padding-left: 10px;
-    }
-    .fieldbook-table td.point-col {
-      font-weight: 700;
-      color: #1C3829;
+    .fb-table td > input:focus { background: rgba(45,106,79,0.07); }
+    .fb-table td > span {
+      display: block;
+      height: 32px;
+      line-height: 32px;
+      padding: 0 5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
-    /* ── Scrollbar styling ──────────────────────────────── */
-    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    /* ── Red left-margin line (fieldbook look) ──────────────────── */
+    .page-margin-rule {
+      border-left: 3px solid rgba(200,80,80,0.18);
+      margin-left: 32px;
+    }
+
+    /* ── Scrollbar ──────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 3px; height: 3px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #DDD6C8; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb { background: #DDD6C8; border-radius: 3px; }
 
-    /* ── Transitions ────────────────────────────────────── */
-    .screen-enter { animation: slideUp 0.2s ease-out; }
+    /* ── Animations ─────────────────────────────────────────────── */
+    .screen-enter { animation: slideUp 0.18s ease-out; }
     @keyframes slideUp {
-      from { opacity: 0; transform: translateY(12px); }
+      from { opacity: 0; transform: translateY(8px); }
       to   { opacity: 1; transform: translateY(0); }
     }
 
-    /* ── Modal backdrop ─────────────────────────────────── */
+    /* ── Modal ──────────────────────────────────────────────────── */
     .modal-backdrop {
       position: fixed; inset: 0;
-      background: rgba(0,0,0,0.5);
+      background: rgba(0,0,0,0.52);
       backdrop-filter: blur(2px);
       z-index: 50;
       display: flex; align-items: flex-end; justify-content: center;
@@ -132,678 +169,1288 @@
       background: white;
       width: 100%; max-width: 600px;
       border-radius: 20px 20px 0 0;
-      padding: 24px 20px 40px;
-      animation: sheetUp 0.25s ease-out;
+      padding: 20px 20px 40px;
+      animation: sheetUp 0.22s ease-out;
+      max-height: 90vh;
+      overflow-y: auto;
     }
     @keyframes sheetUp {
       from { transform: translateY(100%); }
       to   { transform: translateY(0); }
     }
+
+    /* ── Double-page spread ─────────────────────────────────────── */
+    .double-spread {
+      display: flex;
+      flex-direction: row;
+      height: 100%;
+      overflow-x: auto;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+    }
+    .spread-panel {
+      flex: 0 0 min(calc(100vw - 32px), 480px);
+      height: 100%;
+      overflow-y: auto;
+      scroll-snap-align: start;
+      border-right: 2px solid #DDD6C8;
+    }
+    .spread-panel:last-child { border-right: none; }
+
+    /* ── Header strip ───────────────────────────────────────────── */
+    .page-header-strip {
+      background: #F0EBE0;
+      border-bottom: 2px solid #2D6A4F;
+    }
+    .page-header-strip input {
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid rgba(180,165,140,0.5);
+      outline: none;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 12px;
+      color: #2C2C2C;
+      width: 100%;
+      padding: 1px 0;
+    }
+
+    /* ── Layout shell ─────────────────────────────────────────── */
+    .notebook-binding-bar { display: none; }
+    .notebook-frame {
+      width: 100%;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+    .notebook-inner {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    /* Desktop: centred column with breathing room on the sides */
+    @media (min-width: 768px) {
+      #root { display: flex; justify-content: center; }
+      .notebook-frame {
+        width: min(960px, calc(100vw - 48px));
+        border-left:  1px solid rgba(255,255,255,0.07);
+        border-right: 1px solid rgba(255,255,255,0.07);
+        box-shadow: 0 0 48px rgba(0,0,0,0.45);
+      }
+    }
   </style>
 </head>
 <body>
-  <div id="root"></div>
+<div id="root"></div>
 
-  <script type="text/babel">
-    const { useState, useEffect, useCallback, useRef } = React;
+<script type="text/babel">
+  const { useState, useEffect, useRef, useCallback } = React;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // LOCAL STORAGE DATA LAYER
-    // Phase 3 will replace this with IndexedDB / Dexie.js
-    // ─────────────────────────────────────────────────────────────────────────
+  // Sketch engine (sketch.js) loads async. This promise gates the ReactDOM mount
+  // so SketchPage is guaranteed to be defined before the app first renders.
+  const _sketchPromise = new Promise(resolve => { window._resolveSketch = resolve; });
 
-    const DB = {
-      getProjects() {
-        try { return JSON.parse(localStorage.getItem('fb_projects') || '[]'); }
-        catch { return []; }
-      },
-      saveProjects(projects) {
-        localStorage.setItem('fb_projects', JSON.stringify(projects));
-      },
-      createProject(data) {
-        const projects = DB.getProjects();
-        const project = {
-          id: Date.now().toString(),
-          ...data,
-          createdAt: new Date().toISOString(),
-          pages: [],
-        };
-        DB.saveProjects([project, ...projects]);
-        return project;
-      },
-      getProject(id) {
-        return DB.getProjects().find(p => p.id === id) || null;
-      },
-      addPage(projectId) {
-        const projects = DB.getProjects();
-        const idx = projects.findIndex(p => p.id === projectId);
-        if (idx === -1) return null;
-        const page = {
-          id: Date.now().toString(),
-          pageNumber: projects[idx].pages.length + 1,
-          date: new Date().toISOString().split('T')[0],
-          station: '',
-          weather: '',
-          notes: '',
-          rows: [],
-        };
-        projects[idx].pages.push(page);
-        DB.saveProjects(projects);
-        return page;
-      },
-      getPage(projectId, pageId) {
-        const p = DB.getProject(projectId);
-        return p ? p.pages.find(pg => pg.id === pageId) : null;
-      },
-      deleteProject(id) {
-        DB.saveProjects(DB.getProjects().filter(p => p.id !== id));
-      },
-    };
+  // ─────────────────────────────────────────────────────────────────────────────
+  // DATA LAYER
+  // ─────────────────────────────────────────────────────────────────────────────
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // SIMPLE HASH ROUTER
-    // ─────────────────────────────────────────────────────────────────────────
+  const DB = {
+    getProjects() {
+      try { return JSON.parse(localStorage.getItem('fb_projects') || '[]'); }
+      catch { return []; }
+    },
+    saveProjects(p) {
+      localStorage.setItem('fb_projects', JSON.stringify(p));
+    },
+    createProject(data) {
+      const projects = DB.getProjects();
+      const proj = {
+        id: Date.now().toString(),
+        ...data,
+        createdAt: new Date().toISOString(),
+        pages: [],
+      };
+      DB.saveProjects([proj, ...projects]);
+      return proj;
+    },
+    getProject(id) {
+      return DB.getProjects().find(p => p.id === id) || null;
+    },
+    addPage(projectId, pageData) {
+      const projects = DB.getProjects();
+      const idx = projects.findIndex(p => p.id === projectId);
+      if (idx === -1) return null;
+      const page = {
+        id: Date.now().toString(),
+        pageNumber: projects[idx].pages.length + 1,
+        type: 'data',
+        title: '',
+        date: new Date().toISOString().split('T')[0],
+        weather: '',
+        notes: '',
+        // data page
+        columns: [],
+        rows: [],
+        // title page
+        location: '',
+        crew: '',
+        equipment: '',
+        datum: '',
+        tsSettings: '',
+        hiPrism: '',
+        summary: '',
+        // sketch page
+        shapes: [],
+        ...pageData,
+      };
+      projects[idx].pages.push(page);
+      DB.saveProjects(projects);
+      return page;
+    },
+    updatePage(projectId, pageId, updates) {
+      const projects = DB.getProjects();
+      const pi = projects.findIndex(p => p.id === projectId);
+      if (pi === -1) return;
+      const gi = projects[pi].pages.findIndex(g => g.id === pageId);
+      if (gi === -1) return;
+      projects[pi].pages[gi] = { ...projects[pi].pages[gi], ...updates };
+      DB.saveProjects(projects);
+    },
+    getPage(projectId, pageId) {
+      const p = DB.getProject(projectId);
+      return p ? p.pages.find(g => g.id === pageId) : null;
+    },
+    deletePage(projectId, pageId) {
+      const projects = DB.getProjects();
+      const pi = projects.findIndex(p => p.id === projectId);
+      if (pi === -1) return;
+      projects[pi].pages = projects[pi].pages.filter(g => g.id !== pageId);
+      projects[pi].pages.forEach((g, i) => { g.pageNumber = i + 1; });
+      DB.saveProjects(projects);
+    },
+    deleteProject(id) {
+      DB.saveProjects(DB.getProjects().filter(p => p.id !== id));
+    },
+    updateProject(id, updates) {
+      const projects = DB.getProjects();
+      const idx = projects.findIndex(p => p.id === id);
+      if (idx === -1) return;
+      projects[idx] = { ...projects[idx], ...updates };
+      DB.saveProjects(projects);
+    },
+    reorderPages(projectId, fromIdx, toIdx) {
+      const projects = DB.getProjects();
+      const pi = projects.findIndex(p => p.id === projectId);
+      if (pi === -1) return;
+      const pages = [...projects[pi].pages];
+      const [moved] = pages.splice(fromIdx, 1);
+      pages.splice(toIdx, 0, moved);
+      pages.forEach((pg, i) => { pg.pageNumber = i + 1; });
+      projects[pi].pages = pages;
+      DB.saveProjects(projects);
+    },
+  };
 
-    function useRouter() {
-      const [hash, setHash] = useState(window.location.hash || '#/');
-      useEffect(() => {
-        const handler = () => setHash(window.location.hash || '#/');
-        window.addEventListener('hashchange', handler);
-        return () => window.removeEventListener('hashchange', handler);
-      }, []);
-      return hash;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ROUTER
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function useRouter() {
+    const [hash, setHash] = useState(window.location.hash || '#/');
+    useEffect(() => {
+      const fn = () => setHash(window.location.hash || '#/');
+      window.addEventListener('hashchange', fn);
+      return () => window.removeEventListener('hashchange', fn);
+    }, []);
+    return hash;
+  }
+
+  function navigate(path) { window.location.hash = path; }
+
+  function parseRoute(hash) {
+    const path = hash.replace('#', '') || '/';
+    const pageMatch = path.match(/^\/project\/([^/]+)\/page\/([^/]+)$/);
+    if (pageMatch) return { view: 'page', projectId: pageMatch[1], pageId: pageMatch[2] };
+    const projMatch = path.match(/^\/project\/([^/]+)$/);
+    if (projMatch) return { view: 'project', projectId: projMatch[1] };
+    return { view: 'home' };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ICONS
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  const Ico = {
+    Plus: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+    Back: () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>,
+    Book: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>,
+    Trash: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>,
+    ChevR: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>,
+    Expand: () => <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>,
+    Collapse: () => <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="10" y1="14" x2="3" y2="21"/><line x1="21" y1="3" x2="14" y2="10"/></svg>,
+    Table: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/><line x1="15" y1="9" x2="15" y2="21"/></svg>,
+    Grid: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>,
+    File: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>,
+    Pencil: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
+    ChevUp: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>,
+    ChevDown: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>,
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SHARED COMPONENTS
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function NavBar({ title, subtitle, onBack, actions }) {
+    return (
+      <header className="sticky top-0 z-40 bg-fb-dark text-white px-4 flex items-center gap-2 shadow-md flex-shrink-0"
+        style={{ paddingTop: 'max(10px, env(safe-area-inset-top))', paddingBottom: '10px', minHeight: 52 }}>
+        {onBack && (
+          <button onClick={onBack} className="p-1.5 rounded-lg active:bg-white/10 -ml-1 flex-shrink-0 transition-colors">
+            <Ico.Back />
+          </button>
+        )}
+        <div className="flex-1 min-w-0">
+          <h1 className="text-base font-semibold leading-tight truncate">{title}</h1>
+          {subtitle && <p className="text-white/45 text-xs leading-tight truncate">{subtitle}</p>}
+        </div>
+        {actions && <div className="flex items-center gap-0.5 flex-shrink-0">{actions}</div>}
+      </header>
+    );
+  }
+
+  function Field({ label, value, onChange, placeholder, mono, autoFocus, multiline }) {
+    const cls = `w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 focus:border-fb-mid outline-none text-fb-text text-sm transition-colors ${mono ? 'font-data' : ''}`;
+    return (
+      <div>
+        <label className="block text-xs font-semibold text-fb-muted uppercase tracking-wider mb-1">{label}</label>
+        {multiline
+          ? <textarea className={cls + ' resize-none'} rows={3} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
+          : <input type="text" className={cls} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} autoFocus={autoFocus} />
+        }
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // HOME
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function HomePage() {
+    const [projects, setProjects] = useState([]);
+    const [showNew, setShowNew] = useState(false);
+    const [delTarget, setDelTarget] = useState(null);
+
+    useEffect(() => { setProjects(DB.getProjects()); }, []);
+
+    function handleCreate(proj) {
+      setShowNew(false);
+      setProjects(DB.getProjects());
+      navigate(`#/project/${proj.id}`);
     }
 
-    function navigate(path) {
-      window.location.hash = path;
+    function confirmDelete() {
+      DB.deleteProject(delTarget);
+      setProjects(DB.getProjects());
+      setDelTarget(null);
     }
 
-    function parseRoute(hash) {
-      const path = hash.replace('#', '') || '/';
-      // /project/:id/page/:pageId
-      const pageMatch = path.match(/^\/project\/([^/]+)\/page\/([^/]+)$/);
-      if (pageMatch) return { view: 'page', projectId: pageMatch[1], pageId: pageMatch[2] };
-      // /project/:id
-      const projMatch = path.match(/^\/project\/([^/]+)$/);
-      if (projMatch) return { view: 'project', projectId: projMatch[1] };
-      return { view: 'home' };
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // ICONS (inline SVG components)
-    // ─────────────────────────────────────────────────────────────────────────
-
-    const IconPlus = () => (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-      </svg>
-    );
-    const IconBack = () => (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="15 18 9 12 15 6"/>
-      </svg>
-    );
-    const IconBook = () => (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-      </svg>
-    );
-    const IconTrash = () => (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
-      </svg>
-    );
-    const IconChevronRight = () => (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="9 18 15 12 9 6"/>
-      </svg>
-    );
-    const IconPage = () => (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
-        <line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/>
-      </svg>
-    );
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // NAV BAR
-    // ─────────────────────────────────────────────────────────────────────────
-
-    function NavBar({ title, onBack, action }) {
-      return (
-        <header className="sticky top-0 z-40 bg-fb-dark text-white px-4 py-3 flex items-center gap-3 shadow-lg" style={{ paddingTop: 'max(12px, env(safe-area-inset-top))' }}>
-          {onBack && (
-            <button onClick={onBack} className="p-1 rounded-lg active:bg-white/10 transition-colors -ml-1">
-              <IconBack />
+    return (
+      <div className="flex flex-col h-full bg-fb-dark">
+        <NavBar title="FieldBook"
+          actions={
+            <button onClick={() => setShowNew(true)} className="p-2 rounded-xl bg-fb-mid active:bg-fb-light transition-colors">
+              <Ico.Plus />
             </button>
-          )}
-          <h1 className="flex-1 text-lg font-semibold tracking-wide truncate">{title}</h1>
-          {action && action}
-        </header>
-      );
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // NEW PROJECT MODAL
-    // ─────────────────────────────────────────────────────────────────────────
-
-    function NewProjectModal({ onClose, onCreate }) {
-      const [form, setForm] = useState({
-        name: '', jobNumber: '', client: '', surveyor: '',
-      });
-      const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-
-      function handleCreate() {
-        if (!form.name.trim()) return;
-        const project = DB.createProject({
-          name: form.name.trim(),
-          jobNumber: form.jobNumber.trim(),
-          client: form.client.trim(),
-          surveyor: form.surveyor.trim() || 'Surveyor',
-          date: new Date().toISOString().split('T')[0],
-        });
-        onCreate(project);
-      }
-
-      return (
-        <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
-          <div className="modal-sheet">
-            <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-6" />
-            <h2 className="text-xl font-bold text-fb-dark mb-5">New Project</h2>
-
-            <div className="space-y-4">
-              <Field label="Project Name *" value={form.name} onChange={v => set('name', v)} placeholder="Murphy Property Survey" autoFocus />
-              <Field label="Job Number" value={form.jobNumber} onChange={v => set('jobNumber', v)} placeholder="2026-0001" mono />
-              <Field label="Client" value={form.client} onChange={v => set('client', v)} placeholder="Client name" />
-              <Field label="Surveyor" value={form.surveyor} onChange={v => set('surveyor', v)} placeholder="Your name" />
-            </div>
-
-            <div className="flex gap-3 mt-6">
-              <button onClick={onClose}
-                className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold active:bg-gray-50 transition-colors">
-                Cancel
-              </button>
-              <button onClick={handleCreate}
-                className="flex-1 py-3 rounded-xl text-white font-semibold transition-colors active:opacity-90"
-                style={{ background: form.name.trim() ? '#2D6A4F' : '#9CA3AF' }}>
-                Create
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    function Field({ label, value, onChange, placeholder, mono, autoFocus }) {
-      return (
-        <div>
-          <label className="block text-xs font-semibold text-fb-muted uppercase tracking-wider mb-1">{label}</label>
-          <input
-            type="text"
-            value={value}
-            onChange={e => onChange(e.target.value)}
-            placeholder={placeholder}
-            autoFocus={autoFocus}
-            className={`w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-fb-mid outline-none text-fb-text transition-colors ${mono ? 'font-data' : ''}`}
-          />
-        </div>
-      );
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // HOME — PROJECT LIST
-    // ─────────────────────────────────────────────────────────────────────────
-
-    function HomePage() {
-      const [projects, setProjects] = useState([]);
-      const [showNew, setShowNew] = useState(false);
-      const [deleteTarget, setDeleteTarget] = useState(null);
-
-      useEffect(() => { setProjects(DB.getProjects()); }, []);
-
-      function handleCreate(project) {
-        setShowNew(false);
-        setProjects(DB.getProjects());
-        navigate(`#/project/${project.id}`);
-      }
-
-      function handleDelete(e, id) {
-        e.stopPropagation();
-        setDeleteTarget(id);
-      }
-
-      function confirmDelete() {
-        DB.deleteProject(deleteTarget);
-        setProjects(DB.getProjects());
-        setDeleteTarget(null);
-      }
-
-      return (
-        <div className="flex flex-col h-full bg-fb-dark">
-          <NavBar
-            title="FieldBook"
-            action={
-              <button onClick={() => setShowNew(true)}
-                className="p-2 rounded-xl bg-fb-mid active:bg-fb-light transition-colors">
-                <IconPlus />
-              </button>
-            }
-          />
-
-          <div className="flex-1 overflow-y-auto" style={{ background: '#F4F0E8' }}>
-            {projects.length === 0 ? (
-              <EmptyState onNew={() => setShowNew(true)} />
-            ) : (
+          }
+        />
+        <div className="flex-1 overflow-y-auto" style={{ background: '#F4F0E8' }}>
+          {projects.length === 0
+            ? <EmptyState onNew={() => setShowNew(true)} />
+            : (
               <div className="p-4 space-y-3 screen-enter">
                 <p className="text-xs font-semibold text-fb-muted uppercase tracking-widest px-1 pt-1">
                   {projects.length} Project{projects.length !== 1 ? 's' : ''}
                 </p>
                 {projects.map(p => (
-                  <ProjectCard key={p.id} project={p} onDelete={(e) => handleDelete(e, p.id)} />
+                  <ProjectCard key={p.id} project={p}
+                    onDelete={(e) => { e.stopPropagation(); setDelTarget(p.id); }} />
                 ))}
               </div>
-            )}
-          </div>
+            )
+          }
+        </div>
 
-          {showNew && <NewProjectModal onClose={() => setShowNew(false)} onCreate={handleCreate} />}
+        {showNew && <NewProjectModal onClose={() => setShowNew(false)} onCreate={handleCreate} />}
 
-          {deleteTarget && (
-            <div className="modal-backdrop" onClick={() => setDeleteTarget(null)}>
-              <div className="modal-sheet" onClick={e => e.stopPropagation()}>
-                <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-6" />
-                <h2 className="text-lg font-bold text-fb-dark mb-2">Delete Project?</h2>
-                <p className="text-fb-muted mb-6">This cannot be undone. All pages and entries will be permanently deleted.</p>
-                <div className="flex gap-3">
-                  <button onClick={() => setDeleteTarget(null)}
-                    className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold">
-                    Cancel
-                  </button>
-                  <button onClick={confirmDelete}
-                    className="flex-1 py-3 rounded-xl bg-red-500 text-white font-semibold">
-                    Delete
-                  </button>
-                </div>
+        {delTarget && (
+          <div className="modal-backdrop" onClick={() => setDelTarget(null)}>
+            <div className="modal-sheet" onClick={e => e.stopPropagation()}>
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
+              <h2 className="text-lg font-bold text-fb-dark mb-2">Delete Project?</h2>
+              <p className="text-fb-muted text-sm mb-6">All pages and data will be permanently deleted.</p>
+              <div className="flex gap-3">
+                <button onClick={() => setDelTarget(null)} className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold">Cancel</button>
+                <button onClick={confirmDelete} className="flex-1 py-3 rounded-xl bg-red-500 text-white font-semibold">Delete</button>
               </div>
             </div>
-          )}
-        </div>
-      );
-    }
+          </div>
+        )}
+      </div>
+    );
+  }
 
-    function ProjectCard({ project, onDelete }) {
-      const pageCount = project.pages?.length || 0;
-      const date = new Date(project.createdAt).toLocaleDateString('en-CA');
-      return (
-        <div
-          onClick={() => navigate(`#/project/${project.id}`)}
-          className="bg-white rounded-2xl shadow-sm border border-fb-border overflow-hidden active:scale-[0.98] transition-transform cursor-pointer">
-          {/* Green left accent bar */}
-          <div className="flex">
-            <div className="w-1.5 bg-fb-mid flex-shrink-0" />
-            <div className="flex-1 p-4">
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-bold text-fb-text text-base leading-tight truncate">{project.name}</h3>
-                  {project.client && <p className="text-sm text-fb-muted mt-0.5 truncate">{project.client}</p>}
-                </div>
-                <button onClick={onDelete} className="p-1.5 text-gray-300 active:text-red-400 transition-colors flex-shrink-0">
-                  <IconTrash />
-                </button>
+  function ProjectCard({ project, onDelete }) {
+    const pageCount = project.pages?.length || 0;
+    return (
+      <div onClick={() => navigate(`#/project/${project.id}`)}
+        className="bg-white rounded-2xl shadow-sm border border-fb-border overflow-hidden active:scale-[0.98] transition-transform cursor-pointer">
+        <div className="flex">
+          <div className="w-1.5 bg-fb-mid flex-shrink-0" />
+          <div className="flex-1 p-4">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex-1 min-w-0">
+                <h3 className="font-bold text-fb-text text-base leading-tight truncate">{project.name}</h3>
+                {project.client && <p className="text-sm text-fb-muted mt-0.5 truncate">{project.client}</p>}
               </div>
-              <div className="flex items-center gap-3 mt-3">
-                {project.jobNumber && (
-                  <span className="font-data text-xs bg-fb-pale text-fb-mid px-2 py-1 rounded-lg font-semibold">
-                    #{project.jobNumber}
-                  </span>
-                )}
-                <span className="flex items-center gap-1 text-xs text-fb-muted">
-                  <IconPage /> {pageCount} page{pageCount !== 1 ? 's' : ''}
+              <button onClick={onDelete} className="p-1.5 text-gray-300 active:text-red-400 transition-colors flex-shrink-0">
+                <Ico.Trash />
+              </button>
+            </div>
+            <div className="flex items-center gap-3 mt-2.5 flex-wrap">
+              {project.jobNumber && (
+                <span className="font-data text-xs bg-fb-pale text-fb-mid px-2 py-0.5 rounded font-semibold">
+                  #{project.jobNumber}
                 </span>
-                <span className="text-xs text-fb-muted ml-auto">{date}</span>
-              </div>
+              )}
+              <span className="text-xs text-fb-muted">{pageCount} page{pageCount !== 1 ? 's' : ''}</span>
+              <span className="text-xs text-fb-muted ml-auto font-data">{new Date(project.createdAt).toLocaleDateString('en-CA')}</span>
             </div>
           </div>
         </div>
-      );
+      </div>
+    );
+  }
+
+  function EmptyState({ onNew }) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full px-8 py-20 text-center screen-enter">
+        <div className="w-20 h-20 rounded-3xl bg-fb-dark flex items-center justify-center mb-6 shadow-xl">
+          <Ico.Book />
+        </div>
+        <h2 className="text-xl font-bold text-fb-dark mb-2">No Projects Yet</h2>
+        <p className="text-fb-muted text-sm leading-relaxed mb-8 max-w-xs">
+          Create your first project to start recording field observations.
+        </p>
+        <button onClick={onNew}
+          className="flex items-center gap-2 px-6 py-3 rounded-2xl text-white font-semibold text-base shadow-lg active:scale-95 transition-transform"
+          style={{ background: '#2D6A4F' }}>
+          <Ico.Plus /> New Project
+        </button>
+      </div>
+    );
+  }
+
+  function NewProjectModal({ onClose, onCreate }) {
+    const [form, setForm] = useState({ name: '', jobNumber: '', client: '', surveyor: '' });
+    const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+    function handleCreate() {
+      if (!form.name.trim()) return;
+      const proj = DB.createProject({
+        name: form.name.trim(),
+        jobNumber: form.jobNumber.trim(),
+        client: form.client.trim(),
+        surveyor: form.surveyor.trim() || 'Surveyor',
+        date: new Date().toISOString().split('T')[0],
+      });
+      onCreate(proj);
     }
 
-    function EmptyState({ onNew }) {
-      return (
-        <div className="flex flex-col items-center justify-center h-full px-8 py-20 text-center screen-enter">
-          <div className="w-20 h-20 rounded-3xl bg-fb-dark flex items-center justify-center mb-6 shadow-xl">
-            <IconBook />
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div className="modal-sheet">
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
+          <h2 className="text-xl font-bold text-fb-dark mb-5">New Project</h2>
+          <div className="space-y-4">
+            <Field label="Project Name *" value={form.name} onChange={v => set('name', v)} placeholder="Murphy Property Survey" autoFocus />
+            <Field label="Job Number" value={form.jobNumber} onChange={v => set('jobNumber', v)} placeholder="2026-0001" mono />
+            <Field label="Client" value={form.client} onChange={v => set('client', v)} placeholder="Client name" />
+            <Field label="Surveyor" value={form.surveyor} onChange={v => set('surveyor', v)} placeholder="Your name" />
           </div>
-          <h2 className="text-xl font-bold text-fb-dark mb-2">No Projects Yet</h2>
-          <p className="text-fb-muted text-sm leading-relaxed mb-8 max-w-xs">
-            Create your first project to start recording field observations.
-          </p>
-          <button onClick={onNew}
-            className="flex items-center gap-2 px-6 py-3 rounded-2xl text-white font-semibold text-base shadow-lg active:scale-95 transition-transform"
-            style={{ background: '#2D6A4F' }}>
-            <IconPlus /> New Project
-          </button>
-        </div>
-      );
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // PROJECT COVER VIEW
-    // ─────────────────────────────────────────────────────────────────────────
-
-    function ProjectView({ projectId }) {
-      const [project, setProject] = useState(null);
-
-      useEffect(() => { setProject(DB.getProject(projectId)); }, [projectId]);
-
-      if (!project) return (
-        <div className="flex flex-col h-full bg-fb-dark">
-          <NavBar title="Project" onBack={() => navigate('#/')} />
-          <div className="flex-1 flex items-center justify-center text-white opacity-50">Project not found.</div>
-        </div>
-      );
-
-      function handleAddPage() {
-        const page = DB.addPage(project.id);
-        if (page) navigate(`#/project/${project.id}/page/${page.id}`);
-      }
-
-      const pageCount = project.pages?.length || 0;
-
-      return (
-        <div className="flex flex-col h-full" style={{ background: '#1C3829' }}>
-          <NavBar title={project.name} onBack={() => navigate('#/')} />
-
-          <div className="flex-1 overflow-y-auto p-4 screen-enter">
-
-            {/* Fieldbook cover card */}
-            <div className="rounded-2xl overflow-hidden shadow-2xl mb-4" style={{ background: '#1C3829', border: '2px solid #2D6A4F' }}>
-              {/* Cover header */}
-              <div className="px-5 py-4 border-b border-fb-mid/40">
-                <p className="text-fb-light text-xs font-semibold uppercase tracking-widest mb-1">Field Book</p>
-                <h2 className="text-white text-xl font-bold leading-tight">{project.name}</h2>
-              </div>
-              {/* Cover data grid */}
-              <div className="px-5 py-4 grid grid-cols-2 gap-x-4 gap-y-3">
-                <CoverField label="Job No." value={project.jobNumber || '—'} mono />
-                <CoverField label="Date" value={project.date || '—'} mono />
-                <CoverField label="Client" value={project.client || '—'} />
-                <CoverField label="Surveyor" value={project.surveyor || '—'} />
-                <CoverField label="Pages" value={pageCount.toString()} mono />
-                <CoverField label="Started" value={new Date(project.createdAt).toLocaleDateString('en-CA')} mono />
-              </div>
-            </div>
-
-            {/* Pages list */}
-            {pageCount > 0 && (
-              <div className="mb-4">
-                <p className="text-white/60 text-xs font-semibold uppercase tracking-widest mb-3 px-1">Pages</p>
-                <div className="space-y-2">
-                  {project.pages.map(page => (
-                    <button key={page.id}
-                      onClick={() => navigate(`#/project/${project.id}/page/${page.id}`)}
-                      className="w-full bg-white/10 hover:bg-white/15 active:bg-white/20 rounded-xl px-4 py-3 flex items-center gap-3 transition-colors text-left">
-                      <span className="font-data text-fb-light text-sm font-bold w-8">P{page.pageNumber}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-white text-sm font-medium">{page.station || `Page ${page.pageNumber}`}</p>
-                        <p className="text-white/50 text-xs">{page.date} · {page.rows?.length || 0} entries</p>
-                      </div>
-                      <span className="text-white/30"><IconChevronRight /></span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Add page button */}
-            <button onClick={handleAddPage}
-              className="w-full py-4 rounded-2xl border-2 border-dashed border-fb-mid text-fb-light font-semibold flex items-center justify-center gap-2 active:bg-fb-mid/10 transition-colors">
-              <IconPlus /> Add New Page
+          <div className="flex gap-3 mt-6">
+            <button onClick={onClose} className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold">Cancel</button>
+            <button onClick={handleCreate}
+              className="flex-1 py-3 rounded-xl text-white font-semibold"
+              style={{ background: form.name.trim() ? '#2D6A4F' : '#9CA3AF' }}>
+              Create
             </button>
           </div>
         </div>
-      );
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PROJECT VIEW
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  const TYPE_META = {
+    data:   { label: 'Data',   color: '#2D6A4F', bg: '#D8F3DC', Icon: () => <Ico.Table /> },
+    sketch: { label: 'Sketch', color: '#3B82F6', bg: '#EFF6FF', Icon: () => <Ico.Grid />  },
+    title:  { label: 'Title',  color: '#D97706', bg: '#FEF3C7', Icon: () => <Ico.File />  },
+  };
+
+  function ProjectView({ projectId }) {
+    const [project, setProject] = useState(null);
+    const [addStep, setAddStep] = useState(null); // null | 'type'
+    const [editingCover, setEditingCover] = useState(false);
+    const [coverForm, setCoverForm] = useState({});
+
+    function reload() { setProject(DB.getProject(projectId)); }
+    useEffect(() => { reload(); }, [projectId]);
+
+    function startEditCover() {
+      setCoverForm({
+        name:       project.name       || '',
+        jobNumber:  project.jobNumber  || '',
+        client:     project.client     || '',
+        surveyor:   project.surveyor   || '',
+        date:       project.date       || '',
+      });
+      setEditingCover(true);
     }
 
-    function CoverField({ label, value, mono }) {
-      return (
-        <div>
-          <p className="text-fb-light/60 text-[10px] font-semibold uppercase tracking-widest mb-0.5">{label}</p>
-          <p className={`text-white text-sm font-medium truncate ${mono ? 'font-data' : ''}`}>{value}</p>
-        </div>
-      );
+    function saveCover() {
+      if (!coverForm.name.trim()) return;
+      DB.updateProject(projectId, coverForm);
+      reload();
+      setEditingCover(false);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // FIELDBOOK PAGE VIEW
-    // ─────────────────────────────────────────────────────────────────────────
+    if (!project) return (
+      <div className="flex flex-col h-full bg-fb-dark">
+        <NavBar title="Project" onBack={() => navigate('#/')} />
+        <div className="flex-1 flex items-center justify-center text-white/40 text-sm">Project not found.</div>
+      </div>
+    );
 
-    // Column definitions — which columns are shown in the table
-    const COLUMNS = [
-      { key: 'point',     label: 'Point',  width: 70,  align: 'left',  className: 'point-col' },
-      { key: 'bs',        label: 'B.S.',   width: 64,  align: 'right'  },
-      { key: 'fs',        label: 'F.S.',   width: 64,  align: 'right'  },
-      { key: 'hi',        label: 'H.I.',   width: 72,  align: 'right'  },
-      { key: 'elev',      label: 'Elev.',  width: 80,  align: 'right'  },
-      { key: 'dist',      label: 'Dist.',  width: 70,  align: 'right'  },
-      { key: 'angle',     label: 'Angle',  width: 80,  align: 'right'  },
-      { key: 'notes',     label: 'Notes',  width: 160, align: 'left',  className: 'notes-col' },
-    ];
-
-    function PageView({ projectId, pageId }) {
-      const [project, setProject] = useState(null);
-      const [page, setPage] = useState(null);
-      const [rows, setRows] = useState([]);
-      const [editingRow, setEditingRow] = useState(null);
-      const [pageNotes, setPageNotes] = useState('');
-
-      useEffect(() => {
-        const proj = DB.getProject(projectId);
-        setProject(proj);
-        if (proj) {
-          const pg = proj.pages.find(p => p.id === pageId);
-          setPage(pg || null);
-          setRows(pg?.rows || []);
-          setPageNotes(pg?.notes || '');
-        }
-      }, [projectId, pageId]);
-
-      function saveRows(newRows) {
-        setRows(newRows);
-        // Persist to localStorage
-        const projects = DB.getProjects();
-        const pIdx = projects.findIndex(p => p.id === projectId);
-        if (pIdx === -1) return;
-        const pgIdx = projects[pIdx].pages.findIndex(pg => pg.id === pageId);
-        if (pgIdx === -1) return;
-        projects[pIdx].pages[pgIdx].rows = newRows;
-        DB.saveProjects(projects);
+    function handleTypeSelect(type) {
+      let pageData = { type };
+      if (type === 'data') {
+        const cols = [
+          { id: 'c1', label: '' }, { id: 'c2', label: '' }, { id: 'c3', label: '' },
+          { id: 'c4', label: '' }, { id: 'c5', label: '' }, { id: 'c6', label: '' },
+        ];
+        const rows = Array.from({ length: 27 }, (_, i) => {
+          const cells = {};
+          cols.forEach(c => { cells[c.id] = ''; });
+          return { id: 'r_' + Date.now() + '_' + i, cells };
+        });
+        pageData = { type: 'data', columns: cols, rows };
       }
+      const page = DB.addPage(projectId, pageData);
+      if (page) { reload(); setAddStep(null); navigate(`#/project/${projectId}/page/${page.id}`); }
+    }
 
-      function addRow() {
-        const newRow = {
-          id: Date.now().toString(),
-          point: '', bs: '', fs: '', hi: '', elev: '', dist: '', angle: '', notes: '',
-        };
-        const updated = [...rows, newRow];
-        saveRows(updated);
-        setEditingRow(newRow.id);
-      }
+    const pageCount = project.pages?.length || 0;
 
-      function updateCell(rowId, col, value) {
-        const updated = rows.map(r => r.id === rowId ? { ...r, [col]: value } : r);
-        saveRows(updated);
-      }
+    return (
+      <div className="flex flex-col h-full" style={{ background: '#1C3829' }}>
+        <NavBar title={project.name}
+          subtitle={project.jobNumber ? `Job #${project.jobNumber}` : undefined}
+          onBack={() => navigate('#/')} />
 
-      function deleteRow(rowId) {
-        saveRows(rows.filter(r => r.id !== rowId));
-      }
-
-      if (!page) return (
-        <div className="flex flex-col h-full bg-fb-cream">
-          <NavBar title="Page" onBack={() => navigate(`#/project/${projectId}`)} />
-          <div className="flex-1 flex items-center justify-center text-fb-muted">Page not found.</div>
-        </div>
-      );
-
-      return (
-        <div className="flex flex-col h-full bg-fb-cream">
-          <NavBar
-            title={`${project?.name || 'Project'} · P.${page.pageNumber}`}
-            onBack={() => navigate(`#/project/${projectId}`)}
-          />
-
-          <div className="flex-1 overflow-y-auto screen-enter">
-
-            {/* Page Header */}
-            <div className="bg-fb-cream2 border-b border-fb-border px-4 py-3">
-              <div className="grid grid-cols-3 gap-3 text-xs">
-                <PageHeaderField label="Page" value={`${page.pageNumber}`} mono />
-                <PageHeaderField label="Date" value={page.date} mono />
-                <PageHeaderField label="Weather" value={page.weather || '—'} />
-                <div className="col-span-3">
-                  <PageHeaderField label="Station / Location" value={page.station || 'Unspecified'} />
+        <div className="flex-1 overflow-y-auto p-4 screen-enter">
+          {/* Cover */}
+          <div className="rounded-2xl overflow-hidden shadow-2xl mb-4" style={{ background: '#1a3526', border: '1.5px solid #2D6A4F' }}>
+            {editingCover ? (
+              <>
+                <div className="px-5 py-3 border-b border-fb-mid/30 flex items-center justify-between">
+                  <p className="text-fb-light text-[10px] font-bold uppercase tracking-widest">Edit Project Info</p>
+                  <div className="flex gap-2">
+                    <button onClick={() => setEditingCover(false)}
+                      className="text-xs text-white/50 px-3 py-1.5 rounded-lg border border-white/15 active:bg-white/10">
+                      Cancel
+                    </button>
+                    <button onClick={saveCover}
+                      className="text-xs text-white px-4 py-1.5 rounded-lg font-semibold active:opacity-80"
+                      style={{ background: coverForm.name.trim() ? '#2D6A4F' : '#555' }}>
+                      Save
+                    </button>
+                  </div>
                 </div>
+                <div className="px-5 py-4 space-y-3">
+                  <div>
+                    <p className="text-fb-light/45 text-[9px] font-bold uppercase tracking-widest mb-1">Project Name *</p>
+                    <input type="text" value={coverForm.name}
+                      onChange={e => setCoverForm(f => ({ ...f, name: e.target.value }))}
+                      autoFocus maxLength={80}
+                      className="w-full bg-white/08 text-white text-sm font-semibold rounded-lg px-3 py-2 outline-none border border-white/15 focus:border-fb-light/50 placeholder-white/25"
+                      style={{ background: 'rgba(255,255,255,0.06)' }}
+                      placeholder="Project name..." />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-fb-light/45 text-[9px] font-bold uppercase tracking-widest mb-1">Job No.</p>
+                      <input type="text" value={coverForm.jobNumber}
+                        onChange={e => setCoverForm(f => ({ ...f, jobNumber: e.target.value }))}
+                        className="w-full text-white text-sm font-data rounded-lg px-3 py-2 outline-none border border-white/15 focus:border-fb-light/50 placeholder-white/25"
+                        style={{ background: 'rgba(255,255,255,0.06)' }}
+                        placeholder="2026-001" />
+                    </div>
+                    <div>
+                      <p className="text-fb-light/45 text-[9px] font-bold uppercase tracking-widest mb-1">Date</p>
+                      <input type="date" value={coverForm.date}
+                        onChange={e => setCoverForm(f => ({ ...f, date: e.target.value }))}
+                        className="w-full text-white text-sm font-data rounded-lg px-3 py-2 outline-none border border-white/15 focus:border-fb-light/50"
+                        style={{ background: 'rgba(255,255,255,0.06)', colorScheme: 'dark' }} />
+                    </div>
+                    <div>
+                      <p className="text-fb-light/45 text-[9px] font-bold uppercase tracking-widest mb-1">Client</p>
+                      <input type="text" value={coverForm.client}
+                        onChange={e => setCoverForm(f => ({ ...f, client: e.target.value }))}
+                        className="w-full text-white text-sm rounded-lg px-3 py-2 outline-none border border-white/15 focus:border-fb-light/50 placeholder-white/25"
+                        style={{ background: 'rgba(255,255,255,0.06)' }}
+                        placeholder="Client name" />
+                    </div>
+                    <div>
+                      <p className="text-fb-light/45 text-[9px] font-bold uppercase tracking-widest mb-1">Surveyor</p>
+                      <input type="text" value={coverForm.surveyor}
+                        onChange={e => setCoverForm(f => ({ ...f, surveyor: e.target.value }))}
+                        className="w-full text-white text-sm rounded-lg px-3 py-2 outline-none border border-white/15 focus:border-fb-light/50 placeholder-white/25"
+                        style={{ background: 'rgba(255,255,255,0.06)' }}
+                        placeholder="Your name" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-5 pt-1 opacity-40">
+                    <CoverField label="Pages" value={String(pageCount)} mono />
+                    <CoverField label="Created" value={new Date(project.createdAt).toLocaleDateString('en-CA')} mono />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="px-5 py-3 border-b border-fb-mid/30 flex items-center justify-between">
+                  <div>
+                    <p className="text-fb-light text-[10px] font-bold uppercase tracking-widest mb-0.5">Field Book</p>
+                    <h2 className="text-white text-lg font-bold leading-tight">{project.name}</h2>
+                  </div>
+                  <button onClick={startEditCover}
+                    className="p-2 rounded-lg text-white/40 active:text-white active:bg-white/10 transition-colors flex-shrink-0"
+                    title="Edit project info">
+                    <Ico.Pencil />
+                  </button>
+                </div>
+                <div className="px-5 py-3 grid grid-cols-2 gap-x-5 gap-y-2">
+                  <CoverField label="Job No." value={project.jobNumber || '—'} mono />
+                  <CoverField label="Date" value={project.date || '—'} mono />
+                  <CoverField label="Client" value={project.client || '—'} />
+                  <CoverField label="Surveyor" value={project.surveyor || '—'} />
+                  <CoverField label="Pages" value={String(pageCount)} mono />
+                  <CoverField label="Created" value={new Date(project.createdAt).toLocaleDateString('en-CA')} mono />
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Pages */}
+          {pageCount > 0 && (
+            <div className="mb-4">
+              <p className="text-white/45 text-[10px] font-bold uppercase tracking-widest mb-2 px-1">Pages</p>
+              <div className="space-y-1.5">
+                {project.pages.map((pg, idx) => (
+                  <PageListRow key={pg.id} page={pg} projectId={projectId}
+                    canMoveUp={idx > 0}
+                    canMoveDown={idx < project.pages.length - 1}
+                    onMoveUp={() => { DB.reorderPages(projectId, idx, idx - 1); reload(); }}
+                    onMoveDown={() => { DB.reorderPages(projectId, idx, idx + 1); reload(); }}
+                  />
+                ))}
               </div>
             </div>
+          )}
 
-            {/* Table */}
-            <div className="overflow-x-auto page-grid min-h-48">
-              <table className="fieldbook-table">
-                <thead>
-                  <tr>
-                    {COLUMNS.map(col => (
-                      <th key={col.key} style={{ minWidth: col.width }}>{col.label}</th>
-                    ))}
-                    <th style={{ minWidth: 40 }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.length === 0 && (
-                    <tr>
-                      <td colSpan={COLUMNS.length + 1} className="text-center text-fb-muted py-10 italic text-sm">
-                        Tap + to add first entry
-                      </td>
-                    </tr>
-                  )}
-                  {rows.map((row, idx) => (
-                    <TableRow
-                      key={row.id}
-                      row={row}
-                      columns={COLUMNS}
-                      isEditing={editingRow === row.id}
-                      onEdit={() => setEditingRow(row.id === editingRow ? null : row.id)}
-                      onChange={(col, val) => updateCell(row.id, col, val)}
-                      onDelete={() => deleteRow(row.id)}
-                    />
-                  ))}
-                </tbody>
-              </table>
+          <button onClick={() => setAddStep('type')}
+            className="w-full py-4 rounded-2xl border-2 border-dashed border-fb-mid/50 text-fb-light font-semibold flex items-center justify-center gap-2 active:bg-fb-mid/10 transition-colors text-sm">
+            <Ico.Plus /> Add Page
+          </button>
+        </div>
+
+        {addStep === 'type' && (
+          <AddPageTypeModal onSelect={handleTypeSelect} onClose={() => setAddStep(null)} />
+        )}
+      </div>
+    );
+  }
+
+  function PageListRow({ page, projectId, canMoveUp, canMoveDown, onMoveUp, onMoveDown }) {
+    const meta = TYPE_META[page.type] || TYPE_META.data;
+    const rowCount = page.rows?.length || 0;
+    const displayTitle = page.title && page.title.trim() ? page.title.trim() : null;
+    return (
+      <div className="flex items-stretch gap-1">
+        {/* Reorder buttons */}
+        <div className="flex flex-col gap-0.5 flex-shrink-0 justify-center">
+          <button
+            onClick={canMoveUp ? onMoveUp : undefined}
+            disabled={!canMoveUp}
+            className="w-7 h-7 flex items-center justify-center rounded-lg transition-colors"
+            style={{ color: canMoveUp ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)' }}>
+            <Ico.ChevUp />
+          </button>
+          <button
+            onClick={canMoveDown ? onMoveDown : undefined}
+            disabled={!canMoveDown}
+            className="w-7 h-7 flex items-center justify-center rounded-lg transition-colors"
+            style={{ color: canMoveDown ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)' }}>
+            <Ico.ChevDown />
+          </button>
+        </div>
+        {/* Main row */}
+        <button onClick={() => navigate(`#/project/${projectId}/page/${page.id}`)}
+          className="flex-1 min-w-0 rounded-xl px-3 py-2.5 flex items-center gap-3 text-left transition-colors active:bg-white/15"
+          style={{ background: 'rgba(255,255,255,0.07)' }}>
+          <span className="font-data text-fb-light text-sm font-bold w-7 flex-shrink-0">{page.pageNumber}</span>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider flex-shrink-0"
+                style={{ background: meta.bg, color: meta.color }}>
+                {meta.label}
+              </span>
+              <span className={`text-sm truncate ${displayTitle ? 'text-white/90 font-medium' : 'text-white/40 italic'}`}>
+                {displayTitle || 'Untitled'}
+              </span>
             </div>
+            <p className="text-white/30 text-xs mt-0.5 truncate">
+              {page.date}
+              {page.type === 'data' && rowCount > 0 ? ` · ${rowCount} rows` : ''}
+            </p>
+          </div>
+          <span className="text-white/25 flex-shrink-0"><Ico.ChevR /></span>
+        </button>
+      </div>
+    );
+  }
 
-            {/* Add Row Button */}
-            <div className="px-4 py-3 bg-fb-cream2/60 border-t border-fb-border">
-              <button onClick={addRow}
-                className="flex items-center gap-2 text-fb-mid font-semibold text-sm active:opacity-70 transition-opacity">
-                <IconPlus /> Add Row
+  function CoverField({ label, value, mono }) {
+    return (
+      <div>
+        <p className="text-fb-light/45 text-[9px] font-bold uppercase tracking-widest mb-0.5">{label}</p>
+        <p className={`text-white text-sm font-medium truncate ${mono ? 'font-data' : ''}`}>{value}</p>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ADD PAGE MODALS
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function AddPageTypeModal({ onSelect, onClose }) {
+    const types = [
+      { id: 'data',   Icon: Ico.Table, label: 'Data Page',   desc: 'Tabular columns with custom headers — your field observations',  color: '#2D6A4F' },
+      { id: 'sketch', Icon: Ico.Grid,  label: 'Sketch Page', desc: 'Fine grid paper for diagrams, site sketches, and notes',           color: '#3B82F6' },
+      { id: 'title',  Icon: Ico.File,  label: 'Title Page',  desc: 'Job info, equipment, datum settings, crew and summary',            color: '#D97706' },
+    ];
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div className="modal-sheet">
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
+          <h2 className="text-lg font-bold text-fb-dark mb-1">Add Page</h2>
+          <p className="text-fb-muted text-sm mb-5">Choose the type of page to add:</p>
+          <div className="space-y-3">
+            {types.map(t => (
+              <button key={t.id} onClick={() => onSelect(t.id)}
+                className="w-full flex items-center gap-4 p-4 rounded-2xl border-2 border-gray-100 active:border-gray-300 text-left transition-colors">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{ background: t.color + '18', color: t.color }}>
+                  <t.Icon />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-fb-text text-sm">{t.label}</p>
+                  <p className="text-fb-muted text-xs mt-0.5 leading-snug">{t.desc}</p>
+                </div>
+                <Ico.ChevR />
               </button>
-            </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-            {/* Notes Section */}
-            <div className="mx-4 my-4 rounded-xl border border-fb-border overflow-hidden">
-              <div className="bg-fb-cream2 px-4 py-2 border-b border-fb-border">
-                <p className="text-xs font-semibold text-fb-muted uppercase tracking-wider">Notes</p>
+  function AddColumnsModal({ columns: initCols, onConfirm, onBack, onClose }) {
+    const [cols, setCols] = useState(initCols && initCols.length ? initCols : [{ id: 'col_' + Date.now(), label: '' }]);
+
+    function addCol() {
+      if (cols.length >= 10) return;
+      setCols([...cols, { id: 'col_' + Date.now() + '_' + Math.random().toString(36).slice(2), label: '' }]);
+    }
+    function removeCol(id) {
+      if (cols.length <= 1) return;
+      setCols(cols.filter(c => c.id !== id));
+    }
+    function setLabel(id, label) {
+      setCols(cols.map(c => c.id === id ? { ...c, label } : c));
+    }
+
+    const valid = cols.filter(c => c.label.trim()).length;
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div className="modal-sheet">
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+          <button onClick={onBack} className="flex items-center gap-1 text-fb-muted text-sm mb-4 -mt-1 active:opacity-70">
+            <Ico.Back /> Back
+          </button>
+          <h2 className="text-lg font-bold text-fb-dark mb-1">Define Columns</h2>
+          <p className="text-fb-muted text-sm mb-5">Name each column for this data page. Up to 10 columns.</p>
+
+          <div className="space-y-2 mb-4">
+            {cols.map((col, i) => (
+              <div key={col.id} className="flex items-center gap-2">
+                <span className="text-xs font-data text-fb-muted w-5 text-right flex-shrink-0">{i + 1}</span>
+                <input
+                  type="text"
+                  value={col.label}
+                  onChange={e => setLabel(col.id, e.target.value)}
+                  placeholder={`Column ${i + 1}...`}
+                  maxLength={20}
+                  autoFocus={i === 0}
+                  className="flex-1 px-3 py-2 rounded-xl border-2 border-gray-200 focus:border-fb-mid outline-none text-fb-text text-sm font-data transition-colors"
+                />
+                <button onClick={() => removeCol(col.id)} className="p-2 text-gray-300 active:text-red-400 flex-shrink-0">
+                  <Ico.Trash />
+                </button>
               </div>
-              <textarea
-                className="w-full px-4 py-3 bg-fb-cream font-data text-sm text-fb-text resize-none outline-none min-h-[100px]"
-                placeholder="Field notes, sketch descriptions, conditions..."
-                value={pageNotes}
-                onChange={e => setPageNotes(e.target.value)}
-              />
-            </div>
+            ))}
+          </div>
 
-            {/* Bottom padding for safe area */}
-            <div style={{ height: 'max(20px, env(safe-area-inset-bottom))' }} />
+          {cols.length < 10 && (
+            <button onClick={addCol} className="flex items-center gap-1.5 text-fb-mid text-sm font-semibold mb-6 active:opacity-70">
+              <Ico.Plus /> Add Column
+            </button>
+          )}
+
+          <div className="flex gap-3">
+            <button onClick={onClose} className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold text-sm">Cancel</button>
+            <button onClick={() => onConfirm(cols)} disabled={valid === 0}
+              className="flex-1 py-3 rounded-xl text-white font-semibold text-sm"
+              style={{ background: valid > 0 ? '#2D6A4F' : '#9CA3AF' }}>
+              Create ({valid} col{valid !== 1 ? 's' : ''})
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PAGE VIEW — ROUTER
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function PageView({ projectId, pageId }) {
+    const [project, setProject] = useState(null);
+    const [page, setPage]       = useState(null);
+    const [doubleMode, setDoubleMode] = useState(false);
+
+    function reload() {
+      const proj = DB.getProject(projectId);
+      setProject(proj);
+      if (proj) setPage(proj.pages.find(p => p.id === pageId) || null);
+    }
+    useEffect(() => { reload(); }, [projectId, pageId]);
+
+    if (!project || !page) return (
+      <div className="flex flex-col h-full bg-fb-cream">
+        <NavBar title="Page" onBack={() => navigate(`#/project/${projectId}`)} />
+        <div className="flex-1 flex items-center justify-center text-fb-muted text-sm">Page not found.</div>
+      </div>
+    );
+
+    function handleDelete() {
+      if (window.confirm(`Delete Page ${page.pageNumber}? This cannot be undone.`)) {
+        DB.deletePage(projectId, pageId);
+        navigate(`#/project/${projectId}`);
+      }
+    }
+
+    const meta   = TYPE_META[page.type] || TYPE_META.data;
+    const pages  = project.pages;
+    const myIdx  = pages.findIndex(p => p.id === pageId);
+    const adjPage = doubleMode
+      ? (pages[myIdx + 1] || pages[myIdx - 1] || null)
+      : null;
+
+    const navActions = (
+      <>
+        <button onClick={() => setDoubleMode(d => !d)}
+          className="p-1.5 rounded-lg active:bg-white/10 transition-colors"
+          title={doubleMode ? 'Single page' : 'Two-page spread'}>
+          {doubleMode ? <Ico.Collapse /> : <Ico.Expand />}
+        </button>
+        <button onClick={handleDelete} className="p-1.5 rounded-lg active:bg-white/10 transition-colors text-red-300">
+          <Ico.Trash />
+        </button>
+      </>
+    );
+
+    const PageContent = getPageComponent(page.type);
+
+    if (doubleMode && adjPage) {
+      const AdjContent = getPageComponent(adjPage.type);
+      const adjMeta    = TYPE_META[adjPage.type] || TYPE_META.data;
+      return (
+        <div className="flex flex-col h-full" style={{ background: '#FDFAF4' }}>
+          <NavBar
+            title={`P.${page.pageNumber} + P.${adjPage.pageNumber}`}
+            subtitle={project.name}
+            onBack={() => navigate(`#/project/${projectId}`)}
+            actions={navActions}
+          />
+          <div className="double-spread flex-1">
+            <div className="spread-panel">
+              <PageContent page={page} projectId={projectId} onReload={reload} />
+            </div>
+            <div className="spread-panel">
+              <AdjContent page={adjPage} projectId={projectId} onReload={reload} />
+            </div>
+          </div>
+          <p className="text-center text-[10px] text-fb-muted py-1.5 bg-fb-cream2 border-t border-fb-border flex-shrink-0">
+            Rotate device for best spread view
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex flex-col h-full" style={{ background: '#FDFAF4' }}>
+        <NavBar
+          title={page.title && page.title.trim() ? page.title.trim() : `P.${page.pageNumber} — ${meta.label}`}
+          subtitle={`${project.name} · P.${page.pageNumber}`}
+          onBack={() => navigate(`#/project/${projectId}`)}
+          actions={navActions}
+        />
+        <div className="flex-1 overflow-y-auto screen-enter">
+          <PageContent page={page} projectId={projectId} onReload={reload} />
+          <div style={{ height: 'max(24px, env(safe-area-inset-bottom))' }} />
+        </div>
+      </div>
+    );
+  }
+
+  function getPageComponent(type) {
+    if (type === 'sketch') return window.SketchPage;  // defined by sketch.js
+    if (type === 'title')  return TitlePage;
+    return DataPage;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SHARED PAGE HEADER STRIP
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function PageHeaderStrip({ page, projectId, onReload }) {
+    const [editing, setEditing] = useState(false);
+    const [form, setForm] = useState({
+      title: page.title || '', date: page.date || '', weather: page.weather || '', notes: page.notes || '',
+    });
+
+    useEffect(() => {
+      setForm({ title: page.title || '', date: page.date || '', weather: page.weather || '', notes: page.notes || '' });
+    }, [page.id]);
+
+    function save() {
+      DB.updatePage(projectId, page.id, form);
+      onReload();
+      setEditing(false);
+    }
+
+    if (editing) {
+      return (
+        <div className="page-header-strip px-4 py-3 space-y-2">
+          <div>
+            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Page Title</p>
+            <input type="text" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+              placeholder="e.g. Traverse Leg 1, Level Loop A..." autoFocus maxLength={60} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Date</p>
+              <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+            </div>
+            <div>
+              <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Weather</p>
+              <input type="text" value={form.weather} onChange={e => setForm(f => ({ ...f, weather: e.target.value }))} placeholder="Clear, +12°C..." />
+            </div>
+          </div>
+          <div>
+            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Notes / Station</p>
+            <input type="text" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Inst. at BM-1, B.S. to BM-2..." />
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button onClick={() => setEditing(false)} className="text-xs text-fb-muted px-3 py-1.5 rounded-lg border border-gray-200 active:bg-gray-50">Cancel</button>
+            <button onClick={save} className="text-xs text-white px-4 py-1.5 rounded-lg font-semibold active:opacity-80" style={{ background: '#2D6A4F' }}>Save</button>
           </div>
         </div>
       );
     }
 
-    function PageHeaderField({ label, value, mono }) {
+    const hasTitle = page.title && page.title.trim();
+    return (
+      <button onClick={() => setEditing(true)}
+        className="page-header-strip w-full px-4 py-2 flex items-start justify-between gap-3 text-left active:bg-fb-border/20 transition-colors">
+        <div className="flex-1 min-w-0">
+          {/* Title row */}
+          <p className={`text-sm font-semibold truncate leading-tight mb-1 ${hasTitle ? 'text-fb-dark' : 'text-fb-border italic'}`}>
+            {hasTitle ? page.title : 'Tap to add title...'}
+          </p>
+          {/* Meta row */}
+          <div className="flex items-center gap-3">
+            <HCell label="Pg" value={String(page.pageNumber)} mono />
+            <HCell label="Date" value={page.date || '—'} mono />
+            <HCell label="Weather" value={page.weather || '—'} />
+          </div>
+          {page.notes && (
+            <p className="text-xs text-fb-muted font-data truncate mt-0.5">{page.notes}</p>
+          )}
+        </div>
+        <span className="text-fb-muted text-[10px] flex-shrink-0 mt-0.5 flex items-center gap-0.5">
+          <Ico.Pencil /> edit
+        </span>
+      </button>
+    );
+  }
+
+  function HCell({ label, value, mono }) {
+    return (
+      <div>
+        <span className="text-[8px] font-bold text-fb-mid uppercase tracking-widest block leading-tight">{label}</span>
+        <span className={`text-xs text-fb-text font-medium leading-tight ${mono ? 'font-data' : ''}`}>{value}</span>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // DATA PAGE
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function DataPage({ page, projectId, onReload }) {
+    const [rows, setRows] = useState(page.rows || []);
+    const [editingCol, setEditingCol] = useState(null);
+    const [newColName, setNewColName] = useState('');
+    const columns = page.columns || [];
+
+    useEffect(() => { setRows(page.rows || []); }, [page.id]);
+
+    function persistRows(updated) {
+      setRows(updated);
+      DB.updatePage(projectId, page.id, { rows: updated });
+    }
+
+    function addRow() {
+      const cells = {};
+      columns.forEach(c => { cells[c.id] = ''; });
+      const row = { id: 'r_' + Date.now(), cells };
+      persistRows([...rows, row]);
+    }
+
+    function updateCell(rowId, colId, val) {
+      persistRows(rows.map(r => r.id === rowId ? { ...r, cells: { ...r.cells, [colId]: val } } : r));
+    }
+
+    function deleteRow(rowId) {
+      persistRows(rows.filter(r => r.id !== rowId));
+    }
+
+    function startRenameCol(col) {
+      setEditingCol(col.id);
+      setNewColName(col.label);
+    }
+
+    function saveColRename() {
+      if (!newColName.trim()) { setEditingCol(null); return; }
+      const updated = columns.map(c => c.id === editingCol ? { ...c, label: newColName.trim() } : c);
+      DB.updatePage(projectId, page.id, { columns: updated });
+      onReload();
+      setEditingCol(null);
+    }
+
+    if (columns.length === 0) {
       return (
-        <div>
-          <p className="text-[9px] font-semibold text-fb-muted uppercase tracking-widest">{label}</p>
-          <p className={`text-fb-dark font-semibold text-xs mt-0.5 ${mono ? 'font-data' : ''}`}>{value}</p>
+        <div className="page-ruled flex flex-col items-center justify-center py-16 px-6 text-center">
+          <p className="text-fb-muted text-sm">No columns defined for this page.</p>
         </div>
       );
     }
 
-    function TableRow({ row, columns, isEditing, onEdit, onChange, onDelete }) {
-      if (isEditing) {
-        return (
-          <tr className="bg-fb-pale/40">
-            {columns.map(col => (
-              <td key={col.key} className={col.className || ''}>
-                <input
-                  type="text"
-                  value={row[col.key] || ''}
-                  onChange={e => onChange(col.key, e.target.value)}
-                  className={`w-full bg-transparent outline-none border-b-2 border-fb-mid text-center px-1 py-0.5 font-data text-sm ${col.align === 'left' ? 'text-left' : 'text-right'}`}
-                  style={{ minWidth: col.width - 12 }}
-                  placeholder="—"
-                />
-              </td>
-            ))}
-            <td>
-              <button onClick={onDelete} className="p-1 text-red-400 active:text-red-600">
-                <IconTrash />
-              </button>
-            </td>
-          </tr>
-        );
-      }
+    // Width = max of (header label, widest cell value), capped at 220px
+    const colWidth = (col) => {
+      const PX_PER_CHAR = 8.4; // Courier New ~13px
+      const PADDING = 20;
+      const headerPx = Math.max(52, (col.label || '').length * PX_PER_CHAR + PADDING);
+      const maxCellPx = rows.reduce((max, row) => {
+        const len = ((row.cells || {})[col.id] || '').length * PX_PER_CHAR + PADDING;
+        return len > max ? len : max;
+      }, 0);
+      return Math.min(220, Math.max(headerPx, maxCellPx, 52));
+    };
 
-      return (
-        <tr onClick={onEdit} className="cursor-pointer active:bg-fb-pale/30 transition-colors">
-          {columns.map(col => (
-            <td key={col.key} className={`${col.className || ''} ${col.align === 'left' ? 'text-left' : 'text-right'}`}>
-              <span className={`font-data ${!row[col.key] ? 'text-fb-border' : ''}`}>
-                {row[col.key] || '—'}
-              </span>
-            </td>
-          ))}
-          <td></td>
-        </tr>
-      );
+    return (
+      <div>
+        <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
+
+        {/* Rename column modal */}
+        {editingCol && (
+          <div className="modal-backdrop" onClick={() => setEditingCol(null)}>
+            <div className="modal-sheet" onClick={e => e.stopPropagation()}>
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
+              <h2 className="text-lg font-bold text-fb-dark mb-4">Rename Column</h2>
+              <input
+                type="text" value={newColName} onChange={e => setNewColName(e.target.value)}
+                autoFocus maxLength={20}
+                className="w-full px-3 py-2.5 rounded-xl border-2 border-fb-mid outline-none text-fb-text text-sm font-data"
+                onKeyDown={e => e.key === 'Enter' && saveColRename()}
+              />
+              <div className="flex gap-3 mt-5">
+                <button onClick={() => setEditingCol(null)} className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold text-sm">Cancel</button>
+                <button onClick={saveColRename} className="flex-1 py-3 rounded-xl text-white font-semibold text-sm" style={{ background: '#2D6A4F' }}>Save</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Table */}
+        <div className="overflow-x-auto" style={{ background: '#FDFAF4' }}>
+          <table className="fb-table">
+            <thead>
+              <tr>
+                {columns.map(col => (
+                  <th key={col.id} style={{ minWidth: colWidth(col) }}
+                    onClick={() => startRenameCol(col)}
+                    title="Tap to rename">
+                    {col.label}
+                  </th>
+                ))}
+                <th style={{ minWidth: 32, width: 32 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={columns.length + 1}
+                    style={{ textAlign: 'center', padding: '18px 10px', color: '#9CA3AF', fontStyle: 'italic', fontSize: 12, background: 'transparent', height: 'auto' }}>
+                    Tap + Add Row to begin
+                  </td>
+                </tr>
+              )}
+              {rows.map(row => (
+                <tr key={row.id}>
+                  {columns.map(col => (
+                    <td key={col.id} style={{ minWidth: colWidth(col) }}>
+                      <input
+                        type="text"
+                        value={row.cells[col.id] !== undefined ? row.cells[col.id] : ''}
+                        onChange={e => updateCell(row.id, col.id, e.target.value)}
+                      />
+                    </td>
+                  ))}
+                  <td className="td-action">
+                    <button onClick={() => deleteRow(row.id)}
+                      className="w-8 h-8 flex items-center justify-center text-gray-300 active:text-red-400 mx-auto">
+                      <Ico.Trash />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Add row */}
+        <div className="px-4 py-3 border-t border-fb-border bg-fb-cream2/50 flex items-center gap-4">
+          <button onClick={addRow} className="flex items-center gap-1.5 text-fb-mid font-semibold text-sm active:opacity-70">
+            <Ico.Plus /> Add Row
+          </button>
+          <span className="text-xs text-fb-muted ml-auto font-data">{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
+        </div>
+      </div>
+    );
+  }
+
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SKETCH PAGE — loaded from sketch.js (see that file for the full engine)
+  // SketchPage is available on window.SketchPage after sketch.js executes.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // TITLE PAGE
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function TitlePage({ page, projectId, onReload }) {
+    const [form, setForm] = useState({
+      title:      page.title      || '',
+      location:   page.location   || '',
+      crew:       page.crew       || '',
+      equipment:  page.equipment  || '',
+      datum:      page.datum      || '',
+      tsSettings: page.tsSettings || '',
+      hiPrism:    page.hiPrism    || '',
+      summary:    page.summary    || '',
+      notes:      page.notes      || '',
+    });
+    const [dirty, setDirty] = useState(false);
+    const timerRef = useRef(null);
+
+    useEffect(() => {
+      setForm({
+        title:      page.title      || '',
+        location:   page.location   || '',
+        crew:       page.crew       || '',
+        equipment:  page.equipment  || '',
+        datum:      page.datum      || '',
+        tsSettings: page.tsSettings || '',
+        hiPrism:    page.hiPrism    || '',
+        summary:    page.summary    || '',
+        notes:      page.notes      || '',
+      });
+    }, [page.id]);
+
+    function handleChange(key, val) {
+      const updated = { ...form, [key]: val };
+      setForm(updated);
+      setDirty(true);
+      clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        DB.updatePage(projectId, page.id, updated);
+        onReload();
+        setDirty(false);
+      }, 800);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // ROOT APP
-    // ─────────────────────────────────────────────────────────────────────────
+    return (
+      <div style={{ background: '#FDFAF4' }}>
+        <div className="page-header-strip px-4 py-2.5 flex items-center justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Title Page · P.{page.pageNumber}</p>
+            <input
+              type="text"
+              value={form.title}
+              onChange={e => handleChange('title', e.target.value)}
+              placeholder="Page title..."
+              maxLength={60}
+              className="w-full font-data text-sm text-fb-dark bg-transparent outline-none placeholder-gray-300 font-semibold"
+              style={{ border: 'none', borderBottom: '1px solid rgba(180,165,140,0.5)', padding: '1px 0' }}
+            />
+          </div>
+          <div className="flex-shrink-0 text-right">
+            <p className="text-xs font-data text-fb-muted">{page.date}</p>
+            {dirty && <span className="text-[10px] text-fb-muted italic">saving...</span>}
+          </div>
+        </div>
+        <div className="px-5">
+          {/* Project Title / Location */}
+          <div className="py-2.5 border-b border-fb-border">
+            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Project Title / Location</p>
+            <textarea rows={2} value={form.location} onChange={e => handleChange('location', e.target.value)}
+              placeholder="Property address, legal description, project name..."
+              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
+          </div>
+          {/* Crew */}
+          <div className="py-2.5 border-b border-fb-border">
+            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Crew &amp; Responsibilities</p>
+            <textarea rows={2} value={form.crew} onChange={e => handleChange('crew', e.target.value)}
+              placeholder="Party chief: —   Rod person: —   Note keeper: —"
+              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
+          </div>
+          {/* Equipment */}
+          <div className="py-2.5 border-b border-fb-border">
+            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Equipment (Make, Model, S/N)</p>
+            <textarea rows={2} value={form.equipment} onChange={e => handleChange('equipment', e.target.value)}
+              placeholder="Total station: Trimble S7, S/N 12345   Prism: —"
+              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
+          </div>
+          {/* Datum */}
+          <div className="py-2.5 border-b border-fb-border">
+            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Datum &amp; Projection</p>
+            <input type="text" value={form.datum} onChange={e => handleChange('datum', e.target.value)}
+              placeholder="NAD83(CSRS), UTM Zone 20N / CGVD2013"
+              className="w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300" />
+          </div>
+          {/* TS Settings */}
+          <div className="py-2.5 border-b border-fb-border">
+            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Total Station Settings (PPM, Temp, Press, Prism Const.)</p>
+            <input type="text" value={form.tsSettings} onChange={e => handleChange('tsSettings', e.target.value)}
+              placeholder="PPM: —   Temp: —°C   Pressure: — hPa   Prism const.: —"
+              className="w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300" />
+          </div>
+          {/* HI / Prism */}
+          <div className="py-2.5 border-b border-fb-border">
+            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">H.I. / Prism Height</p>
+            <input type="text" value={form.hiPrism} onChange={e => handleChange('hiPrism', e.target.value)}
+              placeholder="H.I.: — m     Prism HT: — m"
+              className="w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300" />
+          </div>
+          {/* Summary */}
+          <div className="py-2.5 border-b border-fb-border">
+            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Summary of Work</p>
+            <textarea rows={3} value={form.summary} onChange={e => handleChange('summary', e.target.value)}
+              placeholder="Overview of survey objectives for this session..."
+              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
+          </div>
+          {/* Notes */}
+          <div className="py-2.5 border-b border-fb-border">
+            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Code List / File Names / Additional Notes</p>
+            <textarea rows={3} value={form.notes} onChange={e => handleChange('notes', e.target.value)}
+              placeholder="Feature codes, digital file names, check shots, other notes..."
+              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-    function App() {
-      const hash = useRouter();
-      const route = parseRoute(hash);
+  // ─────────────────────────────────────────────────────────────────────────────
+  // APP ROOT
+  // ─────────────────────────────────────────────────────────────────────────────
 
-      // Register service worker
-      useEffect(() => {
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.register('./sw.js')
-            .then(reg => console.log('[FieldBook] SW registered', reg.scope))
-            .catch(err => console.warn('[FieldBook] SW registration failed', err));
-        }
-      }, []);
+  function App() {
+    const hash  = useRouter();
+    const route = parseRoute(hash);
 
-      return (
-        <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    useEffect(() => {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./sw.js')
+          .catch(err => console.warn('[FieldBook] SW:', err));
+      }
+    }, []);
+
+    const RINGS = 15;
+    return (
+      <div className="notebook-frame">
+        {/* Wire-O spiral binding — desktop only (hidden on mobile via CSS) */}
+        <div className="notebook-binding-bar" aria-hidden="true">
+          {Array.from({ length: RINGS }).map((_, i) => <div key={i} className="spiral-ring" />)}
+        </div>
+        {/* App content */}
+        <div className="notebook-inner">
           {route.view === 'home'    && <HomePage />}
           {route.view === 'project' && <ProjectView projectId={route.projectId} />}
-          {route.view === 'page'    && <PageView projectId={route.projectId} pageId={route.pageId} />}
+          {route.view === 'page'    && <PageView    projectId={route.projectId} pageId={route.pageId} />}
         </div>
-      );
-    }
+      </div>
+    );
+  }
 
-    // Mount
+  // Expose shared globals for sketch.js to consume via window._fb
+  window._fb = { DB, PageHeaderStrip, HCell };
+
+  // Mount the app only after sketch.js has loaded and resolved _sketchPromise
+  _sketchPromise.then(() => {
     ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-  </script>
+  });
+</script>
+
+<!-- Sketch engine — loads async, resolves _sketchPromise when ready -->
+<script type="text/babel" src="./sketch.js"></script>
 </body>
 </html>
