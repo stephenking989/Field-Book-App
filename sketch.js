@@ -188,6 +188,10 @@ function SketchPage({ page, projectId, onReload }) {
   // Zoom in    → shrink w and h (more world-space per pixel).
   // Pan        → shift x and y.
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 800, h: 600 });
+  // latestViewBoxRef: always holds the most recent viewBox value so that native
+  // DOM event listeners (wheel, middle-mouse pan) can read it without stale closures.
+  // Updated after every render via a no-dep-array useEffect below.
+  const latestViewBoxRef = useRef({ x: 0, y: 0, w: 800, h: 600 });
 
   // Keep viewBox in sync with the actual container size, preserving zoom level
   // when the window resizes.
@@ -212,19 +216,27 @@ function SketchPage({ page, projectId, onReload }) {
     return () => obs.disconnect();
   }, []);
 
-  // ── Wheel zoom (non-passive so we can preventDefault) ────────────────────
-  // Attached to svgWrapRef (HTML div) rather than the SVG element.
-  // Chrome has a known quirk where preventDefault() on wheel events fired at an
-  // <svg> target doesn't reliably stop ancestor scroll containers from scrolling.
-  // Attaching to the HTML wrapper div avoids this and also catches wheel events
-  // that land on overlay children (north arrow, curve badge, text editor).
-  // Uses functional setViewBox so no stale closure over viewBox state is needed.
+  // Keep latestViewBoxRef current after every render so native event listeners
+  // can always read the latest viewBox without being captured in stale closures.
+  useEffect(() => { latestViewBoxRef.current = viewBox; });
+
+  // ── Native canvas input handlers (wheel zoom, middle-mouse pan, context menu) ──
+  // All three are attached as native DOM listeners on svgWrapRef rather than as
+  // React synthetic events because:
+  //   • Wheel: Chrome won't reliably block ancestor scroll via React's passive onWheel.
+  //   • Middle-mouse: Chrome fires pointercancel to activate its auto-scroll cursor
+  //     mode before React's synthetic onPointerDown can respond, killing the pan
+  //     before it starts. A native listener with passive:false + preventDefault()
+  //     suppresses auto-scroll at the source.
+  //   • Context menu: simplest to suppress at the native level alongside the others.
+  // latestViewBoxRef provides a fresh viewBox snapshot so there are no stale closures.
   useEffect(() => {
     const el = svgWrapRef.current;
     if (!el) return;
+
+    // ── Wheel zoom ────────────────────────────────────────────────────────────
     function handleWheel(e) {
       e.preventDefault();
-      // Measure the SVG itself so coordinates map to the drawing surface.
       const svgEl = svgRef.current;
       const rect  = svgEl ? svgEl.getBoundingClientRect() : el.getBoundingClientRect();
       const sx    = e.clientX - rect.left;
@@ -235,20 +247,71 @@ function SketchPage({ page, projectId, onReload }) {
         const sw     = svgSizeRef.current.w || vb.w;
         const sh     = svgSizeRef.current.h || vb.h;
         const factor = 1 + dir * STEP;
-        // Clamp: never zoom tighter than 20px world-units wide, never more than 20× screen
         const newW   = Math.max(20, Math.min(vb.w * factor, sw * 20));
-        const newH   = newW * (sh / sw);     // preserve screen aspect ratio
+        const newH   = newW * (sh / sw);
         const fx     = rect.width  > 0 ? sx / rect.width  : 0.5;
         const fy     = rect.height > 0 ? sy / rect.height : 0.5;
-        // Keep the world point under the cursor stationary
         const wx = vb.x + fx * vb.w;
         const wy = vb.y + fy * vb.h;
         return { x: wx - fx * newW, y: wy - fy * newH, w: newW, h: newH };
       });
     }
-    el.addEventListener('wheel', handleWheel, { passive: false });
-    return () => el.removeEventListener('wheel', handleWheel);
-  }, []); // stable — only touches refs + functional setState; svgWrapRef persists for component lifetime
+
+    // ── Middle-mouse pan ─────────────────────────────────────────────────────
+    // Handled natively so Chrome's auto-scroll is suppressed before it activates.
+    // Uses latestViewBoxRef so the start snapshot is always fresh.
+    function handlePanDown(e) {
+      if (e.button !== 1) return;
+      e.preventDefault(); // suppresses Chrome's auto-scroll cursor activation
+      const vb = latestViewBoxRef.current;
+      const sw = svgSizeRef.current.w || vb.w;
+      midPanRef.current = {
+        startX: e.clientX, startY: e.clientY,
+        vbX: vb.x, vbY: vb.y,
+        ps: vb.w / sw,
+      };
+      setIsPanActive(true);
+      // Capture the pointer so move/up events reach this element even if the
+      // cursor leaves the canvas mid-drag.
+      try { el.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+    function handlePanMove(e) {
+      if (!midPanRef.current) return;
+      // Safety check: if middle button was released without a pointerup (e.g.
+      // focus loss), clear the pan state.
+      if (!(e.buttons & 4)) { midPanRef.current = null; setIsPanActive(false); return; }
+      const { startX, startY, vbX, vbY, ps } = midPanRef.current;
+      setViewBox(vb => ({
+        ...vb,
+        x: vbX - (e.clientX - startX) * ps,
+        y: vbY - (e.clientY - startY) * ps,
+      }));
+    }
+    function handlePanUp(e) {
+      if (e.button !== 1) return;
+      midPanRef.current = null;
+      setIsPanActive(false);
+    }
+
+    // ── Context menu suppression ──────────────────────────────────────────────
+    // Right-click inside the canvas should do nothing for now (reserved for
+    // future tool assignment). The React onPointerDown handler also returns early
+    // for button=2, so no drawing is triggered either.
+    function handleContextMenu(e) { e.preventDefault(); }
+
+    el.addEventListener('wheel',       handleWheel,       { passive: false });
+    el.addEventListener('pointerdown', handlePanDown,     { passive: false });
+    el.addEventListener('pointermove', handlePanMove);
+    el.addEventListener('pointerup',   handlePanUp);
+    el.addEventListener('contextmenu', handleContextMenu);
+    return () => {
+      el.removeEventListener('wheel',       handleWheel);
+      el.removeEventListener('pointerdown', handlePanDown);
+      el.removeEventListener('pointermove', handlePanMove);
+      el.removeEventListener('pointerup',   handlePanUp);
+      el.removeEventListener('contextmenu', handleContextMenu);
+    };
+  }, []); // stable — only touches refs + functional setState; svgWrapRef lives for component lifetime
 
   // Reset state when page changes
   useEffect(() => {
@@ -405,18 +468,13 @@ function SketchPage({ page, projectId, onReload }) {
       return;
     }
 
+    // Only left-click (button 0) draws or selects.
+    // Middle-click (button 1) pan is handled by native listeners in the useEffect above.
+    // Right-click (button 2) is reserved for future use; context menu is suppressed natively.
+    if (e.button !== 0) return;
+
     // Track every pointer for pinch/pan detection (must happen before any early returns)
     activePtrsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-    // ── Middle-mouse button → pan ─────────────────────────────────────────
-    if (e.button === 1) {
-      e.preventDefault();
-      const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-      midPanRef.current = { startX: e.clientX, startY: e.clientY,
-                            vbX: viewBox.x, vbY: viewBox.y, ps };
-      setIsPanActive(true);
-      return;
-    }
 
     // ── Two-finger touch → cancel draw, enter pinch/pan mode ─────────────
     if (activePtrsRef.current.size >= 2) {
@@ -569,18 +627,10 @@ function SketchPage({ page, projectId, onReload }) {
   }
 
   function onPointerMove(e) {
-    // Keep pointer map current so pinch tracking stays accurate
+    // Keep pointer map current so pinch tracking stays accurate.
+    // Only left-click pointers are in activePtrsRef (button !== 0 returns early in onPointerDown).
     if (activePtrsRef.current.has(e.pointerId)) {
       activePtrsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    }
-
-    // ── Middle-mouse pan ────────────────────────────────────────────────────
-    if (midPanRef.current) {
-      const { startX, startY, vbX, vbY, ps } = midPanRef.current;
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      setViewBox(vb => ({ ...vb, x: vbX - dx * ps, y: vbY - dy * ps }));
-      return;
     }
 
     // ── Two-finger pinch + pan ──────────────────────────────────────────────
@@ -736,15 +786,10 @@ function SketchPage({ page, projectId, onReload }) {
 
   function onPointerUp(e) {
     // ── Pointer tracking cleanup ──────────────────────────────────────────
+    // activePtrsRef only contains left-click pointers (button !== 0 returns
+    // early in onPointerDown), so this delete is always safe.
     activePtrsRef.current.delete(e.pointerId);
     if (activePtrsRef.current.size < 2) lastPinchRef.current = null;
-
-    // ── End middle-mouse pan ──────────────────────────────────────────────
-    if (midPanRef.current) {
-      midPanRef.current = null;
-      setIsPanActive(false);
-      return;
-    }
 
     // ── Still in two-finger mode → don't process single-pointer events ────
     if (activePtrsRef.current.size >= 2) return;
