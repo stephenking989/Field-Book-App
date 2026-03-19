@@ -1030,9 +1030,13 @@
           onBack={() => navigate(`#/project/${projectId}`)}
           actions={navActions}
         />
-        <div className="flex-1 overflow-y-auto screen-enter">
+        {/* Sketch pages must NOT be scrollable — the canvas handles all pointer/wheel
+            events directly and needs to fill the full remaining height without a
+            scrollable ancestor (which the browser prefers over canvas wheel handlers).
+            All other page types keep overflow-y-auto + the safe-area bottom spacer. */}
+        <div className={`flex-1 screen-enter${page.type === 'sketch' ? ' overflow-hidden flex flex-col' : ' overflow-y-auto'}`}>
           <PageContent page={page} projectId={projectId} onReload={reload} />
-          <div style={{ height: 'max(24px, env(safe-area-inset-bottom))' }} />
+          {page.type !== 'sketch' && <div style={{ height: 'max(24px, env(safe-area-inset-bottom))' }} />}
         </div>
       </div>
     );

@@ -213,15 +213,20 @@ function SketchPage({ page, projectId, onReload }) {
   }, []);
 
   // ── Wheel zoom (non-passive so we can preventDefault) ────────────────────
-  // Must use addEventListener directly — React's synthetic onWheel is passive
-  // in some browsers and can't call preventDefault reliably.
-  // Uses functional setViewBox so no closure over viewBox state is needed.
+  // Attached to svgWrapRef (HTML div) rather than the SVG element.
+  // Chrome has a known quirk where preventDefault() on wheel events fired at an
+  // <svg> target doesn't reliably stop ancestor scroll containers from scrolling.
+  // Attaching to the HTML wrapper div avoids this and also catches wheel events
+  // that land on overlay children (north arrow, curve badge, text editor).
+  // Uses functional setViewBox so no stale closure over viewBox state is needed.
   useEffect(() => {
-    const el = svgRef.current;
+    const el = svgWrapRef.current;
     if (!el) return;
     function handleWheel(e) {
       e.preventDefault();
-      const rect  = el.getBoundingClientRect();
+      // Measure the SVG itself so coordinates map to the drawing surface.
+      const svgEl = svgRef.current;
+      const rect  = svgEl ? svgEl.getBoundingClientRect() : el.getBoundingClientRect();
       const sx    = e.clientX - rect.left;
       const sy    = e.clientY - rect.top;
       const dir   = e.deltaY > 0 ? 1 : -1;   // +1 zoom out, -1 zoom in
@@ -243,7 +248,7 @@ function SketchPage({ page, projectId, onReload }) {
     }
     el.addEventListener('wheel', handleWheel, { passive: false });
     return () => el.removeEventListener('wheel', handleWheel);
-  }, []); // stable — only touches refs + functional setState
+  }, []); // stable — only touches refs + functional setState; svgWrapRef persists for component lifetime
 
   // Reset state when page changes
   useEffect(() => {
@@ -1374,7 +1379,11 @@ function SketchPage({ page, projectId, onReload }) {
         </div>
 
         {/* ── SVG drawing surface ──────────────────────────────────────── */}
-        <div ref={svgWrapRef} className="page-grid-blue" style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+        {/* touchAction:'none' on the wrapper (not just the SVG) is required for mobile.
+            The browser resolves touch-action by walking up from the touch target — any
+            ancestor with touch-action:auto lets the browser intercept pinch/pan before
+            our pointer events fire. Setting it here covers SVG children + overlays. */}
+        <div ref={svgWrapRef} className="page-grid-blue" style={{ flex: 1, position: 'relative', overflow: 'hidden', touchAction: 'none' }}>
 
           {/* North arrow */}
           <div style={{ position: 'absolute', top: 10, right: 14, opacity: 0.28, display: 'flex',
@@ -1410,6 +1419,7 @@ function SketchPage({ page, projectId, onReload }) {
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerLeave={onPointerUp}
+            onPointerCancel={onPointerUp}
             onDblClick={onDblClick}
           >
             {/* Committed shapes — rendered in layer order, bottom to top */}
