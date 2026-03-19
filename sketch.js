@@ -171,7 +171,17 @@ function SketchPage({ page, projectId, onReload }) {
   // svgSizeRef: raw CSS pixel dimensions of the SVG container (updated by ResizeObserver).
   // Used to compute pixelScale (ps) = viewBox.w / svgSizeRef.w = world-units per CSS pixel.
   // ps = 1.0 at zoom:1, ps = 0.5 at zoom:2, etc.
-  const svgSizeRef  = useRef({ w: 800, h: 600 });
+  const svgSizeRef    = useRef({ w: 800, h: 600 });
+  // ── Zoom / Pan refs ────────────────────────────────────────────────────────
+  // activePtrsRef: tracks all active pointer IDs and their client positions.
+  //   When size >= 2 we're in pinch/pan mode; single-pointer drawing is suppressed.
+  const activePtrsRef = useRef(new Map());     // pointerId → { x, y }
+  // lastPinchRef: stores the previous frame's pinch midpoint + distance so we can
+  //   compute per-frame zoom factor and pan delta incrementally.
+  const lastPinchRef  = useRef(null);           // { dist, midX, midY }
+  // midPanRef: anchor data captured at middle-mouse button-down for smooth pan.
+  const midPanRef     = useRef(null);           // { startX, startY, vbX, vbY, ps }
+  const [isPanActive, setIsPanActive] = useState(false); // drives 'grab' cursor
 
   // viewBox state: { x, y, w, h } — the SVG camera window in world coordinates.
   // At zoom:1  → w = containerWidth, h = containerHeight (1:1 pixel mapping).
@@ -201,6 +211,39 @@ function SketchPage({ page, projectId, onReload }) {
     obs.observe(el);
     return () => obs.disconnect();
   }, []);
+
+  // ── Wheel zoom (non-passive so we can preventDefault) ────────────────────
+  // Must use addEventListener directly — React's synthetic onWheel is passive
+  // in some browsers and can't call preventDefault reliably.
+  // Uses functional setViewBox so no closure over viewBox state is needed.
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    function handleWheel(e) {
+      e.preventDefault();
+      const rect  = el.getBoundingClientRect();
+      const sx    = e.clientX - rect.left;
+      const sy    = e.clientY - rect.top;
+      const dir   = e.deltaY > 0 ? 1 : -1;   // +1 zoom out, -1 zoom in
+      const STEP  = 0.15;
+      setViewBox(vb => {
+        const sw     = svgSizeRef.current.w || vb.w;
+        const sh     = svgSizeRef.current.h || vb.h;
+        const factor = 1 + dir * STEP;
+        // Clamp: never zoom tighter than 20px world-units wide, never more than 20× screen
+        const newW   = Math.max(20, Math.min(vb.w * factor, sw * 20));
+        const newH   = newW * (sh / sw);     // preserve screen aspect ratio
+        const fx     = rect.width  > 0 ? sx / rect.width  : 0.5;
+        const fy     = rect.height > 0 ? sy / rect.height : 0.5;
+        // Keep the world point under the cursor stationary
+        const wx = vb.x + fx * vb.w;
+        const wy = vb.y + fy * vb.h;
+        return { x: wx - fx * newW, y: wy - fy * newH, w: newW, h: newH };
+      });
+    }
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, []); // stable — only touches refs + functional setState
 
   // Reset state when page changes
   useEffect(() => {
@@ -357,6 +400,33 @@ function SketchPage({ page, projectId, onReload }) {
       return;
     }
 
+    // Track every pointer for pinch/pan detection (must happen before any early returns)
+    activePtrsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    // ── Middle-mouse button → pan ─────────────────────────────────────────
+    if (e.button === 1) {
+      e.preventDefault();
+      const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+      midPanRef.current = { startX: e.clientX, startY: e.clientY,
+                            vbX: viewBox.x, vbY: viewBox.y, ps };
+      setIsPanActive(true);
+      return;
+    }
+
+    // ── Two-finger touch → cancel draw, enter pinch/pan mode ─────────────
+    if (activePtrsRef.current.size >= 2) {
+      e.preventDefault();
+      setDrawState(null);
+      setDragNode(null);
+      setDragStart(null);
+      const pts  = [...activePtrsRef.current.values()];
+      const midX = (pts[0].x + pts[1].x) / 2;
+      const midY = (pts[0].y + pts[1].y) / 2;
+      const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+      lastPinchRef.current = { dist, midX, midY };
+      return;
+    }
+
     e.preventDefault();
     const pt = screenToWorld(e);
     // ps: world-units per CSS pixel — scales all fixed-screen-size thresholds so
@@ -494,6 +564,56 @@ function SketchPage({ page, projectId, onReload }) {
   }
 
   function onPointerMove(e) {
+    // Keep pointer map current so pinch tracking stays accurate
+    if (activePtrsRef.current.has(e.pointerId)) {
+      activePtrsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    // ── Middle-mouse pan ────────────────────────────────────────────────────
+    if (midPanRef.current) {
+      const { startX, startY, vbX, vbY, ps } = midPanRef.current;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      setViewBox(vb => ({ ...vb, x: vbX - dx * ps, y: vbY - dy * ps }));
+      return;
+    }
+
+    // ── Two-finger pinch + pan ──────────────────────────────────────────────
+    if (activePtrsRef.current.size >= 2 && lastPinchRef.current) {
+      const pts  = [...activePtrsRef.current.values()];
+      const midX = (pts[0].x + pts[1].x) / 2;
+      const midY = (pts[0].y + pts[1].y) / 2;
+      const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+      const last = lastPinchRef.current;
+      const el   = svgRef.current;
+      const rect = el ? el.getBoundingClientRect()
+                      : { left: 0, top: 0,
+                          width:  svgSizeRef.current.w,
+                          height: svgSizeRef.current.h };
+      setViewBox(vb => {
+        const sw     = svgSizeRef.current.w || vb.w;
+        const sh     = svgSizeRef.current.h || vb.h;
+        // Zoom: finger spread → zoom in (factor < 1 → smaller vb), spread apart → zoom out
+        const factor = last.dist > 1 ? last.dist / dist : 1;
+        const newW   = Math.max(20, Math.min(vb.w * factor, sw * 20));
+        const newH   = newW * (sh / sw);
+        // Keep world point under pinch midpoint stationary
+        const fx     = rect.width  > 0 ? (midX - rect.left) / rect.width  : 0.5;
+        const fy     = rect.height > 0 ? (midY - rect.top)  / rect.height : 0.5;
+        const wx     = vb.x + fx * vb.w;
+        const wy     = vb.y + fy * vb.h;
+        // Apply zoom-anchored position + pan delta
+        const ps     = vb.w / sw;
+        return {
+          x: wx - fx * newW - (midX - last.midX) * ps,
+          y: wy - fy * newH - (midY - last.midY) * ps,
+          w: newW, h: newH,
+        };
+      });
+      lastPinchRef.current = { dist, midX, midY };
+      return;
+    }
+
     const rawPt = screenToWorld(e);
 
     // ── Node / handle drag ────────────────────────────────────────────────────
@@ -610,6 +730,20 @@ function SketchPage({ page, projectId, onReload }) {
   }
 
   function onPointerUp(e) {
+    // ── Pointer tracking cleanup ──────────────────────────────────────────
+    activePtrsRef.current.delete(e.pointerId);
+    if (activePtrsRef.current.size < 2) lastPinchRef.current = null;
+
+    // ── End middle-mouse pan ──────────────────────────────────────────────
+    if (midPanRef.current) {
+      midPanRef.current = null;
+      setIsPanActive(false);
+      return;
+    }
+
+    // ── Still in two-finger mode → don't process single-pointer events ────
+    if (activePtrsRef.current.size >= 2) return;
+
     setSnapPoint(null);
 
     // Commit node drag
@@ -811,6 +945,70 @@ function SketchPage({ page, projectId, onReload }) {
       setTextEdit({ id: hit.id, x: hit.x, y: hit.y, w: hit.w, content: hit.content, editing: true });
       commitShapes(shapes.filter(s => s.id !== hit.id));
     }
+  }
+
+  // ── Zoom helpers ───────────────────────────────────────────────────────────
+  // Returns the axis-aligned bounding box of a list of shapes (rotation-aware).
+  function getBoundingBox(shapeList) {
+    if (!shapeList.length) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const expand = (x, y) => {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    };
+    for (const s of shapeList) {
+      const rot = s._rot || 0;
+      const piv = getShapePivot(s);
+      const add = (x, y) => {
+        const p = rot ? rotatePoint(x, y, piv.x, piv.y, rot) : { x, y };
+        expand(p.x, p.y);
+      };
+      switch (s.type) {
+        case 'line':   add(s.x1,s.y1); add(s.x2,s.y2); break;
+        case 'curve': {
+          const { ax, ay } = getCurveArcMid(s);
+          add(s.x1,s.y1); add(s.x2,s.y2); add(ax,ay); break;
+        }
+        case 'circle':
+          add(s.cx-s.r,s.cy); add(s.cx+s.r,s.cy);
+          add(s.cx,s.cy-s.r); add(s.cx,s.cy+s.r); break;
+        case 'rect':
+          add(s.x,s.y); add(s.x+s.w,s.y);
+          add(s.x,s.y+s.h); add(s.x+s.w,s.y+s.h); break;
+        case 'text':
+          add(s.x,s.y); add(s.x+(s.w||160),s.y+(s.h||40)); break;
+        default: break;
+      }
+    }
+    return minX <= maxX ? { minX, minY, maxX, maxY } : null;
+  }
+
+  // Zoom the view to fit all visible shapes with 12% padding on each side.
+  function zoomToExtents() {
+    const visible = shapes.filter(s => {
+      const layer = layers.find(l => l.id === (s.layerId || layers[0]?.id));
+      return layer?.visible !== false;
+    });
+    const bb = getBoundingBox(visible);
+    if (!bb) return;
+    const { w: sw, h: sh } = svgSizeRef.current;
+    const aspect  = sw / sh;
+    const PAD     = 0.12;  // 12% padding
+    let vbW = (bb.maxX - bb.minX) * (1 + PAD * 2);
+    let vbH = (bb.maxY - bb.minY) * (1 + PAD * 2);
+    // Expand to match screen aspect ratio
+    if (vbW / vbH > aspect) vbH = vbW / aspect;
+    else                    vbW = vbH * aspect;
+    vbW = Math.max(vbW, 100); vbH = Math.max(vbH, 100 / aspect);
+    const cx = (bb.minX + bb.maxX) / 2;
+    const cy = (bb.minY + bb.maxY) / 2;
+    setViewBox({ x: cx - vbW/2, y: cy - vbH/2, w: vbW, h: vbH });
+  }
+
+  // Reset zoom to 1:1 (100%) anchored at origin.
+  function zoomReset() {
+    const { w: sw, h: sh } = svgSizeRef.current;
+    setViewBox({ x: 0, y: 0, w: sw, h: sh });
   }
 
   // ── Render a single shape ──────────────────────────────────────────────────
@@ -1042,6 +1240,61 @@ function SketchPage({ page, projectId, onReload }) {
           <span style={{ fontSize: 14, lineHeight: 1 }}>⊙</span>
           <span style={{ letterSpacing: '0.03em' }}>Snap</span>
         </button>
+
+        {/* Separator */}
+        <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
+
+        {/* Zoom % readout */}
+        <span style={{
+          fontSize: 10, fontFamily: 'Courier New, monospace', letterSpacing: '0.03em',
+          color: 'rgba(255,255,255,0.4)', minWidth: 36, textAlign: 'right',
+          userSelect: 'none',
+        }}>
+          {Math.round((svgSizeRef.current.w / viewBox.w) * 100)}%
+        </span>
+
+        {/* Zoom to Extents */}
+        <button
+          onClick={zoomToExtents}
+          title="Zoom to fit all shapes"
+          style={{
+            height: 26, padding: '0 8px', borderRadius: 4,
+            display: 'flex', alignItems: 'center', gap: 4,
+            background: 'rgba(255,255,255,0.06)',
+            border: '1px solid rgba(255,255,255,0.14)',
+            color: 'rgba(255,255,255,0.55)',
+            cursor: 'pointer', fontSize: 11,
+            fontFamily: 'Courier New, monospace', outline: 'none',
+          }}
+        >
+          <span style={{ fontSize: 13, lineHeight: 1 }}>⊡</span>
+          <span>Fit</span>
+        </button>
+
+        {/* Reset zoom */}
+        <button
+          onClick={zoomReset}
+          title="Reset zoom to 100%"
+          style={{
+            height: 26, padding: '0 8px', borderRadius: 4,
+            display: 'flex', alignItems: 'center', gap: 4,
+            background: 'rgba(255,255,255,0.06)',
+            border: '1px solid rgba(255,255,255,0.14)',
+            color: 'rgba(255,255,255,0.55)',
+            cursor: 'pointer', fontSize: 11,
+            fontFamily: 'Courier New, monospace', outline: 'none',
+          }}
+        >
+          <span style={{ fontSize: 12, lineHeight: 1 }}>1:1</span>
+        </button>
+
+        {/* Pan hint — only shown while actively panning */}
+        {isPanActive && (
+          <span style={{
+            fontSize: 10, fontFamily: 'Courier New, monospace',
+            color: 'rgba(255,255,255,0.35)', marginLeft: 4,
+          }}>panning…</span>
+        )}
       </div>
 
       {/* Main sketch area */}
@@ -1148,7 +1401,9 @@ function SketchPage({ page, projectId, onReload }) {
             preserveAspectRatio="none"
             style={{
               position: 'absolute', inset: 0, width: '100%', height: '100%',
-              cursor: cursorMap[tool] || 'crosshair',
+              cursor: isPanActive ? 'grabbing'
+                     : activePtrsRef.current.size >= 2 ? 'move'
+                     : cursorMap[tool] || 'crosshair',
               touchAction: 'none',
             }}
             onPointerDown={onPointerDown}
