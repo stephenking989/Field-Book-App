@@ -1389,6 +1389,7 @@
     const [calcResults, setCalcResults] = useState({});    // { 'r_xxx_cId': displayValue }
     const inputRef  = useRef(null);
     const fbInputRef = useRef(null);
+    const tableRef   = useRef(null);
 
     // Sync rows when page changes
     useEffect(() => { setRows(page.rows || []); }, [page.id]);
@@ -1492,6 +1493,8 @@
       if (!row || !col) return;
       const raw = (row.cells || {})[col.id] || '';
       setFormulaBarVal(raw);
+      // Focus the table container so grid-level keyboard events fire
+      setTimeout(() => { if (tableRef.current) tableRef.current.focus(); }, 0);
     }
 
     function startEdit(ri, ci) {
@@ -1531,6 +1534,57 @@
       } else if (e.key === 'Escape') {
         setEditingCell(null);
         setEditValue('');
+      }
+    }
+
+    // ── Grid-level keyboard handler (fires when a cell is selected but NOT in edit mode) ──
+    function handleGridKeyDown(e) {
+      // Ignore if focus is inside an input (formula bar or inline cell editor)
+      if (e.target.tagName === 'INPUT') return;
+      if (!activeCell) return;
+      const { rowIdx: ri, colIdx: ci } = activeCell;
+
+      // Delete / Backspace → clear the selected cell
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        const row = rows[ri];
+        const col = columns[ci];
+        if (row && col) {
+          updateCell(row.id, col.id, '');
+          setFormulaBarVal('');
+        }
+        return;
+      }
+
+      // Arrow key navigation (no edit mode)
+      if (e.key === 'ArrowDown')  { e.preventDefault(); if (ri + 1 < rows.length)    activateCell(ri + 1, ci); return; }
+      if (e.key === 'ArrowUp')    { e.preventDefault(); if (ri - 1 >= 0)              activateCell(ri - 1, ci); return; }
+      if (e.key === 'ArrowRight') { e.preventDefault(); if (ci + 1 < columns.length) activateCell(ri, ci + 1); return; }
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); if (ci - 1 >= 0)             activateCell(ri, ci - 1); return; }
+
+      // Enter / F2 → enter edit mode keeping existing value
+      if (e.key === 'Enter' || e.key === 'F2') {
+        e.preventDefault();
+        startEdit(ri, ci);
+        return;
+      }
+
+      // Printable character → enter edit mode, discard existing value, pre-fill with typed char
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        const row = rows[ri];
+        const col = columns[ci];
+        if (!row || !col) return;
+        setEditingCell({ rowIdx: ri, colIdx: ci });
+        setEditValue(e.key);
+        setFormulaBarVal(e.key);
+        setTimeout(() => {
+          if (inputRef.current) {
+            inputRef.current.focus();
+            // Move cursor to end
+            inputRef.current.setSelectionRange(1, 1);
+          }
+        }, 0);
       }
     }
 
@@ -1808,7 +1862,8 @@
         </div>
 
         {/* ── Table ── */}
-        <div style={{ flex: 1, overflowX: 'auto', overflowY: 'auto', background: '#FDFAF4' }}>
+        <div ref={tableRef} tabIndex={0} onKeyDown={handleGridKeyDown}
+          style={{ flex: 1, overflowX: 'auto', overflowY: 'auto', background: '#FDFAF4', outline: 'none' }}>
           <table className="fb-table" style={{ tableLayout: 'fixed', width: 'max-content', minWidth: '100%' }}>
             <thead>
               <tr>
@@ -1918,7 +1973,7 @@
               )}
             </span>
           )}
-          <span className="ml-auto text-fb-muted" style={{ fontSize: 10 }}>Tap cell to select · Double-tap to edit · Tab/Enter to navigate</span>
+          <span className="ml-auto text-fb-muted" style={{ fontSize: 10 }}>Select · type to edit · Del to clear · ↑↓←→ navigate</span>
         </div>
 
         {/* ── Column settings modal ── */}
