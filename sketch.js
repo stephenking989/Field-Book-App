@@ -130,6 +130,41 @@ function computeCurveProps(x1, y1, x2, y2, ax, ay) {
            E: Math.abs(E), chord, chordBearing: chordBearingDeg };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DIMENSION LABEL UTILITIES
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Format a world-unit distance for display.
+// Shows enough precision to be useful without being noisy.
+function fmtDim(v) {
+  if (v >= 1000) return Math.round(v).toLocaleString();
+  if (v >=   10) return v.toFixed(1);
+  return v.toFixed(2);
+}
+
+// Render a single dimension text element at (lx, ly) rotated by `angle` degrees.
+// Uses SVG paint-order trick to stroke a white halo behind the fill, keeping
+// the label readable over lines, fills, and the grid at any zoom level.
+// NOT a React component (lowercase) — call as a factory that returns a React element.
+function dimTextEl(lx, ly, angle, text, ps) {
+  const a = angle || 0;
+  return (
+    <text
+      x={lx} y={ly}
+      transform={a ? `rotate(${a},${lx},${ly})` : undefined}
+      fontSize={9.5 * ps}
+      fontFamily="Courier New, monospace"
+      textAnchor="middle"
+      dominantBaseline="middle"
+      fill={STROKE}
+      stroke="rgba(255,255,255,0.90)"
+      strokeWidth={2.5 * ps}
+      paintOrder="stroke fill"
+      style={{ pointerEvents: 'none', userSelect: 'none' }}
+    >{text}</text>
+  );
+}
+
 // Format decimal degrees as D°MM'SS"
 function toDMS(deg) {
   const sign = deg < 0 ? '-' : '';
@@ -155,6 +190,11 @@ function SketchPage({ page, projectId, onReload }) {
   // ── Snap ──────────────────────────────────────────────────────────────────
   const [snapEnabled,    setSnapEnabled]    = useState(false);
   const [snapPoint,      setSnapPoint]      = useState(null);  // {x,y}|null — visual indicator
+
+  // ── Dimension labels ───────────────────────────────────────────────────────
+  // When true, each committed shape shows an inline measurement label (length,
+  // radius, arc length, width×height).  Also shown live while drawing.
+  const [showDims, setShowDims] = useState(true);
 
   // ── Layers ────────────────────────────────────────────────────────────────
   const _initLayers = (page.layers && page.layers.length)
@@ -1109,6 +1149,71 @@ function SketchPage({ page, projectId, onReload }) {
     return <g key={s.id} transform={transform}>{inner}</g>;
   }
 
+  // ── Render dimension label(s) for a committed shape ───────────────────────
+  // Labels live OUTSIDE shape groups so the group's rotation transform doesn't
+  // skew the text.  Instead we manually rotate the anchor point and adjust the
+  // text angle to match the (possibly rotated) geometry.
+  function renderDimLabel(s) {
+    const ps  = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+    const OFF = 13 * ps;   // offset from shape edge → constant screen px at any zoom
+    const rot = s._rot || 0;
+    const piv = getShapePivot(s);
+
+    // Rotate anchor (rawX, rawY) by the shape's own rotation, then render text
+    // at that world position with text angle adjusted to match rotated direction.
+    function D(rawX, rawY, ang, txt) {
+      const { x: lx, y: ly } = rot
+        ? rotatePoint(rawX, rawY, piv.x, piv.y, rot)
+        : { x: rawX, y: rawY };
+      let a = (ang + rot) % 360;
+      if (a >  90) a -= 180;
+      if (a < -90) a += 180;
+      return dimTextEl(lx, ly, a, txt, ps);
+    }
+
+    switch (s.type) {
+      case 'line': {
+        const len = Math.hypot(s.x2-s.x1, s.y2-s.y1);
+        if (len < 5 * ps) return null;
+        const mx = (s.x1+s.x2)/2, my = (s.y1+s.y2)/2;
+        // Perpendicular offset in the left-hand normal direction
+        const nx = -(s.y2-s.y1)/len, ny = (s.x2-s.x1)/len;
+        const ang = Math.atan2(s.y2-s.y1, s.x2-s.x1) * 180 / Math.PI;
+        return D(mx + nx*OFF, my + ny*OFF, ang, fmtDim(len));
+      }
+      case 'curve': {
+        const { ax: rax, ay: ray } = getCurveArcMid(s);
+        const cp = computeCurveProps(s.x1, s.y1, s.x2, s.y2, rax, ray);
+        if (!cp || cp.L < 5 * ps) return null;
+        // Push label outward from chord midpoint along the arc-midpoint direction
+        const mx = (s.x1+s.x2)/2, my = (s.y1+s.y2)/2;
+        const olen = Math.hypot(rax-mx, ray-my) || 1;
+        const ux = (rax-mx)/olen, uy = (ray-my)/olen;
+        const lx1 = rax + ux * OFF,            ly1 = ray + uy * OFF;
+        const lx2 = rax + ux * (OFF + 12*ps),  ly2 = ray + uy * (OFF + 12*ps);
+        const r0 = rot ? rotatePoint(lx1, ly1, piv.x, piv.y, rot) : { x: lx1, y: ly1 };
+        const r1 = rot ? rotatePoint(lx2, ly2, piv.x, piv.y, rot) : { x: lx2, y: ly2 };
+        return <>
+          {dimTextEl(r0.x, r0.y, 0, `L ${fmtDim(cp.L)}`, ps)}
+          {dimTextEl(r1.x, r1.y, 0, `R ${fmtDim(cp.R)}`, ps)}
+        </>;
+      }
+      case 'circle': {
+        if (s.r < 5 * ps) return null;
+        // Radius label inside the circle, slightly below centre
+        return D(s.cx, s.cy + s.r * 0.25, 0, `R=${fmtDim(s.r)}`);
+      }
+      case 'rect': {
+        // Width label below bottom edge, height label right of right edge
+        return <>
+          {D(s.x + s.w/2,     s.y + s.h + OFF, 0,   fmtDim(Math.abs(s.w)))}
+          {D(s.x + s.w + OFF, s.y + s.h/2,     -90, fmtDim(Math.abs(s.h)))}
+        </>;
+      }
+      default: return null;
+    }
+  }
+
   // ── Render node handles for selected shape ─────────────────────────────────
   // Handles appear at their visually rotated positions in SVG space.
   // The pivot (⊕) and rotate (↻) handles are rendered outside the shape <g>
@@ -1220,13 +1325,32 @@ function SketchPage({ page, projectId, onReload }) {
     if (!drawState) return null;
     const props = { stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
       strokeDasharray: '5,4', strokeLinecap: 'round', opacity: 0.7 };
+    const ps  = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+    const OFF = 13 * ps;
     switch (drawState.type) {
-      case 'line':
-        return <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />;
+      case 'line': {
+        const len = Math.hypot(drawState.x2-drawState.x1, drawState.y2-drawState.y1);
+        const mx  = (drawState.x1+drawState.x2)/2, my = (drawState.y1+drawState.y2)/2;
+        const nx  = len > 0 ? -(drawState.y2-drawState.y1)/len : 0;
+        const ny  = len > 0 ?  (drawState.x2-drawState.x1)/len : 1;
+        const ang = Math.atan2(drawState.y2-drawState.y1, drawState.x2-drawState.x1) * 180/Math.PI;
+        return <>
+          <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />
+          {showDims && len >= 5*ps && dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtDim(len), ps)}
+        </>;
+      }
       case 'curve':
         if (drawState.phase === 1) {
-          // Phase 1: show dashed line BC→mouse so the user sees where EC will land
-          return <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />;
+          // Phase 1: show dashed chord BC→EC + chord length label
+          const len = Math.hypot(drawState.x2-drawState.x1, drawState.y2-drawState.y1);
+          const mx  = (drawState.x1+drawState.x2)/2, my = (drawState.y1+drawState.y2)/2;
+          const nx  = len > 0 ? -(drawState.y2-drawState.y1)/len : 0;
+          const ny  = len > 0 ?  (drawState.x2-drawState.x1)/len : 1;
+          const ang = Math.atan2(drawState.y2-drawState.y1, drawState.x2-drawState.x1) * 180/Math.PI;
+          return <>
+            <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />
+            {showDims && len >= 5*ps && dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtDim(len), ps)}
+          </>;
         } else {
           // Phase 2: live circular arc + green diamond at arc-midpoint + guide dashes
           const { ax: pax, ay: pay } = drawState;
@@ -1234,8 +1358,10 @@ function SketchPage({ page, projectId, onReload }) {
           const midX = (drawState.x1+drawState.x2)/2, midY = (drawState.y1+drawState.y2)/2;
           const sz = 6;
           const dpts = `${pax},${pay-sz} ${pax+sz},${pay} ${pax},${pay+sz} ${pax-sz},${pay}`;
-          // Show live curve elements if arc is valid
           const aInfo = arcCenter(drawState.x1, drawState.y1, drawState.x2, drawState.y2, pax, pay);
+          const cp   = showDims ? computeCurveProps(drawState.x1, drawState.y1, drawState.x2, drawState.y2, pax, pay) : null;
+          const olen = Math.hypot(pax-midX, pay-midY) || 1;
+          const ux   = (pax-midX)/olen, uy = (pay-midY)/olen;
           return <>
             <path d={arcD} {...props} />
             <line x1={midX} y1={midY} x2={pax} y2={pay}
@@ -1247,12 +1373,28 @@ function SketchPage({ page, projectId, onReload }) {
             {/* Radius indicator: faint line from centre to arc-midpoint */}
             {aInfo && <line x1={aInfo.cx} y1={aInfo.cy} x2={pax} y2={pay}
               stroke="rgba(34,197,94,0.2)" strokeWidth={1} strokeDasharray="2,4" />}
+            {/* Live arc-length + radius labels */}
+            {showDims && cp && cp.L >= 5*ps && <>
+              {dimTextEl(pax + ux*OFF,           pay + uy*OFF,           0, `L ${fmtDim(cp.L)}`, ps)}
+              {dimTextEl(pax + ux*(OFF + 12*ps), pay + uy*(OFF + 12*ps), 0, `R ${fmtDim(cp.R)}`, ps)}
+            </>}
           </>;
         }
-      case 'circle':
-        return <circle cx={drawState.cx} cy={drawState.cy} r={Math.max(0, drawState.r)} {...props} />;
-      case 'rect':
-        return <rect x={drawState.x} y={drawState.y} width={Math.max(0,drawState.w)} height={Math.max(0,drawState.h)} {...props} />;
+      case 'circle': {
+        const r = Math.max(0, drawState.r);
+        return <>
+          <circle cx={drawState.cx} cy={drawState.cy} r={r} {...props} />
+          {showDims && r >= 5*ps && dimTextEl(drawState.cx, drawState.cy, 0, `R=${fmtDim(r)}`, ps)}
+        </>;
+      }
+      case 'rect': {
+        const w = Math.max(0, drawState.w), h = Math.max(0, drawState.h);
+        return <>
+          <rect x={drawState.x} y={drawState.y} width={w} height={h} {...props} />
+          {showDims && w >= 5*ps && dimTextEl(drawState.x + w/2,     drawState.y + h + OFF, 0,   fmtDim(w), ps)}
+          {showDims && h >= 5*ps && dimTextEl(drawState.x + w + OFF, drawState.y + h/2,     -90, fmtDim(h), ps)}
+        </>;
+      }
       default: return null;
     }
   }
@@ -1289,6 +1431,24 @@ function SketchPage({ page, projectId, onReload }) {
         >
           <span style={{ fontSize: 14, lineHeight: 1 }}>⊙</span>
           <span style={{ letterSpacing: '0.03em' }}>Snap</span>
+        </button>
+
+        {/* Dims toggle */}
+        <button
+          onClick={() => setShowDims(v => !v)}
+          title={showDims ? 'Dimension labels ON — click to hide' : 'Dimension labels OFF — click to show'}
+          style={{
+            height: 26, padding: '0 10px', borderRadius: 4,
+            display: 'flex', alignItems: 'center', gap: 5,
+            background: showDims ? 'rgba(99,179,237,0.18)' : 'rgba(255,255,255,0.06)',
+            border: `1px solid ${showDims ? 'rgba(99,179,237,0.55)' : 'rgba(255,255,255,0.14)'}`,
+            color: showDims ? '#90CDF4' : 'rgba(255,255,255,0.45)',
+            cursor: 'pointer', fontSize: 11,
+            fontFamily: 'Courier New, monospace', outline: 'none', transition: 'all 0.15s',
+          }}
+        >
+          <span style={{ fontSize: 13, lineHeight: 1 }}>◫</span>
+          <span style={{ letterSpacing: '0.03em' }}>Dims</span>
         </button>
 
         {/* Separator */}
@@ -1475,6 +1635,14 @@ function SketchPage({ page, projectId, onReload }) {
                   .map(s => renderShape(s, s.id === selectedId))}
               </g>
             ))}
+
+            {/* Dimension labels — rendered above shapes, below handles */}
+            {showDims && shapes.map(s => {
+              const layer = layers.find(l => l.id === (s.layerId || layers[0]?.id));
+              if (!layer?.visible) return null;
+              const lbl = renderDimLabel(s);
+              return lbl ? <g key={`dim-${s.id}`}>{lbl}</g> : null;
+            })}
 
             {/* Node handles for selected shape */}
             {selectedShape && tool === 'select' && renderNodes(selectedShape)}
