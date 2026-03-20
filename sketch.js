@@ -1763,9 +1763,16 @@ function SketchPage({ page, projectId, onReload }) {
             }
             if (isDrawing && !cp) return null;
 
-            // Apply a geometry change to the selected shape and persist
-            function applyUpdate(updated) {
-              commitShapes(shapes.map(sh => sh.id === updated.id ? updated : sh));
+            // Apply a geometry change to the selected shape and persist.
+            // Takes a transform function (sh => newSh) so it always operates on
+            // the LATEST state — avoids stale-closure issues when multiple fields
+            // are edited in quick succession (tab / click between inputs).
+            function applyUpdate(transformFn) {
+              setShapes(prev => {
+                const next = prev.map(sh => sh.id === selectedId ? transformFn(sh) : sh);
+                persist(next, undefined);
+                return next;
+              });
             }
 
             // Shared styles
@@ -1806,14 +1813,14 @@ function SketchPage({ page, projectId, onReload }) {
                 <div key="len" style={rStyle}>
                   <span style={lStyle}>Length</span>
                   <input key={s.id+'_len'} defaultValue={len.toFixed(2)} style={iStyle}
-                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(applyLineLength(s,n)); e.target.value=Math.hypot(s.x2-s.x1,s.y2-s.y1).toFixed(2); }}
+                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(sh => applyLineLength(sh,n)); }}
                     onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=len.toFixed(2);e.target.blur();} }}
                   />{unit('px')}
                 </div>,
                 <div key="brg" style={rStyle}>
                   <span style={lStyle}>Bearing</span>
                   <input key={s.id+'_brg'} defaultValue={brg.toFixed(3)} style={iStyle}
-                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)) applyUpdate(applyLineBearing(s,n)); e.target.value=((Math.atan2(s.x2-s.x1,-(s.y2-s.y1))*180/Math.PI)+360)%360+''; }}
+                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)) applyUpdate(sh => applyLineBearing(sh,n)); }}
                     onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=brg.toFixed(3);e.target.blur();} }}
                   />{unit('°')}
                 </div>,
@@ -1826,7 +1833,7 @@ function SketchPage({ page, projectId, onReload }) {
                 <div key="r" style={rStyle}>
                   <span style={lStyle}>Radius</span>
                   <input key={s.id+'_r'} defaultValue={s.r.toFixed(2)} style={iStyle}
-                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate({...s,r:n}); e.target.value=s.r.toFixed(2); }}
+                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(sh => ({...sh,r:n})); }}
                     onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=s.r.toFixed(2);e.target.blur();} }}
                   />{unit('px')}
                 </div>,
@@ -1840,14 +1847,14 @@ function SketchPage({ page, projectId, onReload }) {
                 <div key="w" style={rStyle}>
                   <span style={lStyle}>Width</span>
                   <input key={s.id+'_w'} defaultValue={w.toFixed(2)} style={iStyle}
-                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate({...s,w:n}); e.target.value=Math.abs(s.w).toFixed(2); }}
+                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(sh => ({...sh,w:n})); }}
                     onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=w.toFixed(2);e.target.blur();} }}
                   />{unit('px')}
                 </div>,
                 <div key="h" style={rStyle}>
                   <span style={lStyle}>Height</span>
                   <input key={s.id+'_h'} defaultValue={h.toFixed(2)} style={iStyle}
-                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate({...s,h:n}); e.target.value=Math.abs(s.h).toFixed(2); }}
+                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(sh => ({...sh,h:n})); }}
                     onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=h.toFixed(2);e.target.blur();} }}
                   />{unit('px')}
                 </div>,
@@ -1864,7 +1871,7 @@ function SketchPage({ page, projectId, onReload }) {
                 <div key="R" style={rStyle}>
                   <span style={lStyle}>R</span>
                   <input key={s.id+'_R'} defaultValue={cp.R.toFixed(2)} style={iStyle}
-                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(applyArcRadius(s,n)); }}
+                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(sh => applyArcRadius(sh,n)); }}
                     onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=cp.R.toFixed(2);e.target.blur();} }}
                   />{unit('px')}
                 </div>,
@@ -1894,7 +1901,7 @@ function SketchPage({ page, projectId, onReload }) {
                     key={s.id + '_nts'}
                     defaultValue={s.ntsLabel || ''}
                     placeholder="NTS override…"
-                    onBlur={e  => applyUpdate({ ...s, ntsLabel: e.target.value.trim() || undefined })}
+                    onBlur={e  => { const v=e.target.value.trim(); applyUpdate(sh => ({...sh,ntsLabel:v||undefined})); }}
                     onKeyDown={e => { if(e.key==='Enter') e.target.blur(); }}
                     style={{
                       ...iStyle, width: 90,
