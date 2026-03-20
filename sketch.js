@@ -214,6 +214,236 @@ function applyArcRadius(s, newR) {
   return { ...s, ax: mx + side*dx*h, ay: my + side*dy*h };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SHAPE VALUE CARD  —  proper React component with controlled inputs
+// Extracted from the IIFE so it can hold useState/useEffect.
+// Props:
+//   shape    — the currently selected shape object (never null when rendered)
+//   onUpdate — fn(transformFn) called with a shape→shape transform to apply
+// ─────────────────────────────────────────────────────────────────────────────
+function ShapeValueCard({ shape: s, onUpdate }) {
+  // ── Shared styles ───────────────────────────────────────────────────────
+  const iStyle = {
+    width: 82, background: 'rgba(255,255,255,0.08)',
+    border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3,
+    color: 'rgba(255,255,255,0.9)', fontFamily: 'Courier New, monospace',
+    fontSize: 10, padding: '2px 5px', outline: 'none',
+  };
+  const lStyle = { color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 };
+  const rStyle = { display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.6 };
+  const unit   = v => <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)' }}>{v}</span>;
+
+  // ── Compute initial values from the shape ───────────────────────────────
+  function initVals(sh) {
+    const len = sh.type === 'line' ? Math.hypot(sh.x2-sh.x1, sh.y2-sh.y1) : 0;
+    const brg = sh.type === 'line'
+      ? ((Math.atan2(sh.x2-sh.x1, -(sh.y2-sh.y1)) * 180/Math.PI) + 360) % 360 : 0;
+    const cp = sh.type === 'curve'
+      ? (() => { const {ax,ay} = getCurveArcMid(sh);
+                 return computeCurveProps(sh.x1,sh.y1,sh.x2,sh.y2,ax,ay); })()
+      : null;
+    return {
+      len:    len.toFixed(2),
+      brg:    brg.toFixed(3),
+      r:      sh.type === 'circle' ? sh.r.toFixed(2) : '0',
+      w:      sh.type === 'rect'   ? Math.abs(sh.w).toFixed(2) : '0',
+      h:      sh.type === 'rect'   ? Math.abs(sh.h).toFixed(2) : '0',
+      crvR:   cp ? cp.R.toFixed(2) : '0',
+      nts:    sh.ntsLabel || '',
+    };
+  }
+
+  const [vals, setVals] = useState(() => initVals(s));
+
+  // Re-initialise whenever a DIFFERENT shape is selected (shape ID changes).
+  // Also re-initialise when the shape object itself changes (after an update)
+  // so the field reflects the new committed value on next focus.
+  useEffect(() => { setVals(initVals(s)); }, [s.id, s.x1, s.y1, s.x2, s.y2, s.r, s.w, s.h, s.ax, s.ay, s.ntsLabel]);
+
+  // ── Commit helper ───────────────────────────────────────────────────────
+  // Parses the raw string value, validates with guard, applies transform.
+  // If invalid, snaps the field back to fallbackFn().
+  function tryCommit(key, raw, parse, guard, transform, fallbackFn) {
+    const n = parse(raw);
+    if (guard(n)) {
+      onUpdate(sh => transform(sh, n));
+    } else {
+      setVals(prev => ({ ...prev, [key]: fallbackFn() }));
+    }
+  }
+
+  // ── Curve props (only for curve type) ───────────────────────────────────
+  let cp = null;
+  if (s.type === 'curve') {
+    const {ax, ay} = getCurveArcMid(s);
+    cp = computeCurveProps(s.x1, s.y1, s.x2, s.y2, ax, ay);
+  }
+
+  // ── Build rows ───────────────────────────────────────────────────────────
+  let title = 'Shape';
+  let rows  = [];
+
+  if (s.type === 'line') {
+    title = 'Line';
+    rows = [
+      <div key="len" style={rStyle}>
+        <span style={lStyle}>Length</span>
+        <input
+          value={vals.len}
+          onChange={e => setVals(v => ({ ...v, len: e.target.value }))}
+          onBlur={e  => tryCommit('len', e.target.value, parseFloat,
+                         n => !isNaN(n) && n > 0,
+                         (sh, n) => applyLineLength(sh, n),
+                         () => Math.hypot(s.x2-s.x1, s.y2-s.y1).toFixed(2))}
+          onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
+                            if (e.key === 'Escape') { setVals(v => ({...v, len: Math.hypot(s.x2-s.x1,s.y2-s.y1).toFixed(2)})); e.target.blur(); } }}
+          style={iStyle}
+        />{unit('px')}
+      </div>,
+      <div key="brg" style={rStyle}>
+        <span style={lStyle}>Bearing</span>
+        <input
+          value={vals.brg}
+          onChange={e => setVals(v => ({ ...v, brg: e.target.value }))}
+          onBlur={e  => tryCommit('brg', e.target.value, parseFloat,
+                         n => !isNaN(n),
+                         (sh, n) => applyLineBearing(sh, n),
+                         () => (((Math.atan2(s.x2-s.x1,-(s.y2-s.y1))*180/Math.PI)+360)%360).toFixed(3))}
+          onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
+                            if (e.key === 'Escape') { setVals(v => ({...v, brg: (((Math.atan2(s.x2-s.x1,-(s.y2-s.y1))*180/Math.PI)+360)%360).toFixed(3)})); e.target.blur(); } }}
+          style={iStyle}
+        />{unit('°')}
+      </div>,
+    ];
+
+  } else if (s.type === 'circle') {
+    title = 'Circle';
+    rows = [
+      <div key="r" style={rStyle}>
+        <span style={lStyle}>Radius</span>
+        <input
+          value={vals.r}
+          onChange={e => setVals(v => ({ ...v, r: e.target.value }))}
+          onBlur={e  => tryCommit('r', e.target.value, parseFloat,
+                         n => !isNaN(n) && n > 0,
+                         (sh, n) => ({ ...sh, r: n }),
+                         () => s.r.toFixed(2))}
+          onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
+                            if (e.key === 'Escape') { setVals(v => ({...v, r: s.r.toFixed(2)})); e.target.blur(); } }}
+          style={iStyle}
+        />{unit('px')}
+      </div>,
+    ];
+
+  } else if (s.type === 'rect') {
+    title = 'Rectangle';
+    rows = [
+      <div key="w" style={rStyle}>
+        <span style={lStyle}>Width</span>
+        <input
+          value={vals.w}
+          onChange={e => setVals(v => ({ ...v, w: e.target.value }))}
+          onBlur={e  => tryCommit('w', e.target.value, parseFloat,
+                         n => !isNaN(n) && n > 0,
+                         (sh, n) => ({ ...sh, w: n }),
+                         () => Math.abs(s.w).toFixed(2))}
+          onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
+                            if (e.key === 'Escape') { setVals(v => ({...v, w: Math.abs(s.w).toFixed(2)})); e.target.blur(); } }}
+          style={iStyle}
+        />{unit('px')}
+      </div>,
+      <div key="h" style={rStyle}>
+        <span style={lStyle}>Height</span>
+        <input
+          value={vals.h}
+          onChange={e => setVals(v => ({ ...v, h: e.target.value }))}
+          onBlur={e  => tryCommit('h', e.target.value, parseFloat,
+                         n => !isNaN(n) && n > 0,
+                         (sh, n) => ({ ...sh, h: n }),
+                         () => Math.abs(s.h).toFixed(2))}
+          onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
+                            if (e.key === 'Escape') { setVals(v => ({...v, h: Math.abs(s.h).toFixed(2)})); e.target.blur(); } }}
+          style={iStyle}
+        />{unit('px')}
+      </div>,
+      <div key="rot" style={rStyle}>
+        <span style={lStyle}>Rot°</span>
+        <span style={{ fontSize: 10 }}>{(s._rot||0).toFixed(1)}°</span>
+      </div>,
+    ];
+
+  } else if (s.type === 'curve' && cp) {
+    title = 'Curve Elements';
+    rows = [
+      <div key="R" style={rStyle}>
+        <span style={lStyle}>R</span>
+        <input
+          value={vals.crvR}
+          onChange={e => setVals(v => ({ ...v, crvR: e.target.value }))}
+          onBlur={e  => tryCommit('crvR', e.target.value, parseFloat,
+                         n => !isNaN(n) && n > 0,
+                         (sh, n) => applyArcRadius(sh, n),
+                         () => cp.R.toFixed(2))}
+          onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
+                            if (e.key === 'Escape') { setVals(v => ({...v, crvR: cp.R.toFixed(2)})); e.target.blur(); } }}
+          style={iStyle}
+        />{unit('px')}
+      </div>,
+      ...[
+        ['Δ', toDMS(cp.delta)], ['T', cp.T.toFixed(1)+' px'],
+        ['L', cp.L.toFixed(1)+' px'], ['M', cp.M.toFixed(1)+' px'],
+        ['E', cp.E.toFixed(1)+' px'], ['Chord', cp.chord.toFixed(1)+' px'],
+      ].map(([lbl, val]) => (
+        <div key={lbl} style={rStyle}>
+          <span style={lStyle}>{lbl}</span>
+          <span style={{ fontSize: 10 }}>{val}</span>
+        </div>
+      )),
+    ];
+
+  } else {
+    return null;
+  }
+
+  // ── NTS label field (all committed shapes) ──────────────────────────────
+  rows = rows.concat([
+    <div key="_sep" style={{ borderTop: '1px solid rgba(255,255,255,0.09)', margin: '4px 0 2px' }} />,
+    <div key="_nts" style={rStyle}>
+      <span style={{ ...lStyle, color: vals.nts ? '#FCD34D' : '#64748B' }}>Label</span>
+      <input
+        value={vals.nts}
+        placeholder="NTS override…"
+        onChange={e => setVals(v => ({ ...v, nts: e.target.value }))}
+        onBlur={e  => { const v = e.target.value.trim();
+                        onUpdate(sh => ({ ...sh, ntsLabel: v || undefined })); }}
+        onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+        style={{
+          ...iStyle, width: 90,
+          background: vals.nts ? 'rgba(251,191,36,0.10)' : iStyle.background,
+          border:     `1px solid ${vals.nts ? 'rgba(251,191,36,0.45)' : 'rgba(255,255,255,0.2)'}`,
+          color:      vals.nts ? '#FCD34D' : iStyle.color,
+          fontStyle:  vals.nts ? 'italic' : 'normal',
+        }}
+      />
+    </div>,
+  ]);
+
+  return (
+    <div style={{
+      position: 'absolute', bottom: 10, left: 10, pointerEvents: 'all',
+      background: 'rgba(10,15,35,0.90)', border: '1px solid rgba(59,130,246,0.35)',
+      borderRadius: 6, padding: '7px 11px',
+      fontFamily: 'Courier New, monospace', fontSize: 10.5,
+      color: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(5px)', zIndex: 15,
+      lineHeight: 1.7, minWidth: 180, maxWidth: 230,
+    }}>
+      <div style={{ color: '#60A5FA', fontSize: 9.5, letterSpacing: '0.1em',
+        marginBottom: 4, textTransform: 'uppercase' }}>{title}</div>
+      {rows}
+    </div>
+  );
+}
+
 function SketchPage({ page, projectId, onReload }) {
   const [shapes,      setShapes]      = useState(page.shapes || []);
   const [notes,       setNotes]       = useState(page.notes  || '');
@@ -448,6 +678,16 @@ function SketchPage({ page, projectId, onReload }) {
     persist(next, undefined);
   }
 
+  // Functional update for the ShapeValueCard — always operates on the latest
+  // shapes state so rapid field edits never race against each other.
+  function handleCardUpdate(transformFn) {
+    setShapes(prev => {
+      const next = prev.map(sh => sh.id === selectedId ? transformFn(sh) : sh);
+      persist(next, undefined);
+      return next;
+    });
+  }
+
   function handleNotesChange(val) {
     setNotes(val);
     persist(undefined, val);
@@ -677,6 +917,7 @@ function SketchPage({ page, projectId, onReload }) {
           stroke: STROKE, strokeWidth: STROKE_W,
           layerId: drawState.layerId || activeLayerId }]);
         setSelectedId(_crvId);
+        setTool('select');
         setDrawState(null);
         setSnapPoint(null);
       }
@@ -697,6 +938,7 @@ function SketchPage({ page, projectId, onReload }) {
             stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
             layerId: drawState.layerId || activeLayerId }]);
           setSelectedId(_cirId);
+          setTool('select');
         }
         setDrawState(null);
         setSnapPoint(null);
@@ -899,6 +1141,7 @@ function SketchPage({ page, projectId, onReload }) {
           stroke: STROKE, strokeWidth: STROKE_W,
           layerId: drawState.layerId || activeLayerId }]);
         setSelectedId(_lineId);
+        setTool('select');
       }
       setDrawState(null);
     }
@@ -912,6 +1155,7 @@ function SketchPage({ page, projectId, onReload }) {
           stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
           layerId: drawState.layerId || activeLayerId }]);
         setSelectedId(_rctId);
+        setTool('select');
       }
       setDrawState(null);
     }
@@ -1746,178 +1990,17 @@ function SketchPage({ page, projectId, onReload }) {
           </svg>
 
           {/* ── Shape Value Card ─────────────────────────────────────────────── */}
+          {/* Curve draw-phase live preview (read-only badge) */}
           {showValueCard && (() => {
-            const s          = selectedShape;
-            const isDrawing  = !s && drawState && drawState.type === 'curve' && drawState.phase === 2;
-            if (!s && !isDrawing) return null;
-            if (s && s.type === 'text') return null;  // text shapes: no geometry card
-
-            // Curve props (computed, not stored)
-            let cp = null;
-            if (isDrawing) {
-              cp = computeCurveProps(drawState.x1, drawState.y1,
-                                     drawState.x2, drawState.y2, drawState.ax, drawState.ay);
-            } else if (s && s.type === 'curve') {
-              const { ax, ay } = getCurveArcMid(s);
-              cp = computeCurveProps(s.x1, s.y1, s.x2, s.y2, ax, ay);
-            }
-            if (isDrawing && !cp) return null;
-
-            // Apply a geometry change to the selected shape and persist.
-            // Takes a transform function (sh => newSh) so it always operates on
-            // the LATEST state — avoids stale-closure issues when multiple fields
-            // are edited in quick succession (tab / click between inputs).
-            function applyUpdate(transformFn) {
-              setShapes(prev => {
-                const next = prev.map(sh => sh.id === selectedId ? transformFn(sh) : sh);
-                persist(next, undefined);
-                return next;
-              });
-            }
-
-            // Shared styles
-            const iStyle = {
-              width: 82, background: 'rgba(255,255,255,0.08)',
-              border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3,
-              color: 'rgba(255,255,255,0.9)', fontFamily: 'Courier New, monospace',
-              fontSize: 10, padding: '2px 5px', outline: 'none',
-            };
+            if (!drawState || drawState.type !== 'curve' || drawState.phase !== 2) return null;
+            const cp = computeCurveProps(drawState.x1, drawState.y1,
+                                         drawState.x2, drawState.y2, drawState.ax, drawState.ay);
+            if (!cp) return null;
             const lStyle = { color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 };
             const rStyle = { display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.6 };
-            const unit   = v => <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)' }}>{v}</span>;
-
-            let title = 'Shape';
-            let rows  = [];
-
-            if (isDrawing && cp) {
-              // ── Curve draw preview (read-only) ──────────────────────────────
-              title = 'Curve Elements';
-              rows = [
-                ['R', cp.R.toFixed(1)+' px'], ['Δ', toDMS(cp.delta)],
-                ['T', cp.T.toFixed(1)+' px'], ['L', cp.L.toFixed(1)+' px'],
-                ['M', cp.M.toFixed(1)+' px'], ['E', cp.E.toFixed(1)+' px'],
-                ['Chord', cp.chord.toFixed(1)+' px'],
-              ].map(([lbl, val]) => (
-                <div key={lbl} style={rStyle}>
-                  <span style={lStyle}>{lbl}</span>
-                  <span style={{ fontSize: 10 }}>{val}</span>
-                </div>
-              ));
-
-            } else if (s.type === 'line') {
-              // ── Line ─────────────────────────────────────────────────────────
-              title = 'Line';
-              const len = Math.hypot(s.x2-s.x1, s.y2-s.y1);
-              const brg = ((Math.atan2(s.x2-s.x1, -(s.y2-s.y1)) * 180/Math.PI) + 360) % 360;
-              rows = [
-                <div key="len" style={rStyle}>
-                  <span style={lStyle}>Length</span>
-                  <input key={s.id+'_len'} defaultValue={len.toFixed(2)} style={iStyle}
-                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(sh => applyLineLength(sh,n)); }}
-                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=len.toFixed(2);e.target.blur();} }}
-                  />{unit('px')}
-                </div>,
-                <div key="brg" style={rStyle}>
-                  <span style={lStyle}>Bearing</span>
-                  <input key={s.id+'_brg'} defaultValue={brg.toFixed(3)} style={iStyle}
-                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)) applyUpdate(sh => applyLineBearing(sh,n)); }}
-                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=brg.toFixed(3);e.target.blur();} }}
-                  />{unit('°')}
-                </div>,
-              ];
-
-            } else if (s.type === 'circle') {
-              // ── Circle ───────────────────────────────────────────────────────
-              title = 'Circle';
-              rows = [
-                <div key="r" style={rStyle}>
-                  <span style={lStyle}>Radius</span>
-                  <input key={s.id+'_r'} defaultValue={s.r.toFixed(2)} style={iStyle}
-                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(sh => ({...sh,r:n})); }}
-                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=s.r.toFixed(2);e.target.blur();} }}
-                  />{unit('px')}
-                </div>,
-              ];
-
-            } else if (s.type === 'rect') {
-              // ── Rectangle ────────────────────────────────────────────────────
-              title = 'Rectangle';
-              const w = Math.abs(s.w), h = Math.abs(s.h);
-              rows = [
-                <div key="w" style={rStyle}>
-                  <span style={lStyle}>Width</span>
-                  <input key={s.id+'_w'} defaultValue={w.toFixed(2)} style={iStyle}
-                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(sh => ({...sh,w:n})); }}
-                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=w.toFixed(2);e.target.blur();} }}
-                  />{unit('px')}
-                </div>,
-                <div key="h" style={rStyle}>
-                  <span style={lStyle}>Height</span>
-                  <input key={s.id+'_h'} defaultValue={h.toFixed(2)} style={iStyle}
-                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(sh => ({...sh,h:n})); }}
-                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=h.toFixed(2);e.target.blur();} }}
-                  />{unit('px')}
-                </div>,
-                <div key="rot" style={rStyle}>
-                  <span style={lStyle}>Rot°</span>
-                  <span style={{ fontSize: 10 }}>{(s._rot||0).toFixed(1)}°</span>
-                </div>,
-              ];
-
-            } else if (s.type === 'curve' && cp) {
-              // ── Curve (committed) ─────────────────────────────────────────────
-              title = 'Curve Elements';
-              rows = [
-                <div key="R" style={rStyle}>
-                  <span style={lStyle}>R</span>
-                  <input key={s.id+'_R'} defaultValue={cp.R.toFixed(2)} style={iStyle}
-                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(sh => applyArcRadius(sh,n)); }}
-                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=cp.R.toFixed(2);e.target.blur();} }}
-                  />{unit('px')}
-                </div>,
-                ...[
-                  ['Δ', toDMS(cp.delta)], ['T', cp.T.toFixed(1)+' px'],
-                  ['L', cp.L.toFixed(1)+' px'], ['M', cp.M.toFixed(1)+' px'],
-                  ['E', cp.E.toFixed(1)+' px'], ['Chord', cp.chord.toFixed(1)+' px'],
-                ].map(([lbl, val]) => (
-                  <div key={lbl} style={rStyle}>
-                    <span style={lStyle}>{lbl}</span>
-                    <span style={{ fontSize: 10 }}>{val}</span>
-                  </div>
-                )),
-              ];
-
-            } else {
-              return null;
-            }
-
-            // ── NTS label field (all committed shapes) ──────────────────────
-            if (!isDrawing) {
-              rows = rows.concat([
-                <div key="_sep" style={{ borderTop: '1px solid rgba(255,255,255,0.09)', margin: '4px 0 2px' }} />,
-                <div key="_nts" style={rStyle}>
-                  <span style={{ ...lStyle, color: s.ntsLabel ? '#FCD34D' : '#64748B' }}>Label</span>
-                  <input
-                    key={s.id + '_nts'}
-                    defaultValue={s.ntsLabel || ''}
-                    placeholder="NTS override…"
-                    onBlur={e  => { const v=e.target.value.trim(); applyUpdate(sh => ({...sh,ntsLabel:v||undefined})); }}
-                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); }}
-                    style={{
-                      ...iStyle, width: 90,
-                      background:  s.ntsLabel ? 'rgba(251,191,36,0.10)' : iStyle.background,
-                      border:     `1px solid ${s.ntsLabel ? 'rgba(251,191,36,0.45)' : 'rgba(255,255,255,0.2)'}`,
-                      color:       s.ntsLabel ? '#FCD34D' : iStyle.color,
-                      fontStyle:   s.ntsLabel ? 'italic' : 'normal',
-                    }}
-                  />
-                </div>,
-              ]);
-            }
-
             return (
               <div style={{
-                position: 'absolute', bottom: 10, left: 10, pointerEvents: 'all',
+                position: 'absolute', bottom: 10, left: 10, pointerEvents: 'none',
                 background: 'rgba(10,15,35,0.90)', border: '1px solid rgba(59,130,246,0.35)',
                 borderRadius: 6, padding: '7px 11px',
                 fontFamily: 'Courier New, monospace', fontSize: 10.5,
@@ -1925,11 +2008,29 @@ function SketchPage({ page, projectId, onReload }) {
                 lineHeight: 1.7, minWidth: 180, maxWidth: 230,
               }}>
                 <div style={{ color: '#60A5FA', fontSize: 9.5, letterSpacing: '0.1em',
-                  marginBottom: 4, textTransform: 'uppercase' }}>{title}</div>
-                {rows}
+                  marginBottom: 4, textTransform: 'uppercase' }}>Curve Elements</div>
+                {[
+                  ['R', cp.R.toFixed(1)+' px'], ['Δ', toDMS(cp.delta)],
+                  ['T', cp.T.toFixed(1)+' px'], ['L', cp.L.toFixed(1)+' px'],
+                  ['M', cp.M.toFixed(1)+' px'], ['E', cp.E.toFixed(1)+' px'],
+                  ['Chord', cp.chord.toFixed(1)+' px'],
+                ].map(([lbl, val]) => (
+                  <div key={lbl} style={rStyle}>
+                    <span style={lStyle}>{lbl}</span>
+                    <span style={{ fontSize: 10 }}>{val}</span>
+                  </div>
+                ))}
               </div>
             );
           })()}
+          {/* Committed-shape card — proper React component with controlled inputs */}
+          {showValueCard && selectedShape && selectedShape.type !== 'text' && (
+            <ShapeValueCard
+              key={selectedShape.id}
+              shape={selectedShape}
+              onUpdate={handleCardUpdate}
+            />
+          )}
 
           {/* Inline text editor — absolutely positioned in SVG container.
               textEdit stores world coordinates; convert to screen pixels for CSS. */}
