@@ -871,13 +871,16 @@ function SketchPage({ page, projectId, onReload }) {
       const hit = hitTest(pt, shapes, hitThresh);
       setSelectedId(hit ? hit.id : null);
       setDragNode(null);
-      // Clicking on empty space while in post-create handle mode:
-      // restore the drawing tool the user was using before the shape was created.
       if (!hit && prevTool !== null) {
-        setTool(prevTool);
+        // Clicking empty space exits post-create handle mode.
+        // tool was NEVER switched away from the drawing tool, so just clear
+        // prevTool and fall through — this same pointer event will start the
+        // next draw immediately (no extra click needed).
         setPrevTool(null);
+        // ← no return: fall through to the drawing tool handler below
+      } else {
+        return;
       }
-      return;
     }
 
     if (tool === 'eraser') {
