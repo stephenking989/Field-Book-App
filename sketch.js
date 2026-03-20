@@ -448,6 +448,7 @@ function SketchPage({ page, projectId, onReload }) {
   const [shapes,      setShapes]      = useState(page.shapes || []);
   const [notes,       setNotes]       = useState(page.notes  || '');
   const [tool,        setTool]        = useState('select');
+  const [prevTool,    setPrevTool]    = useState(null);  // saved drawing tool after shape commit
   const [ribbonOpen,  setRibbonOpen]  = useState(true);
   const [selectedId,  setSelectedId]  = useState(null);
   const [drawState,   setDrawState]   = useState(null);  // in-progress shape
@@ -815,7 +816,10 @@ function SketchPage({ page, projectId, onReload }) {
     // they remain constant in screen pixels regardless of zoom level.
     const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
 
-    if (tool === 'select') {
+    // ── Select mode: active when tool is 'select' OR when prevTool is set
+    // (prevTool is set immediately after creating a shape so handles are
+    //  interactive before the tool state has a chance to switch).
+    if (tool === 'select' || prevTool !== null) {
       const isTouch    = e.pointerType === 'touch';
       const nodeThresh = (isTouch ? 28 : NODE_R + 4) * ps;
       const hitThresh  = (isTouch ? 24 : 8) * ps;
@@ -863,10 +867,16 @@ function SketchPage({ page, projectId, onReload }) {
         }
       }
 
-      // ── New selection ────────────────────────────────────────────────
+      // ── New selection / deselect ─────────────────────────────────────
       const hit = hitTest(pt, shapes, hitThresh);
       setSelectedId(hit ? hit.id : null);
       setDragNode(null);
+      // Clicking on empty space while in post-create handle mode:
+      // restore the drawing tool the user was using before the shape was created.
+      if (!hit && prevTool !== null) {
+        setTool(prevTool);
+        setPrevTool(null);
+      }
       return;
     }
 
@@ -917,7 +927,7 @@ function SketchPage({ page, projectId, onReload }) {
           stroke: STROKE, strokeWidth: STROKE_W,
           layerId: drawState.layerId || activeLayerId }]);
         setSelectedId(_crvId);
-        setTool('select');
+        setPrevTool(tool);
         setDrawState(null);
         setSnapPoint(null);
       }
@@ -938,7 +948,7 @@ function SketchPage({ page, projectId, onReload }) {
             stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
             layerId: drawState.layerId || activeLayerId }]);
           setSelectedId(_cirId);
-          setTool('select');
+          setPrevTool(tool);
         }
         setDrawState(null);
         setSnapPoint(null);
@@ -1141,7 +1151,7 @@ function SketchPage({ page, projectId, onReload }) {
           stroke: STROKE, strokeWidth: STROKE_W,
           layerId: drawState.layerId || activeLayerId }]);
         setSelectedId(_lineId);
-        setTool('select');
+        setPrevTool(tool);
       }
       setDrawState(null);
     }
@@ -1155,7 +1165,7 @@ function SketchPage({ page, projectId, onReload }) {
           stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
           layerId: drawState.layerId || activeLayerId }]);
         setSelectedId(_rctId);
-        setTool('select');
+        setPrevTool(tool);
       }
       setDrawState(null);
     }
@@ -1865,7 +1875,7 @@ function SketchPage({ page, projectId, onReload }) {
           {ribbonOpen && TOOLS.map(t => (
             <button
               key={t.id}
-              onClick={() => { setTool(t.id); setSelectedId(null); setDrawState(null); }}
+              onClick={() => { setTool(t.id); setSelectedId(null); setDrawState(null); setPrevTool(null); }}
               title={t.label}
               style={{
                 width: 52, height: 46, flexShrink: 0,
@@ -1967,8 +1977,10 @@ function SketchPage({ page, projectId, onReload }) {
               return lbl ? <g key={`dim-${s.id}`}>{lbl}</g> : null;
             })}
 
-            {/* Node handles for selected shape */}
-            {selectedShape && tool === 'select' && renderNodes(selectedShape)}
+            {/* Node handles for selected shape.
+                Shows in select mode OR when prevTool is set (shape just created —
+                tool hasn't switched, but we need handles immediately). */}
+            {selectedShape && (tool === 'select' || prevTool !== null) && renderNodes(selectedShape)}
 
             {/* Preview shape while drawing */}
             {renderPreview()}
@@ -2190,7 +2202,7 @@ function SketchPage({ page, projectId, onReload }) {
                       {!collapsedLayers.has(layer.id) && [...layerShapes].reverse().map((s, ri) => (
                         <div
                           key={s.id}
-                          onClick={() => { setTool('select'); setSelectedId(s.id); }}
+                          onClick={() => { setTool('select'); setSelectedId(s.id); setPrevTool(null); }}
                           style={{
                             display: 'flex', alignItems: 'center', gap: 4,
                             padding: '2px 6px 2px 22px',
