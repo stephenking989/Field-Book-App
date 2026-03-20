@@ -176,6 +176,44 @@ function toDMS(deg) {
   return `${sign}${d}°${String(m).padStart(2,'0')}'${String(s).padStart(2,'0')}"`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SHAPE GEOMETRY MUTATIONS  —  used by the Shape Value Card editable fields
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Resize a line to newLen, scaling symmetrically from its midpoint.
+function applyLineLength(s, newLen) {
+  const cx = (s.x1+s.x2)/2, cy = (s.y1+s.y2)/2;
+  const len = Math.hypot(s.x2-s.x1, s.y2-s.y1) || 1;
+  const ux = (s.x2-s.x1)/len, uy = (s.y2-s.y1)/len;
+  const half = Math.max(0.5, newLen) / 2;
+  return { ...s, x1: cx-ux*half, y1: cy-uy*half, x2: cx+ux*half, y2: cy+uy*half };
+}
+
+// Rotate a line to bearingDeg (clockwise from screen-North), preserving midpoint & length.
+// In SVG coords: North = y decreasing; dx = sin(brg), dy = -cos(brg).
+function applyLineBearing(s, bearingDeg) {
+  const cx = (s.x1+s.x2)/2, cy = (s.y1+s.y2)/2;
+  const len = Math.hypot(s.x2-s.x1, s.y2-s.y1);
+  const rad = bearingDeg * Math.PI / 180;
+  const dx = Math.sin(rad), dy = -Math.cos(rad);
+  const half = len / 2;
+  return { ...s, x1: cx-dx*half, y1: cy-dy*half, x2: cx+dx*half, y2: cy+dy*half };
+}
+
+// Change arc radius while keeping both endpoints fixed.
+// Sagitta: h = R - sqrt(R² - (chord/2)²); new arc midpoint offset from chord midpoint.
+function applyArcRadius(s, newR) {
+  const { x1, y1, x2, y2 } = s;
+  const chord = Math.hypot(x2-x1, y2-y1);
+  const r = Math.max(newR, chord/2 + 0.1);        // R must be >= chord/2
+  const { ax, ay } = getCurveArcMid(s);
+  const mx = (x1+x2)/2, my = (y1+y2)/2;
+  const side = Math.sign((x2-x1)*(ay-y1) - (y2-y1)*(ax-x1)) || 1;  // which side of chord
+  const h = r - Math.sqrt(r*r - (chord/2)*(chord/2));
+  const dx = -(y2-y1)/chord, dy = (x2-x1)/chord;  // perpendicular unit vector
+  return { ...s, ax: mx + side*dx*h, ay: my + side*dy*h };
+}
+
 function SketchPage({ page, projectId, onReload }) {
   const [shapes,      setShapes]      = useState(page.shapes || []);
   const [notes,       setNotes]       = useState(page.notes  || '');
@@ -194,7 +232,8 @@ function SketchPage({ page, projectId, onReload }) {
   // ── Dimension labels ───────────────────────────────────────────────────────
   // When true, each committed shape shows an inline measurement label (length,
   // radius, arc length, width×height).  Also shown live while drawing.
-  const [showDims, setShowDims] = useState(true);
+  const [showDims,      setShowDims]      = useState(true);
+  const [showValueCard, setShowValueCard] = useState(true);
 
   // ── Layers ────────────────────────────────────────────────────────────────
   const _initLayers = (page.layers && page.layers.length)
@@ -630,12 +669,14 @@ function SketchPage({ page, projectId, onReload }) {
       } else if (drawState.phase === 2) {
         // Click 3: commit with current arc-midpoint (mouse position)
         const { ax: fax, ay: fay } = drawState;
-        commitShapes([...shapes, { id: newId(), type: 'curve',
+        const _crvId = newId();
+        commitShapes([...shapes, { id: _crvId, type: 'curve',
           x1: drawState.x1, y1: drawState.y1,
           x2: drawState.x2, y2: drawState.y2,
           ax: fax, ay: fay,
           stroke: STROKE, strokeWidth: STROKE_W,
           layerId: drawState.layerId || activeLayerId }]);
+        setSelectedId(_crvId);
         setDrawState(null);
         setSnapPoint(null);
       }
@@ -650,10 +691,12 @@ function SketchPage({ page, projectId, onReload }) {
       } else if (drawState.phase === 1) {
         // Click 2: commit at current radius
         if (drawState.r > 4) {
-          commitShapes([...shapes, { id: newId(), type: 'circle',
+          const _cirId = newId();
+          commitShapes([...shapes, { id: _cirId, type: 'circle',
             cx: drawState.cx, cy: drawState.cy, r: drawState.r,
             stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
             layerId: drawState.layerId || activeLayerId }]);
+          setSelectedId(_cirId);
         }
         setDrawState(null);
         setSnapPoint(null);
@@ -850,10 +893,12 @@ function SketchPage({ page, projectId, onReload }) {
     if (drawState.type === 'line') {
       const dx = drawState.x2 - drawState.x1, dy = drawState.y2 - drawState.y1;
       if (Math.hypot(dx, dy) > 4) {
-        commitShapes([...shapes, { id: newId(), type: 'line',
+        const _lineId = newId();
+        commitShapes([...shapes, { id: _lineId, type: 'line',
           x1: drawState.x1, y1: drawState.y1, x2: drawState.x2, y2: drawState.y2,
           stroke: STROKE, strokeWidth: STROKE_W,
           layerId: drawState.layerId || activeLayerId }]);
+        setSelectedId(_lineId);
       }
       setDrawState(null);
     }
@@ -861,10 +906,12 @@ function SketchPage({ page, projectId, onReload }) {
     // Rect commits on mouseup (click-drag)
     if (drawState.type === 'rect') {
       if (drawState.w > 4 && drawState.h > 4) {
-        commitShapes([...shapes, { id: newId(), type: 'rect',
+        const _rctId = newId();
+        commitShapes([...shapes, { id: _rctId, type: 'rect',
           x: drawState.x, y: drawState.y, w: drawState.w, h: drawState.h,
           stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
           layerId: drawState.layerId || activeLayerId }]);
+        setSelectedId(_rctId);
       }
       setDrawState(null);
     }
@@ -1156,6 +1203,20 @@ function SketchPage({ page, projectId, onReload }) {
   function renderDimLabel(s) {
     const ps  = viewBox.w / (svgSizeRef.current.w || viewBox.w);
     const OFF = 13 * ps;   // offset from shape edge → constant screen px at any zoom
+
+    // NTS override — show custom label at shape centre instead of computed dims
+    if (s.ntsLabel) {
+      let nx = 0, ny = 0;
+      switch (s.type) {
+        case 'line':   nx = (s.x1+s.x2)/2; ny = (s.y1+s.y2)/2; break;
+        case 'circle': nx = s.cx;           ny = s.cy;           break;
+        case 'rect':   nx = s.x + s.w/2;   ny = s.y + s.h/2;   break;
+        case 'curve':  { const { ax, ay } = getCurveArcMid(s); nx = ax; ny = ay; break; }
+        default: return null;
+      }
+      return dimTextEl(nx, ny, 0, s.ntsLabel + ' *', ps);
+    }
+
     const rot = s._rot || 0;
     const piv = getShapePivot(s);
 
@@ -1451,6 +1512,24 @@ function SketchPage({ page, projectId, onReload }) {
           <span style={{ letterSpacing: '0.03em' }}>Dims</span>
         </button>
 
+        {/* Card toggle */}
+        <button
+          onClick={() => setShowValueCard(v => !v)}
+          title={showValueCard ? 'Shape value card ON — click to hide' : 'Shape value card OFF — click to show'}
+          style={{
+            height: 26, padding: '0 10px', borderRadius: 4,
+            display: 'flex', alignItems: 'center', gap: 5,
+            background: showValueCard ? 'rgba(167,139,250,0.18)' : 'rgba(255,255,255,0.06)',
+            border: `1px solid ${showValueCard ? 'rgba(167,139,250,0.55)' : 'rgba(255,255,255,0.14)'}`,
+            color: showValueCard ? '#C4B5FD' : 'rgba(255,255,255,0.45)',
+            cursor: 'pointer', fontSize: 11,
+            fontFamily: 'Courier New, monospace', outline: 'none', transition: 'all 0.15s',
+          }}
+        >
+          <span style={{ fontSize: 12, lineHeight: 1 }}>▤</span>
+          <span style={{ letterSpacing: '0.03em' }}>Card</span>
+        </button>
+
         {/* Separator */}
         <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
 
@@ -1666,44 +1745,181 @@ function SketchPage({ page, projectId, onReload }) {
             })()}
           </svg>
 
-          {/* ── Curve properties badge ──────────────────────────────────────── */}
-          {(() => {
-            // Show for selected committed curve, or while placing arc-midpoint
+          {/* ── Shape Value Card ─────────────────────────────────────────────── */}
+          {showValueCard && (() => {
+            const s          = selectedShape;
+            const isDrawing  = !s && drawState && drawState.type === 'curve' && drawState.phase === 2;
+            if (!s && !isDrawing) return null;
+            if (s && s.type === 'text') return null;  // text shapes: no geometry card
+
+            // Curve props (computed, not stored)
             let cp = null;
-            if (selectedShape && selectedShape.type === 'curve' && tool === 'select') {
-              const { ax: bax, ay: bay } = getCurveArcMid(selectedShape);
-              cp = computeCurveProps(selectedShape.x1, selectedShape.y1,
-                                     selectedShape.x2, selectedShape.y2, bax, bay);
-            } else if (drawState && drawState.type === 'curve' && drawState.phase === 2) {
+            if (isDrawing) {
               cp = computeCurveProps(drawState.x1, drawState.y1,
                                      drawState.x2, drawState.y2, drawState.ax, drawState.ay);
+            } else if (s && s.type === 'curve') {
+              const { ax, ay } = getCurveArcMid(s);
+              cp = computeCurveProps(s.x1, s.y1, s.x2, s.y2, ax, ay);
             }
-            if (!cp) return null;
+            if (isDrawing && !cp) return null;
+
+            // Apply a geometry change to the selected shape and persist
+            function applyUpdate(updated) {
+              commitShapes(shapes.map(sh => sh.id === updated.id ? updated : sh));
+            }
+
+            // Shared styles
+            const iStyle = {
+              width: 82, background: 'rgba(255,255,255,0.08)',
+              border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3,
+              color: 'rgba(255,255,255,0.9)', fontFamily: 'Courier New, monospace',
+              fontSize: 10, padding: '2px 5px', outline: 'none',
+            };
+            const lStyle = { color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 };
+            const rStyle = { display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.6 };
+            const unit   = v => <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)' }}>{v}</span>;
+
+            let title = 'Shape';
+            let rows  = [];
+
+            if (isDrawing && cp) {
+              // ── Curve draw preview (read-only) ──────────────────────────────
+              title = 'Curve Elements';
+              rows = [
+                ['R', cp.R.toFixed(1)+' px'], ['Δ', toDMS(cp.delta)],
+                ['T', cp.T.toFixed(1)+' px'], ['L', cp.L.toFixed(1)+' px'],
+                ['M', cp.M.toFixed(1)+' px'], ['E', cp.E.toFixed(1)+' px'],
+                ['Chord', cp.chord.toFixed(1)+' px'],
+              ].map(([lbl, val]) => (
+                <div key={lbl} style={rStyle}>
+                  <span style={lStyle}>{lbl}</span>
+                  <span style={{ fontSize: 10 }}>{val}</span>
+                </div>
+              ));
+
+            } else if (s.type === 'line') {
+              // ── Line ─────────────────────────────────────────────────────────
+              title = 'Line';
+              const len = Math.hypot(s.x2-s.x1, s.y2-s.y1);
+              const brg = ((Math.atan2(s.x2-s.x1, -(s.y2-s.y1)) * 180/Math.PI) + 360) % 360;
+              rows = [
+                <div key="len" style={rStyle}>
+                  <span style={lStyle}>Length</span>
+                  <input key={s.id+'_len'} defaultValue={len.toFixed(2)} style={iStyle}
+                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(applyLineLength(s,n)); e.target.value=Math.hypot(s.x2-s.x1,s.y2-s.y1).toFixed(2); }}
+                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=len.toFixed(2);e.target.blur();} }}
+                  />{unit('px')}
+                </div>,
+                <div key="brg" style={rStyle}>
+                  <span style={lStyle}>Bearing</span>
+                  <input key={s.id+'_brg'} defaultValue={brg.toFixed(3)} style={iStyle}
+                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)) applyUpdate(applyLineBearing(s,n)); e.target.value=((Math.atan2(s.x2-s.x1,-(s.y2-s.y1))*180/Math.PI)+360)%360+''; }}
+                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=brg.toFixed(3);e.target.blur();} }}
+                  />{unit('°')}
+                </div>,
+              ];
+
+            } else if (s.type === 'circle') {
+              // ── Circle ───────────────────────────────────────────────────────
+              title = 'Circle';
+              rows = [
+                <div key="r" style={rStyle}>
+                  <span style={lStyle}>Radius</span>
+                  <input key={s.id+'_r'} defaultValue={s.r.toFixed(2)} style={iStyle}
+                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate({...s,r:n}); e.target.value=s.r.toFixed(2); }}
+                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=s.r.toFixed(2);e.target.blur();} }}
+                  />{unit('px')}
+                </div>,
+              ];
+
+            } else if (s.type === 'rect') {
+              // ── Rectangle ────────────────────────────────────────────────────
+              title = 'Rectangle';
+              const w = Math.abs(s.w), h = Math.abs(s.h);
+              rows = [
+                <div key="w" style={rStyle}>
+                  <span style={lStyle}>Width</span>
+                  <input key={s.id+'_w'} defaultValue={w.toFixed(2)} style={iStyle}
+                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate({...s,w:n}); e.target.value=Math.abs(s.w).toFixed(2); }}
+                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=w.toFixed(2);e.target.blur();} }}
+                  />{unit('px')}
+                </div>,
+                <div key="h" style={rStyle}>
+                  <span style={lStyle}>Height</span>
+                  <input key={s.id+'_h'} defaultValue={h.toFixed(2)} style={iStyle}
+                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate({...s,h:n}); e.target.value=Math.abs(s.h).toFixed(2); }}
+                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=h.toFixed(2);e.target.blur();} }}
+                  />{unit('px')}
+                </div>,
+                <div key="rot" style={rStyle}>
+                  <span style={lStyle}>Rot°</span>
+                  <span style={{ fontSize: 10 }}>{(s._rot||0).toFixed(1)}°</span>
+                </div>,
+              ];
+
+            } else if (s.type === 'curve' && cp) {
+              // ── Curve (committed) ─────────────────────────────────────────────
+              title = 'Curve Elements';
+              rows = [
+                <div key="R" style={rStyle}>
+                  <span style={lStyle}>R</span>
+                  <input key={s.id+'_R'} defaultValue={cp.R.toFixed(2)} style={iStyle}
+                    onBlur={e => { const n=parseFloat(e.target.value); if(!isNaN(n)&&n>0) applyUpdate(applyArcRadius(s,n)); }}
+                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){e.target.value=cp.R.toFixed(2);e.target.blur();} }}
+                  />{unit('px')}
+                </div>,
+                ...[
+                  ['Δ', toDMS(cp.delta)], ['T', cp.T.toFixed(1)+' px'],
+                  ['L', cp.L.toFixed(1)+' px'], ['M', cp.M.toFixed(1)+' px'],
+                  ['E', cp.E.toFixed(1)+' px'], ['Chord', cp.chord.toFixed(1)+' px'],
+                ].map(([lbl, val]) => (
+                  <div key={lbl} style={rStyle}>
+                    <span style={lStyle}>{lbl}</span>
+                    <span style={{ fontSize: 10 }}>{val}</span>
+                  </div>
+                )),
+              ];
+
+            } else {
+              return null;
+            }
+
+            // ── NTS label field (all committed shapes) ──────────────────────
+            if (!isDrawing) {
+              rows = rows.concat([
+                <div key="_sep" style={{ borderTop: '1px solid rgba(255,255,255,0.09)', margin: '4px 0 2px' }} />,
+                <div key="_nts" style={rStyle}>
+                  <span style={{ ...lStyle, color: s.ntsLabel ? '#FCD34D' : '#64748B' }}>Label</span>
+                  <input
+                    key={s.id + '_nts'}
+                    defaultValue={s.ntsLabel || ''}
+                    placeholder="NTS override…"
+                    onBlur={e  => applyUpdate({ ...s, ntsLabel: e.target.value.trim() || undefined })}
+                    onKeyDown={e => { if(e.key==='Enter') e.target.blur(); }}
+                    style={{
+                      ...iStyle, width: 90,
+                      background:  s.ntsLabel ? 'rgba(251,191,36,0.10)' : iStyle.background,
+                      border:     `1px solid ${s.ntsLabel ? 'rgba(251,191,36,0.45)' : 'rgba(255,255,255,0.2)'}`,
+                      color:       s.ntsLabel ? '#FCD34D' : iStyle.color,
+                      fontStyle:   s.ntsLabel ? 'italic' : 'normal',
+                    }}
+                  />
+                </div>,
+              ]);
+            }
+
             return (
               <div style={{
-                position: 'absolute', bottom: 10, left: 10, pointerEvents: 'none',
+                position: 'absolute', bottom: 10, left: 10, pointerEvents: 'all',
                 background: 'rgba(10,15,35,0.90)', border: '1px solid rgba(59,130,246,0.35)',
                 borderRadius: 6, padding: '7px 11px',
                 fontFamily: 'Courier New, monospace', fontSize: 10.5,
                 color: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(5px)', zIndex: 15,
-                lineHeight: 1.7, minWidth: 148,
+                lineHeight: 1.7, minWidth: 180, maxWidth: 230,
               }}>
                 <div style={{ color: '#60A5FA', fontSize: 9.5, letterSpacing: '0.1em',
-                  marginBottom: 3, textTransform: 'uppercase' }}>Curve Elements</div>
-                {[
-                  ['R',     cp.R.toFixed(1)    + ' px'],
-                  ['Δ',     toDMS(cp.delta)           ],
-                  ['T',     cp.T.toFixed(1)    + ' px'],
-                  ['L',     cp.L.toFixed(1)    + ' px'],
-                  ['M',     cp.M.toFixed(1)    + ' px'],
-                  ['E',     cp.E.toFixed(1)    + ' px'],
-                  ['Chord', cp.chord.toFixed(1)+ ' px'],
-                ].map(([lbl, val]) => (
-                  <div key={lbl} style={{ display: 'flex', gap: 6 }}>
-                    <span style={{ color: '#64748B', width: 42, flexShrink: 0 }}>{lbl}</span>
-                    <span>{val}</span>
-                  </div>
-                ))}
+                  marginBottom: 4, textTransform: 'uppercase' }}>{title}</div>
+                {rows}
               </div>
             );
           })()}
