@@ -266,18 +266,14 @@ function realToPx(val, scaleDenom, units) {
 }
 
 // Format a real-world value (already converted from px) for display.
-// Meters: 3 sig-figs with unit suffix. Feet: 2 decimals + apostrophe.
+// Metres: nearest millimetre (X.XXX m). Feet: nearest 0.01 ft (X.XX').
 function formatReal(val, units) {
   if (units === 'ft') {
-    if (val >= 1000) return Math.round(val).toLocaleString() + "'";
-    if (val >= 10)   return val.toFixed(1) + "'";
-    if (val >= 1)    return val.toFixed(2) + "'";
-    return val.toFixed(3) + "'";
+    // Nearest hundredth of a foot for all distances
+    return val.toFixed(2) + "'";
   }
-  // metres
-  if (val >= 1000) return (val / 1000).toFixed(3) + ' km';
-  if (val >= 100)  return val.toFixed(1) + ' m';
-  if (val >= 1)    return val.toFixed(2) + ' m';
+  // Metres — always 3 decimal places (nearest mm)
+  if (val >= 1000) return val.toFixed(3) + ' m';   // e.g. 1234.567 m
   return val.toFixed(3) + ' m';
 }
 
@@ -536,9 +532,23 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units }) {
     return null;
   }
 
-  // ── NTS label field (all committed shapes) ──────────────────────────────
+  // ── NTS label field + per-shape dims toggle (all committed shapes) ─────
   rows = rows.concat([
     <div key="_sep" style={{ borderTop: '1px solid rgba(255,255,255,0.09)', margin: '4px 0 2px' }} />,
+    <div key="_dimtoggle" style={rStyle}>
+      <span style={lStyle}>Dims</span>
+      <button
+        onClick={() => onUpdate(sh => ({ ...sh, _hideDims: sh._hideDims ? undefined : true }))}
+        style={{
+          height: 20, padding: '0 9px', borderRadius: 3, cursor: 'pointer',
+          fontFamily: 'Courier New, monospace', fontSize: 9, outline: 'none',
+          background: s._hideDims ? 'rgba(255,255,255,0.06)' : 'rgba(99,179,237,0.18)',
+          border: `1px solid ${s._hideDims ? 'rgba(255,255,255,0.18)' : 'rgba(99,179,237,0.55)'}`,
+          color:  s._hideDims ? 'rgba(255,255,255,0.35)' : '#90CDF4',
+          letterSpacing: '0.04em',
+        }}
+      >{s._hideDims ? 'hidden' : 'shown'}</button>
+    </div>,
     <div key="_nts" style={rStyle}>
       <span style={{ ...lStyle, color: vals.nts ? '#FCD34D' : '#64748B' }}>Label</span>
       <input
@@ -1776,6 +1786,10 @@ function SketchPage({ page, projectId, onReload }) {
   // skew the text.  Instead we manually rotate the anchor point and adjust the
   // text angle to match the (possibly rotated) geometry.
   function renderDimLabel(s) {
+    // Per-shape override: user can suppress this shape's dim label independently
+    // of the master Dims toggle.
+    if (s._hideDims) return null;
+
     const ps  = viewBox.w / (svgSizeRef.current.w || viewBox.w);
     const OFF = 13 * ps;   // offset from shape edge → constant screen px at any zoom
 
@@ -1812,21 +1826,31 @@ function SketchPage({ page, projectId, onReload }) {
         const len = Math.hypot(s.x2-s.x1, s.y2-s.y1);
         if (len < 5 * ps) return null;
         const mx = (s.x1+s.x2)/2, my = (s.y1+s.y2)/2;
-        // Perpendicular offset in the left-hand normal direction
+        // Left-hand perpendicular unit normal (points "up" when line goes L→R)
         const nx = -(s.y2-s.y1)/len, ny = (s.x2-s.x1)/len;
+        // Text angle along line direction; D() normalises to ±90° so text always reads up
         const ang = Math.atan2(s.y2-s.y1, s.x2-s.x1) * 180 / Math.PI;
-        return D(mx + nx*OFF, my + ny*OFF, ang, fmtPxAsReal(len, scaleDenom, units));
+        // Surveying azimuth from North, clockwise, 0–360°
+        const az  = ((Math.atan2(s.x2-s.x1, -(s.y2-s.y1)) * 180/Math.PI) + 360) % 360;
+        return <>
+          {/* Length — left-perp side (top for L→R, bottom for R→L) */}
+          {D(mx + nx*OFF, my + ny*OFF, ang, fmtPxAsReal(len, scaleDenom, units))}
+          {/* Bearing DMS — right-perp side (always opposite to length) */}
+          {D(mx - nx*OFF, my - ny*OFF, ang, toDMS(az))}
+        </>;
       }
       case 'curve': {
         const { px: rpx, py: rpy } = getCurvePI(s);
         const cp = computeArcFromPI(s.x1, s.y1, s.x2, s.y2, rpx, rpy);
         if (!cp || cp.L < 5 * ps) return null;
-        // Push labels outward from chord midpoint along the PI direction
+        // Arc midpoint = chord midpoint + M (middle ordinate) in the PI direction.
+        // Labels sit just outside the arc surface — close enough to read but
+        // not overlapping the curve.  OFF is ~13 screen px past the arc midpoint.
         const mx = (s.x1+s.x2)/2, my = (s.y1+s.y2)/2;
         const olen = Math.hypot(rpx-mx, rpy-my) || 1;
         const ux = (rpx-mx)/olen, uy = (rpy-my)/olen;
-        const lx1 = rpx + ux * OFF,            ly1 = rpy + uy * OFF;
-        const lx2 = rpx + ux * (OFF + 12*ps),  ly2 = rpy + uy * (OFF + 12*ps);
+        const lx1 = mx + (cp.M + OFF)          * ux, ly1 = my + (cp.M + OFF)          * uy;
+        const lx2 = mx + (cp.M + OFF + 12*ps)  * ux, ly2 = my + (cp.M + OFF + 12*ps)  * uy;
         const r0 = rot ? rotatePoint(lx1, ly1, piv.x, piv.y, rot) : { x: lx1, y: ly1 };
         const r1 = rot ? rotatePoint(lx2, ly2, piv.x, piv.y, rot) : { x: lx2, y: ly2 };
         return <>
@@ -1979,9 +2003,13 @@ function SketchPage({ page, projectId, onReload }) {
         const nx  = len > 0 ? -(drawState.y2-drawState.y1)/len : 0;
         const ny  = len > 0 ?  (drawState.x2-drawState.x1)/len : 1;
         const ang = Math.atan2(drawState.y2-drawState.y1, drawState.x2-drawState.x1) * 180/Math.PI;
+        const az  = len > 0 ? ((Math.atan2(drawState.x2-drawState.x1, -(drawState.y2-drawState.y1))*180/Math.PI)+360)%360 : 0;
         return <>
           <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />
-          {showDims && len >= 5*ps && dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtPxAsReal(len, scaleDenom, units), ps)}
+          {showDims && len >= 5*ps && <>
+            {dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtPxAsReal(len, scaleDenom, units), ps)}
+            {dimTextEl(mx - nx*OFF, my - ny*OFF, ang, toDMS(az), ps)}
+          </>}
         </>;
       }
       case 'curve':
@@ -1992,10 +2020,14 @@ function SketchPage({ page, projectId, onReload }) {
           const nx  = len > 0 ? -(drawState.y2-drawState.y1)/len : 0;
           const ny  = len > 0 ?  (drawState.x2-drawState.x1)/len : 1;
           const ang = Math.atan2(drawState.y2-drawState.y1, drawState.x2-drawState.x1) * 180/Math.PI;
+          const az  = len > 0 ? ((Math.atan2(drawState.x2-drawState.x1, -(drawState.y2-drawState.y1))*180/Math.PI)+360)%360 : 0;
           return <>
             <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />
             <circle cx={drawState.x1} cy={drawState.y1} r={4*ps} fill="#3B82F6" opacity={0.7} />
-            {showDims && len >= 5*ps && dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtPxAsReal(len, scaleDenom, units), ps)}
+            {showDims && len >= 5*ps && <>
+              {dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtPxAsReal(len, scaleDenom, units), ps)}
+              {dimTextEl(mx - nx*OFF, my - ny*OFF, ang, toDMS(az), ps)}
+            </>}
           </>;
         } else {
           // Phase 2: live circular arc from BC to EC shaped by PI cursor position.
@@ -2030,10 +2062,10 @@ function SketchPage({ page, projectId, onReload }) {
               fill="#22C55E" stroke="rgba(10,15,35,0.7)" strokeWidth={1.8*ps}
               paintOrder="stroke fill"
               style={{ pointerEvents: 'none', userSelect: 'none' }}>PI</text>
-            {/* Live arc-length + radius labels near PI */}
+            {/* Live arc-length + radius labels near arc midpoint (chord mid + M in PI dir) */}
             {showDims && cp && cp.L >= 5*ps && <>
-              {dimTextEl(ppx + ux*OFF,           ppy + uy*OFF,           0, `L ${fmtPxAsReal(cp.L, scaleDenom, units)}`, ps)}
-              {dimTextEl(ppx + ux*(OFF + 12*ps), ppy + uy*(OFF + 12*ps), 0, `R ${fmtPxAsReal(cp.R, scaleDenom, units)}`, ps)}
+              {dimTextEl(midX + (cp.M + OFF)         * ux, midY + (cp.M + OFF)         * uy, 0, `L ${fmtPxAsReal(cp.L, scaleDenom, units)}`, ps)}
+              {dimTextEl(midX + (cp.M + OFF + 12*ps) * ux, midY + (cp.M + OFF + 12*ps) * uy, 0, `R ${fmtPxAsReal(cp.R, scaleDenom, units)}`, ps)}
             </>}
           </>;
         }
