@@ -246,13 +246,85 @@ function applyArcRadius(s, newR) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SCALE & UNIT HELPERS  (Phase 3)
+// ─────────────────────────────────────────────────────────────────────────────
+// Anchor: 1000 canvas pixels = 1 metre at scale 1:1.
+// At scale 1:S → 1 canvas pixel = S/1000 metres.
+const PIXELS_PER_METER = 1000;
+
+const COMMON_SCALES = [1, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
+const MAX_SCALE     = COMMON_SCALES[COMMON_SCALES.length - 1];
+
+function pxToReal(px, scaleDenom, units) {
+  const m = px * scaleDenom / PIXELS_PER_METER;
+  return units === 'ft' ? m * 3.28084 : m;
+}
+
+function realToPx(val, scaleDenom, units) {
+  const m = units === 'ft' ? val / 3.28084 : val;
+  return m * PIXELS_PER_METER / scaleDenom;
+}
+
+// Format a real-world value (already converted from px) for display.
+// Meters: 3 sig-figs with unit suffix. Feet: 2 decimals + apostrophe.
+function formatReal(val, units) {
+  if (units === 'ft') {
+    if (val >= 1000) return Math.round(val).toLocaleString() + "'";
+    if (val >= 10)   return val.toFixed(1) + "'";
+    if (val >= 1)    return val.toFixed(2) + "'";
+    return val.toFixed(3) + "'";
+  }
+  // metres
+  if (val >= 1000) return (val / 1000).toFixed(3) + ' km';
+  if (val >= 100)  return val.toFixed(1) + ' m';
+  if (val >= 1)    return val.toFixed(2) + ' m';
+  return val.toFixed(3) + ' m';
+}
+
+// Convert px distance to real-world value then format. Drop-in replacement
+// for the old fmtDim() at all call-sites inside SketchPage's render path.
+function fmtPxAsReal(px, scaleDenom, units) {
+  return formatReal(pxToReal(px, scaleDenom, units), units);
+}
+
+// Choose a round-number distance that will produce a scale-bar ≈ 60–150 screen px wide.
+function niceScaleBarValue(scaleDenom, vbW, containerW, units) {
+  const targetScreenPx = 100;
+  const targetWorldPx  = targetScreenPx * (vbW / (containerW || vbW));
+  const targetReal     = pxToReal(targetWorldPx, scaleDenom, units);
+  const niceValues     = [
+    0.001, 0.002, 0.005,
+    0.01, 0.02, 0.05,
+    0.1, 0.2, 0.5,
+    1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000,
+  ];
+  return niceValues.filter(v => v <= targetReal).pop() || niceValues[0];
+}
+
+// Map a 0-100 slider value to a scale denominator using a log scale, snapping
+// to COMMON_SCALES when within 3% of one.
+function sliderToScale(t) {
+  const raw = Math.round(Math.pow(MAX_SCALE, t / 100));
+  const clamped = Math.max(1, raw);
+  for (const cs of COMMON_SCALES) {
+    if (Math.abs(clamped - cs) / cs < 0.03) return cs;
+  }
+  return clamped;
+}
+
+function scaleToSlider(s) {
+  if (s <= 1) return 0;
+  return Math.round(Math.log(s) / Math.log(MAX_SCALE) * 100);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SHAPE VALUE CARD  —  proper React component with controlled inputs
 // Extracted from the IIFE so it can hold useState/useEffect.
 // Props:
 //   shape    — the currently selected shape object (never null when rendered)
 //   onUpdate — fn(transformFn) called with a shape→shape transform to apply
 // ─────────────────────────────────────────────────────────────────────────────
-function ShapeValueCard({ shape: s, onUpdate }) {
+function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units }) {
   // ── Shared styles ───────────────────────────────────────────────────────
   const iStyle = {
     width: 82, background: 'rgba(255,255,255,0.08)',
@@ -262,11 +334,12 @@ function ShapeValueCard({ shape: s, onUpdate }) {
   };
   const lStyle = { color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 };
   const rStyle = { display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.6 };
+  const unitSuffix = units === 'ft' ? "'" : ' m';
   const unit   = v => <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)' }}>{v}</span>;
 
   // ── Compute initial values from the shape ───────────────────────────────
   function initVals(sh) {
-    const len = sh.type === 'line' ? Math.hypot(sh.x2-sh.x1, sh.y2-sh.y1) : 0;
+    const lenPx = sh.type === 'line' ? Math.hypot(sh.x2-sh.x1, sh.y2-sh.y1) : 0;
     const brg = sh.type === 'line'
       ? ((Math.atan2(sh.x2-sh.x1, -(sh.y2-sh.y1)) * 180/Math.PI) + 360) % 360 : 0;
     const cp = sh.type === 'curve'
@@ -274,26 +347,24 @@ function ShapeValueCard({ shape: s, onUpdate }) {
                  return computeArcFromPI(sh.x1,sh.y1,sh.x2,sh.y2,px,py); })()
       : null;
     return {
-      len:    len.toFixed(2),
+      len:    pxToReal(lenPx, scaleDenom, units).toFixed(3),
       brg:    brg.toFixed(3),
-      r:      sh.type === 'circle' ? sh.r.toFixed(2) : '0',
-      w:      sh.type === 'rect'   ? Math.abs(sh.w).toFixed(2) : '0',
-      h:      sh.type === 'rect'   ? Math.abs(sh.h).toFixed(2) : '0',
-      crvR:   cp ? cp.R.toFixed(2) : '0',
+      r:      sh.type === 'circle' ? pxToReal(sh.r, scaleDenom, units).toFixed(3) : '0',
+      w:      sh.type === 'rect'   ? pxToReal(Math.abs(sh.w), scaleDenom, units).toFixed(3) : '0',
+      h:      sh.type === 'rect'   ? pxToReal(Math.abs(sh.h), scaleDenom, units).toFixed(3) : '0',
+      crvR:   cp ? pxToReal(cp.R, scaleDenom, units).toFixed(3) : '0',
       nts:    sh.ntsLabel || '',
     };
   }
 
   const [vals, setVals] = useState(() => initVals(s));
 
-  // Re-initialise whenever a DIFFERENT shape is selected (shape ID changes).
-  // Also re-initialise when the shape object itself changes (after an update)
-  // so the field reflects the new committed value on next focus.
-  useEffect(() => { setVals(initVals(s)); }, [s.id, s.x1, s.y1, s.x2, s.y2, s.r, s.w, s.h, s.px, s.py, s.ntsLabel]);
+  // Re-initialise when shape changes, or when scale/units change so displayed
+  // values refresh immediately without needing to re-select the shape.
+  useEffect(() => { setVals(initVals(s)); },
+    [s.id, s.x1, s.y1, s.x2, s.y2, s.r, s.w, s.h, s.px, s.py, s.ntsLabel, scaleDenom, units]);
 
   // ── Commit helper ───────────────────────────────────────────────────────
-  // Parses the raw string value, validates with guard, applies transform.
-  // If invalid, snaps the field back to fallbackFn().
   function tryCommit(key, raw, parse, guard, transform, fallbackFn) {
     const n = parse(raw);
     if (guard(n)) {
@@ -315,6 +386,8 @@ function ShapeValueCard({ shape: s, onUpdate }) {
   let rows  = [];
 
   if (s.type === 'line') {
+    const lenPxFallback = () => pxToReal(Math.hypot(s.x2-s.x1, s.y2-s.y1), scaleDenom, units).toFixed(3);
+    const brgFallback   = () => (((Math.atan2(s.x2-s.x1,-(s.y2-s.y1))*180/Math.PI)+360)%360).toFixed(3);
     title = 'Line';
     rows = [
       <div key="len" style={rStyle}>
@@ -324,12 +397,12 @@ function ShapeValueCard({ shape: s, onUpdate }) {
           onChange={e => setVals(v => ({ ...v, len: e.target.value }))}
           onBlur={e  => tryCommit('len', e.target.value, parseFloat,
                          n => !isNaN(n) && n > 0,
-                         (sh, n) => applyLineLength(sh, n),
-                         () => Math.hypot(s.x2-s.x1, s.y2-s.y1).toFixed(2))}
+                         (sh, n) => applyLineLength(sh, realToPx(n, scaleDenom, units)),
+                         lenPxFallback)}
           onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
-                            if (e.key === 'Escape') { setVals(v => ({...v, len: Math.hypot(s.x2-s.x1,s.y2-s.y1).toFixed(2)})); e.target.blur(); } }}
+                            if (e.key === 'Escape') { setVals(v => ({...v, len: lenPxFallback()})); e.target.blur(); } }}
           style={iStyle}
-        />{unit('px')}
+        />{unit(unitSuffix)}
       </div>,
       <div key="brg" style={rStyle}>
         <span style={lStyle}>Bearing</span>
@@ -339,15 +412,16 @@ function ShapeValueCard({ shape: s, onUpdate }) {
           onBlur={e  => tryCommit('brg', e.target.value, parseFloat,
                          n => !isNaN(n),
                          (sh, n) => applyLineBearing(sh, n),
-                         () => (((Math.atan2(s.x2-s.x1,-(s.y2-s.y1))*180/Math.PI)+360)%360).toFixed(3))}
+                         brgFallback)}
           onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
-                            if (e.key === 'Escape') { setVals(v => ({...v, brg: (((Math.atan2(s.x2-s.x1,-(s.y2-s.y1))*180/Math.PI)+360)%360).toFixed(3)})); e.target.blur(); } }}
+                            if (e.key === 'Escape') { setVals(v => ({...v, brg: brgFallback()})); e.target.blur(); } }}
           style={iStyle}
         />{unit('°')}
       </div>,
     ];
 
   } else if (s.type === 'circle') {
+    const rFallback = () => pxToReal(s.r, scaleDenom, units).toFixed(3);
     title = 'Circle';
     rows = [
       <div key="r" style={rStyle}>
@@ -357,16 +431,18 @@ function ShapeValueCard({ shape: s, onUpdate }) {
           onChange={e => setVals(v => ({ ...v, r: e.target.value }))}
           onBlur={e  => tryCommit('r', e.target.value, parseFloat,
                          n => !isNaN(n) && n > 0,
-                         (sh, n) => ({ ...sh, r: n }),
-                         () => s.r.toFixed(2))}
+                         (sh, n) => ({ ...sh, r: realToPx(n, scaleDenom, units) }),
+                         rFallback)}
           onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
-                            if (e.key === 'Escape') { setVals(v => ({...v, r: s.r.toFixed(2)})); e.target.blur(); } }}
+                            if (e.key === 'Escape') { setVals(v => ({...v, r: rFallback()})); e.target.blur(); } }}
           style={iStyle}
-        />{unit('px')}
+        />{unit(unitSuffix)}
       </div>,
     ];
 
   } else if (s.type === 'rect') {
+    const wFallback = () => pxToReal(Math.abs(s.w), scaleDenom, units).toFixed(3);
+    const hFallback = () => pxToReal(Math.abs(s.h), scaleDenom, units).toFixed(3);
     title = 'Rectangle';
     rows = [
       <div key="w" style={rStyle}>
@@ -376,12 +452,12 @@ function ShapeValueCard({ shape: s, onUpdate }) {
           onChange={e => setVals(v => ({ ...v, w: e.target.value }))}
           onBlur={e  => tryCommit('w', e.target.value, parseFloat,
                          n => !isNaN(n) && n > 0,
-                         (sh, n) => ({ ...sh, w: n }),
-                         () => Math.abs(s.w).toFixed(2))}
+                         (sh, n) => ({ ...sh, w: realToPx(n, scaleDenom, units) }),
+                         wFallback)}
           onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
-                            if (e.key === 'Escape') { setVals(v => ({...v, w: Math.abs(s.w).toFixed(2)})); e.target.blur(); } }}
+                            if (e.key === 'Escape') { setVals(v => ({...v, w: wFallback()})); e.target.blur(); } }}
           style={iStyle}
-        />{unit('px')}
+        />{unit(unitSuffix)}
       </div>,
       <div key="h" style={rStyle}>
         <span style={lStyle}>Height</span>
@@ -390,12 +466,12 @@ function ShapeValueCard({ shape: s, onUpdate }) {
           onChange={e => setVals(v => ({ ...v, h: e.target.value }))}
           onBlur={e  => tryCommit('h', e.target.value, parseFloat,
                          n => !isNaN(n) && n > 0,
-                         (sh, n) => ({ ...sh, h: n }),
-                         () => Math.abs(s.h).toFixed(2))}
+                         (sh, n) => ({ ...sh, h: realToPx(n, scaleDenom, units) }),
+                         hFallback)}
           onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
-                            if (e.key === 'Escape') { setVals(v => ({...v, h: Math.abs(s.h).toFixed(2)})); e.target.blur(); } }}
+                            if (e.key === 'Escape') { setVals(v => ({...v, h: hFallback()})); e.target.blur(); } }}
           style={iStyle}
-        />{unit('px')}
+        />{unit(unitSuffix)}
       </div>,
       <div key="rot" style={rStyle}>
         <span style={lStyle}>Rot°</span>
@@ -404,6 +480,7 @@ function ShapeValueCard({ shape: s, onUpdate }) {
     ];
 
   } else if (s.type === 'curve' && cp) {
+    const crvRFallback = () => pxToReal(cp.R, scaleDenom, units).toFixed(3);
     title = 'Curve Elements';
     rows = [
       <div key="R" style={rStyle}>
@@ -413,17 +490,20 @@ function ShapeValueCard({ shape: s, onUpdate }) {
           onChange={e => setVals(v => ({ ...v, crvR: e.target.value }))}
           onBlur={e  => tryCommit('crvR', e.target.value, parseFloat,
                          n => !isNaN(n) && n > 0,
-                         (sh, n) => applyArcRadius(sh, n),
-                         () => cp.R.toFixed(2))}
+                         (sh, n) => applyArcRadius(sh, realToPx(n, scaleDenom, units)),
+                         crvRFallback)}
           onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
-                            if (e.key === 'Escape') { setVals(v => ({...v, crvR: cp.R.toFixed(2)})); e.target.blur(); } }}
+                            if (e.key === 'Escape') { setVals(v => ({...v, crvR: crvRFallback()})); e.target.blur(); } }}
           style={iStyle}
-        />{unit('px')}
+        />{unit(unitSuffix)}
       </div>,
       ...[
-        ['Δ', toDMS(cp.delta)], ['T', cp.T.toFixed(1)+' px'],
-        ['L', cp.L.toFixed(1)+' px'], ['M', cp.M.toFixed(1)+' px'],
-        ['E', cp.E.toFixed(1)+' px'], ['Chord', cp.chord.toFixed(1)+' px'],
+        ['Δ',     toDMS(cp.delta)],
+        ['T',     formatReal(pxToReal(cp.T,     scaleDenom, units), units)],
+        ['L',     formatReal(pxToReal(cp.L,     scaleDenom, units), units)],
+        ['M',     formatReal(pxToReal(cp.M,     scaleDenom, units), units)],
+        ['E',     formatReal(pxToReal(cp.E,     scaleDenom, units), units)],
+        ['Chord', formatReal(pxToReal(cp.chord, scaleDenom, units), units)],
       ].map(([lbl, val]) => (
         <div key={lbl} style={rStyle}>
           <span style={lStyle}>{lbl}</span>
@@ -490,6 +570,13 @@ function SketchPage({ page, projectId, onReload }) {
   // ── Snap ──────────────────────────────────────────────────────────────────
   const [snapEnabled,    setSnapEnabled]    = useState(false);
   const [snapPoint,      setSnapPoint]      = useState(null);  // {x,y}|null — visual indicator
+
+  // ── Scale & Units (Phase 3) ────────────────────────────────────────────────
+  const [scaleDenom,    setScaleDenom]    = useState(page.scaleDenom  || 1);
+  const [units,         setUnits]         = useState(page.units       || 'm');
+  const [showScaleBar,  setShowScaleBar]  = useState(true);
+  // Tracks the live text-input value while the user is typing a new denominator
+  const [scaleInput,    setScaleInput]    = useState(String(page.scaleDenom || 1));
 
   // ── Dimension labels ───────────────────────────────────────────────────────
   // When true, each committed shape shows an inline measurement label (length,
@@ -695,13 +782,17 @@ function SketchPage({ page, projectId, onReload }) {
   }
 
   // ── Persistence ────────────────────────────────────────────────────────────
-  function persist(nextShapes, nextNotes, nextLayers) {
-    const s = nextShapes !== undefined ? nextShapes : shapes;
-    const n = nextNotes  !== undefined ? nextNotes  : notes;
-    const l = nextLayers !== undefined ? nextLayers : layers;
+  // patch: optional { scaleDenom, units } to avoid stale-closure issues when
+  // called immediately after setScaleDenom / setUnits in the same tick.
+  function persist(nextShapes, nextNotes, nextLayers, patch) {
+    const s  = nextShapes !== undefined ? nextShapes : shapes;
+    const n  = nextNotes  !== undefined ? nextNotes  : notes;
+    const l  = nextLayers !== undefined ? nextLayers : layers;
+    const sd = (patch && patch.scaleDenom !== undefined) ? patch.scaleDenom : scaleDenom;
+    const u  = (patch && patch.units      !== undefined) ? patch.units      : units;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      DB.updatePage(projectId, page.id, { shapes: s, notes: n, layers: l });
+      DB.updatePage(projectId, page.id, { shapes: s, notes: n, layers: l, scaleDenom: sd, units: u });
     }, 600);
   }
 
@@ -1581,7 +1672,7 @@ function SketchPage({ page, projectId, onReload }) {
         // Perpendicular offset in the left-hand normal direction
         const nx = -(s.y2-s.y1)/len, ny = (s.x2-s.x1)/len;
         const ang = Math.atan2(s.y2-s.y1, s.x2-s.x1) * 180 / Math.PI;
-        return D(mx + nx*OFF, my + ny*OFF, ang, fmtDim(len));
+        return D(mx + nx*OFF, my + ny*OFF, ang, fmtPxAsReal(len, scaleDenom, units));
       }
       case 'curve': {
         const { px: rpx, py: rpy } = getCurvePI(s);
@@ -1596,20 +1687,20 @@ function SketchPage({ page, projectId, onReload }) {
         const r0 = rot ? rotatePoint(lx1, ly1, piv.x, piv.y, rot) : { x: lx1, y: ly1 };
         const r1 = rot ? rotatePoint(lx2, ly2, piv.x, piv.y, rot) : { x: lx2, y: ly2 };
         return <>
-          {dimTextEl(r0.x, r0.y, 0, `L ${fmtDim(cp.L)}`, ps)}
-          {dimTextEl(r1.x, r1.y, 0, `R ${fmtDim(cp.R)}`, ps)}
+          {dimTextEl(r0.x, r0.y, 0, `L ${fmtPxAsReal(cp.L, scaleDenom, units)}`, ps)}
+          {dimTextEl(r1.x, r1.y, 0, `R ${fmtPxAsReal(cp.R, scaleDenom, units)}`, ps)}
         </>;
       }
       case 'circle': {
         if (s.r < 5 * ps) return null;
         // Radius label inside the circle, slightly below centre
-        return D(s.cx, s.cy + s.r * 0.25, 0, `R=${fmtDim(s.r)}`);
+        return D(s.cx, s.cy + s.r * 0.25, 0, `R=${fmtPxAsReal(s.r, scaleDenom, units)}`);
       }
       case 'rect': {
         // Width label below bottom edge, height label right of right edge
         return <>
-          {D(s.x + s.w/2,     s.y + s.h + OFF, 0,   fmtDim(Math.abs(s.w)))}
-          {D(s.x + s.w + OFF, s.y + s.h/2,     -90, fmtDim(Math.abs(s.h)))}
+          {D(s.x + s.w/2,     s.y + s.h + OFF, 0,   fmtPxAsReal(Math.abs(s.w), scaleDenom, units))}
+          {D(s.x + s.w + OFF, s.y + s.h/2,     -90, fmtPxAsReal(Math.abs(s.h), scaleDenom, units))}
         </>;
       }
       default: return null;
@@ -1747,7 +1838,7 @@ function SketchPage({ page, projectId, onReload }) {
         const ang = Math.atan2(drawState.y2-drawState.y1, drawState.x2-drawState.x1) * 180/Math.PI;
         return <>
           <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />
-          {showDims && len >= 5*ps && dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtDim(len), ps)}
+          {showDims && len >= 5*ps && dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtPxAsReal(len, scaleDenom, units), ps)}
         </>;
       }
       case 'curve':
@@ -1761,7 +1852,7 @@ function SketchPage({ page, projectId, onReload }) {
           return <>
             <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />
             <circle cx={drawState.x1} cy={drawState.y1} r={4*ps} fill="#3B82F6" opacity={0.7} />
-            {showDims && len >= 5*ps && dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtDim(len), ps)}
+            {showDims && len >= 5*ps && dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtPxAsReal(len, scaleDenom, units), ps)}
           </>;
         } else {
           // Phase 2: live circular arc from BC to EC shaped by PI cursor position.
@@ -1798,8 +1889,8 @@ function SketchPage({ page, projectId, onReload }) {
               style={{ pointerEvents: 'none', userSelect: 'none' }}>PI</text>
             {/* Live arc-length + radius labels near PI */}
             {showDims && cp && cp.L >= 5*ps && <>
-              {dimTextEl(ppx + ux*OFF,           ppy + uy*OFF,           0, `L ${fmtDim(cp.L)}`, ps)}
-              {dimTextEl(ppx + ux*(OFF + 12*ps), ppy + uy*(OFF + 12*ps), 0, `R ${fmtDim(cp.R)}`, ps)}
+              {dimTextEl(ppx + ux*OFF,           ppy + uy*OFF,           0, `L ${fmtPxAsReal(cp.L, scaleDenom, units)}`, ps)}
+              {dimTextEl(ppx + ux*(OFF + 12*ps), ppy + uy*(OFF + 12*ps), 0, `R ${fmtPxAsReal(cp.R, scaleDenom, units)}`, ps)}
             </>}
           </>;
         }
@@ -1807,15 +1898,15 @@ function SketchPage({ page, projectId, onReload }) {
         const r = Math.max(0, drawState.r);
         return <>
           <circle cx={drawState.cx} cy={drawState.cy} r={r} {...props} />
-          {showDims && r >= 5*ps && dimTextEl(drawState.cx, drawState.cy, 0, `R=${fmtDim(r)}`, ps)}
+          {showDims && r >= 5*ps && dimTextEl(drawState.cx, drawState.cy, 0, `R=${fmtPxAsReal(r, scaleDenom, units)}`, ps)}
         </>;
       }
       case 'rect': {
         const w = Math.max(0, drawState.w), h = Math.max(0, drawState.h);
         return <>
           <rect x={drawState.x} y={drawState.y} width={w} height={h} {...props} />
-          {showDims && w >= 5*ps && dimTextEl(drawState.x + w/2,     drawState.y + h + OFF, 0,   fmtDim(w), ps)}
-          {showDims && h >= 5*ps && dimTextEl(drawState.x + w + OFF, drawState.y + h/2,     -90, fmtDim(h), ps)}
+          {showDims && w >= 5*ps && dimTextEl(drawState.x + w/2,     drawState.y + h + OFF, 0,   fmtPxAsReal(w, scaleDenom, units), ps)}
+          {showDims && h >= 5*ps && dimTextEl(drawState.x + w + OFF, drawState.y + h/2,     -90, fmtPxAsReal(h, scaleDenom, units), ps)}
         </>;
       }
       default: return null;
@@ -1946,6 +2037,87 @@ function SketchPage({ page, projectId, onReload }) {
             color: 'rgba(255,255,255,0.35)', marginLeft: 4,
           }}>panning…</span>
         )}
+
+        {/* ── Scale controls ─────────────────────────────────────────── */}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+
+          {/* Scale bar toggle */}
+          <button
+            onClick={() => setShowScaleBar(v => !v)}
+            title={showScaleBar ? 'Scale bar ON — click to hide' : 'Scale bar OFF — click to show'}
+            style={{
+              height: 26, padding: '0 8px', borderRadius: 4,
+              display: 'flex', alignItems: 'center', gap: 4,
+              background: showScaleBar ? 'rgba(251,191,36,0.15)' : 'rgba(255,255,255,0.06)',
+              border: `1px solid ${showScaleBar ? 'rgba(251,191,36,0.45)' : 'rgba(255,255,255,0.14)'}`,
+              color: showScaleBar ? '#FCD34D' : 'rgba(255,255,255,0.4)',
+              cursor: 'pointer', fontSize: 10,
+              fontFamily: 'Courier New, monospace', outline: 'none',
+            }}
+          >⊟</button>
+
+          {/* Unit toggle m / ft */}
+          <button
+            onClick={() => {
+              const next = units === 'm' ? 'ft' : 'm';
+              setUnits(next);
+              persist(undefined, undefined, undefined, { units: next });
+            }}
+            title="Toggle units: metres / feet"
+            style={{
+              height: 26, padding: '0 8px', borderRadius: 4, minWidth: 28,
+              background: 'rgba(255,255,255,0.06)',
+              border: '1px solid rgba(255,255,255,0.18)',
+              color: 'rgba(255,255,255,0.75)',
+              cursor: 'pointer', fontSize: 10, fontWeight: 600,
+              fontFamily: 'Courier New, monospace', outline: 'none',
+            }}
+          >{units === 'm' ? 'm' : "ft"}</button>
+
+          {/* Scale label */}
+          <span style={{
+            fontSize: 10, fontFamily: 'Courier New, monospace',
+            color: 'rgba(255,255,255,0.4)', userSelect: 'none', whiteSpace: 'nowrap',
+          }}>1 :</span>
+
+          {/* Scale denominator text input */}
+          <input
+            type="text"
+            inputMode="numeric"
+            value={scaleInput}
+            onChange={e => setScaleInput(e.target.value)}
+            onBlur={e => {
+              const n = parseInt(e.target.value, 10);
+              const next = (!isNaN(n) && n >= 1) ? Math.min(n, MAX_SCALE) : scaleDenom;
+              setScaleDenom(next);
+              setScaleInput(String(next));
+              persist(undefined, undefined, undefined, { scaleDenom: next });
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') e.target.blur();
+              if (e.key === 'Escape') { setScaleInput(String(scaleDenom)); e.target.blur(); }
+            }}
+            style={{
+              width: 52, height: 24, background: 'rgba(255,255,255,0.07)',
+              border: '1px solid rgba(255,255,255,0.18)', borderRadius: 3,
+              color: 'rgba(255,255,255,0.85)', fontFamily: 'Courier New, monospace',
+              fontSize: 10, padding: '0 5px', outline: 'none', textAlign: 'right',
+            }}
+          />
+
+          {/* Log slider — snaps to common scales */}
+          <input
+            type="range" min={0} max={100} step={1}
+            value={scaleToSlider(scaleDenom)}
+            onChange={e => {
+              const next = sliderToScale(Number(e.target.value));
+              setScaleDenom(next);
+              setScaleInput(String(next));
+              persist(undefined, undefined, undefined, { scaleDenom: next });
+            }}
+            style={{ width: 72, cursor: 'pointer', accentColor: '#60A5FA' }}
+          />
+        </div>
       </div>
 
       {/* Main sketch area */}
@@ -2109,6 +2281,49 @@ function SketchPage({ page, projectId, onReload }) {
             })()}
           </svg>
 
+          {/* ── Scale Bar overlay ────────────────────────────────────────────── */}
+          {showScaleBar && scaleDenom > 0 && (() => {
+            const _ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+            const niceVal    = niceScaleBarValue(scaleDenom, viewBox.w, svgSizeRef.current.w, units);
+            const barWorldPx = realToPx(niceVal, scaleDenom, units);
+            const barScreenW = Math.round(barWorldPx / _ps);
+            const unitLabel  = units === 'ft' ? "'" : ' m';
+            const niceStr    = niceVal < 1
+              ? niceVal.toFixed(niceVal < 0.01 ? 3 : 2)
+              : niceVal >= 1000 ? (niceVal/1000).toFixed(1) + (units === 'm' ? ' km' : "'")
+              : String(niceVal);
+            return (
+              <div style={{
+                position: 'absolute', bottom: 12,
+                right: rightPanelOpen ? 186 : 30,
+                pointerEvents: 'none', zIndex: 12,
+                display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3,
+              }}>
+                {/* Scale ratio label */}
+                <span style={{
+                  fontSize: 9, fontFamily: 'Courier New, monospace',
+                  color: 'rgba(255,255,255,0.38)', letterSpacing: '0.05em',
+                }}>1 : {scaleDenom.toLocaleString()}</span>
+                {/* Bar + distance label */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2 }}>
+                  {/* Ticked bar: left cap | fill | right cap */}
+                  <svg width={barScreenW} height={8} style={{ overflow: 'visible' }}>
+                    <line x1={0} y1={4} x2={barScreenW} y2={4}
+                      stroke="rgba(255,255,255,0.65)" strokeWidth={2} />
+                    <line x1={0} y1={1} x2={0} y2={7}
+                      stroke="rgba(255,255,255,0.65)" strokeWidth={1.5} />
+                    <line x1={barScreenW} y1={1} x2={barScreenW} y2={7}
+                      stroke="rgba(255,255,255,0.65)" strokeWidth={1.5} />
+                  </svg>
+                  <span style={{
+                    fontSize: 9, fontFamily: 'Courier New, monospace',
+                    color: 'rgba(255,255,255,0.55)', textAlign: 'center', letterSpacing: '0.03em',
+                  }}>{niceStr}{niceVal >= 1000 ? '' : unitLabel}</span>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* ── Shape Value Card ─────────────────────────────────────────────── */}
           {/* Curve draw-phase live preview (read-only badge) */}
           {showValueCard && (() => {
@@ -2130,10 +2345,13 @@ function SketchPage({ page, projectId, onReload }) {
                 <div style={{ color: '#60A5FA', fontSize: 9.5, letterSpacing: '0.1em',
                   marginBottom: 4, textTransform: 'uppercase' }}>Curve Elements</div>
                 {[
-                  ['R', cp.R.toFixed(1)+' px'], ['Δ', toDMS(cp.delta)],
-                  ['T', cp.T.toFixed(1)+' px'], ['L', cp.L.toFixed(1)+' px'],
-                  ['M', cp.M.toFixed(1)+' px'], ['E', cp.E.toFixed(1)+' px'],
-                  ['Chord', cp.chord.toFixed(1)+' px'],
+                  ['R',     formatReal(pxToReal(cp.R,     scaleDenom, units), units)],
+                  ['Δ',     toDMS(cp.delta)],
+                  ['T',     formatReal(pxToReal(cp.T,     scaleDenom, units), units)],
+                  ['L',     formatReal(pxToReal(cp.L,     scaleDenom, units), units)],
+                  ['M',     formatReal(pxToReal(cp.M,     scaleDenom, units), units)],
+                  ['E',     formatReal(pxToReal(cp.E,     scaleDenom, units), units)],
+                  ['Chord', formatReal(pxToReal(cp.chord, scaleDenom, units), units)],
                 ].map(([lbl, val]) => (
                   <div key={lbl} style={rStyle}>
                     <span style={lStyle}>{lbl}</span>
@@ -2149,6 +2367,8 @@ function SketchPage({ page, projectId, onReload }) {
               key={selectedShape.id}
               shape={selectedShape}
               onUpdate={handleCardUpdate}
+              scaleDenom={scaleDenom}
+              units={units}
             />
           )}
 
