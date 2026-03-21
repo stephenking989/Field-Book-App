@@ -963,7 +963,21 @@ function SketchPage({ page, projectId, onReload }) {
         break;
       }
       case 'circle':
-        if (nodeKey === 'c') return { ...shape, cx: shape.cx+dx, cy: shape.cy+dy };
+        if (nodeKey === 'c') {
+          // 'c' is a full body move — carry _pivot along in world space.
+          // dx/dy arrive in local (unrotated) coords; convert to world for _pivot.
+          let wpx = dx, wpy = dy;
+          if (shape._pivot && (shape._rot || 0)) {
+            const rad = (shape._rot || 0) * Math.PI / 180;
+            const cosR = Math.cos(rad), sinR = Math.sin(rad);
+            wpx = dx * cosR - dy * sinR;
+            wpy = dx * sinR + dy * cosR;
+          }
+          return {
+            ...shape, cx: shape.cx + dx, cy: shape.cy + dy,
+            ...(shape._pivot && { _pivot: { x: shape._pivot.x + wpx, y: shape._pivot.y + wpy } }),
+          };
+        }
         if (nodeKey === 'r') return { ...shape, r: Math.max(4, shape.r+dx) };
         break;
       case 'rect': {
@@ -1230,14 +1244,33 @@ function SketchPage({ page, projectId, onReload }) {
         return;
       }
 
-      // Pivot handle: move the stored pivot point
+      // Pivot handle: move the stored pivot point.
+      // When the shape is rotated, changing _pivot shifts the SVG
+      // rotate(rot, piv.x, piv.y) anchor and visually moves the shape.
+      // We cancel that by offsetting the raw geometry by:
+      //   offset = (I − R(−rot)) × ΔP
+      // This keeps every rendered point at the same screen position
+      // regardless of where the new pivot sits.
       if (dragNode.nodeKey === 'pivot') {
         const dx = rawPt.x - dragStart.svgX;
         const dy = rawPt.y - dragStart.svgY;
         setShapes(dragStart.snapshot.map(s => {
           if (s.id !== dragNode.shapeId) return s;
           const basePiv = getShapePivot(s);
-          return { ...s, _pivot: { x: basePiv.x + dx, y: basePiv.y + dy } };
+          const newPiv  = { x: basePiv.x + dx, y: basePiv.y + dy };
+          const rot     = s._rot || 0;
+          if (rot) {
+            const rad  = rot * Math.PI / 180;
+            const cosR = Math.cos(rad);
+            const sinR = Math.sin(rad);
+            // (I − R(−rot)) × (dx, dy)
+            // R(−rot)(dx,dy) = (dx·cosR + dy·sinR, −dx·sinR + dy·cosR)
+            const offX = dx * (1 - cosR) - dy * sinR;
+            const offY = dx * sinR       + dy * (1 - cosR);
+            const moved = applyNodeDrag(s, 'body', offX, offY);
+            return { ...moved, _pivot: newPiv };
+          }
+          return { ...s, _pivot: newPiv };
         }));
         return;
       }
