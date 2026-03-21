@@ -318,6 +318,26 @@ function scaleToSlider(s) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GRID HELPERS  (Phase 4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Choose a round-number real-world interval that targets ~10 minor grid lines
+// visible across the current view width.
+function niceGridInterval(scaleDenom, vbW, containerW, units) {
+  const worldWidthReal = pxToReal(vbW, scaleDenom, units);
+  const rawInterval    = worldWidthReal / 10;
+  const niceValues = [
+    0.001, 0.002, 0.005,
+    0.01,  0.02,  0.05,
+    0.1,   0.2,   0.5,
+    1,     2,     5,     10,   25,   50,
+    100,   250,   500,   1000, 2500, 5000,
+  ];
+  return niceValues.find(v => v >= rawInterval) || 5000;
+}
+// Major gridlines fall every 5th minor interval.
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SHAPE VALUE CARD  —  proper React component with controlled inputs
 // Extracted from the IIFE so it can hold useState/useEffect.
 // Props:
@@ -575,6 +595,7 @@ function SketchPage({ page, projectId, onReload }) {
   const [scaleDenom,    setScaleDenom]    = useState(page.scaleDenom  || 1);
   const [units,         setUnits]         = useState(page.units       || 'm');
   const [showScaleBar,  setShowScaleBar]  = useState(true);
+  const [showGrid,      setShowGrid]      = useState(true);
   // Tracks the live text-input value while the user is typing a new denominator
   const [scaleInput,    setScaleInput]    = useState(String(page.scaleDenom || 1));
 
@@ -1651,6 +1672,60 @@ function SketchPage({ page, projectId, onReload }) {
     return <g key={s.id} transform={transform}>{inner}</g>;
   }
 
+  // ── Dynamic SVG grid (Phase 4) ────────────────────────────────────────────
+  // Renders minor + major gridlines as SVG <line> elements in world-space, so
+  // they stay perfectly aligned with shapes at any zoom/pan.  Lines are
+  // counter-scaled by ps so they stay a constant visual thickness on screen.
+  function renderGrid() {
+    const ps          = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+    const interval    = niceGridInterval(scaleDenom, viewBox.w, svgSizeRef.current.w, units);
+    const intervalPx  = realToPx(interval, scaleDenom, units);
+    if (!intervalPx || intervalPx <= 0) return null;
+
+    const minorStroke = 0.5 * ps;
+    const majorStroke = 1.0 * ps;
+    const minorColor  = 'rgba(80,120,200,0.12)';
+    const majorColor  = 'rgba(80,120,200,0.28)';
+
+    const lines = [];
+
+    // Vertical lines (constant x)
+    const xStart = Math.floor(viewBox.x / intervalPx);
+    const xEnd   = Math.ceil((viewBox.x + viewBox.w) / intervalPx);
+    let xCount   = 0;
+    for (let i = xStart; i <= xEnd && xCount < 150; i++, xCount++) {
+      const x       = i * intervalPx;
+      const isMajor = i % 5 === 0;
+      lines.push(
+        <line key={`gx${i}`}
+          x1={x} y1={viewBox.y}
+          x2={x} y2={viewBox.y + viewBox.h}
+          stroke={isMajor ? majorColor : minorColor}
+          strokeWidth={isMajor ? majorStroke : minorStroke}
+        />
+      );
+    }
+
+    // Horizontal lines (constant y)
+    const yStart = Math.floor(viewBox.y / intervalPx);
+    const yEnd   = Math.ceil((viewBox.y + viewBox.h) / intervalPx);
+    let yCount   = 0;
+    for (let i = yStart; i <= yEnd && yCount < 150; i++, yCount++) {
+      const y       = i * intervalPx;
+      const isMajor = i % 5 === 0;
+      lines.push(
+        <line key={`gy${i}`}
+          x1={viewBox.x}     y1={y}
+          x2={viewBox.x + viewBox.w} y2={y}
+          stroke={isMajor ? majorColor : minorColor}
+          strokeWidth={isMajor ? majorStroke : minorStroke}
+        />
+      );
+    }
+
+    return <g key="grid" style={{ pointerEvents: 'none' }}>{lines}</g>;
+  }
+
   // ── Render dimension label(s) for a committed shape ───────────────────────
   // Labels live OUTSIDE shape groups so the group's rotation transform doesn't
   // skew the text.  Instead we manually rotate the anchor point and adjust the
@@ -1997,6 +2072,24 @@ function SketchPage({ page, projectId, onReload }) {
           <span style={{ letterSpacing: '0.03em' }}>Snap</span>
         </button>
 
+        {/* Grid toggle */}
+        <button
+          onClick={() => setShowGrid(v => !v)}
+          title={showGrid ? 'Grid ON — click to hide' : 'Grid OFF — click to show'}
+          style={{
+            height: 26, padding: '0 10px', borderRadius: 4,
+            display: 'flex', alignItems: 'center', gap: 5,
+            background: showGrid ? 'rgba(52,211,153,0.15)' : 'rgba(255,255,255,0.06)',
+            border: `1px solid ${showGrid ? 'rgba(52,211,153,0.5)' : 'rgba(255,255,255,0.14)'}`,
+            color: showGrid ? '#6EE7B7' : 'rgba(255,255,255,0.45)',
+            cursor: 'pointer', fontSize: 11,
+            fontFamily: 'Courier New, monospace', outline: 'none', transition: 'all 0.15s',
+          }}
+        >
+          <span style={{ fontSize: 13, lineHeight: 1 }}>⊞</span>
+          <span style={{ letterSpacing: '0.03em' }}>Grid</span>
+        </button>
+
         {/* Dims toggle */}
         <button
           onClick={() => setShowDims(v => !v)}
@@ -2251,7 +2344,7 @@ function SketchPage({ page, projectId, onReload }) {
             The browser resolves touch-action by walking up from the touch target — any
             ancestor with touch-action:auto lets the browser intercept pinch/pan before
             our pointer events fire. Setting it here covers SVG children + overlays. */}
-        <div ref={svgWrapRef} className="page-grid-blue" style={{ flex: 1, position: 'relative', overflow: 'hidden', touchAction: 'none' }}>
+        <div ref={svgWrapRef} style={{ flex: 1, position: 'relative', overflow: 'hidden', touchAction: 'none', backgroundColor: '#FEFEFE' }}>
 
           {/* North arrow */}
           <div style={{ position: 'absolute', top: 10, right: 14, opacity: 0.28, display: 'flex',
@@ -2290,6 +2383,9 @@ function SketchPage({ page, projectId, onReload }) {
             onPointerCancel={onPointerUp}
             onDblClick={onDblClick}
           >
+            {/* Dynamic grid — rendered below everything */}
+            {showGrid && renderGrid()}
+
             {/* Committed shapes — rendered in layer order, bottom to top */}
             {layers.map(layer => layer.visible && (
               <g key={layer.id}>
