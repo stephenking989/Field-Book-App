@@ -63,71 +63,88 @@ function rotatePoint(px, py, cx, cy, angleDeg) {
 }
 
 // ── Circular arc helpers ────────────────────────────────────────────────────
-// All curves are stored as BC (x1,y1), EC (x2,y2), arc-midpoint (ax,ay).
-// The arc-midpoint is the point on the circular arc exactly halfway between
-// BC and EC along the arc.  From these three points every survey curve
-// element can be derived analytically.
-
-// Backward-compat: old curves stored a quadratic bezier control point (cx,cy).
-// Estimate the equivalent arc midpoint from the bezier at t=0.5.
-function getCurveArcMid(shape) {
-  if (shape.ax !== undefined) return { ax: shape.ax, ay: shape.ay };
-  const bx = shape.cx !== undefined ? shape.cx : (shape.x1 + shape.x2) / 2;
-  const by = shape.cy !== undefined ? shape.cy : (shape.y1 + shape.y2) / 2;
-  return { ax: (shape.x1 + 2*bx + shape.x2) / 4,
-           ay: (shape.y1 + 2*by + shape.y2) / 4 };
+// Curves are stored as BC (x1,y1), EC (x2,y2), PI (px,py).
+// PI = Point of Intersection — where the back-tangent (through BC) and
+// forward-tangent (through EC) meet.  This matches standard surveying workflow.
+//
+// Backward-compat shim: old shapes stored (ax, ay) = arc-midpoint.
+// getCurvePI converts those to an equivalent PI so legacy data is preserved.
+function getCurvePI(shape) {
+  if (shape.px !== undefined) return { px: shape.px, py: shape.py };
+  // Legacy shape: reconstruct PI from old arc-midpoint (ax, ay)
+  const ax = shape.ax !== undefined ? shape.ax
+           : shape.cx !== undefined ? (shape.x1 + 2*shape.cx + shape.x2) / 4
+           : (shape.x1 + shape.x2) / 2;
+  const ay = shape.ay !== undefined ? shape.ay
+           : shape.cy !== undefined ? (shape.y1 + 2*shape.cy + shape.y2) / 4
+           : (shape.y1 + shape.y2) / 2;
+  const { x1, y1, x2, y2 } = shape;
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+  const chord = Math.hypot(x2 - x1, y2 - y1);
+  const m = Math.hypot(ax - mx, ay - my);   // middle ordinate
+  if (chord < 0.5 || m < 0.5) return { px: mx, py: my };
+  const h = chord / 2;
+  const R = (h * h + m * m) / (2 * m);
+  const sinHalf = Math.min(1, h / R);
+  const deltaRad = 2 * Math.asin(sinHalf);
+  const T = R * Math.tan(deltaRad / 2);
+  // PI is on the perpendicular bisector of BC-EC, on the same side as the arc-midpoint,
+  // at distance sqrt(T²-h²) from the chord midpoint.
+  const d = Math.sqrt(Math.max(0, T * T - h * h));
+  const ux = (ax - mx) / (Math.hypot(ax - mx, ay - my) || 1);
+  const uy = (ay - my) / (Math.hypot(ax - mx, ay - my) || 1);
+  return { px: mx + ux * d, py: my + uy * d };
 }
 
-// Compute center and radius of the circular arc from BC, EC, arc-midpoint.
+// Compute PO (center), R, and all survey curve elements from BC, PI, EC.
+// PO = Point of Origin (center of radius circle), using surveying convention.
 // Returns null if the three points are collinear (degenerate straight line).
-function arcCenter(x1, y1, x2, y2, ax, ay) {
-  const mx = (x1+x2)/2, my = (y1+y2)/2;
-  const M  = Math.hypot(ax-mx, ay-my);       // middle ordinate
-  const h  = Math.hypot(x2-x1, y2-y1) / 2;  // half-chord
-  if (M < 0.5 || h < 0.5) return null;
-  const R  = (h*h + M*M) / (2*M);
-  // Centre lies on perpendicular bisector of BC-EC, at distance R from arc-midpoint
-  // toward the chord midpoint: C = arcMid + R·normalize(chordMid - arcMid)
-  const cx = ax + R*(mx-ax)/M;
-  const cy = ay + R*(my-ay)/M;
-  return { cx, cy, R };
+function computeArcFromPI(x1, y1, x2, y2, px, py) {
+  const d1 = Math.hypot(px - x1, py - y1);   // BC–PI
+  const d2 = Math.hypot(px - x2, py - y2);   // EC–PI
+  if (d1 < 0.5 || d2 < 0.5) return null;
+  // Interior angle at PI between the two tangent directions
+  const u1x = (x1 - px) / d1, u1y = (y1 - py) / d1;  // PI → BC
+  const u2x = (x2 - px) / d2, u2y = (y2 - py) / d2;  // PI → EC
+  const cosInt = Math.max(-1, Math.min(1, u1x * u2x + u1y * u2y));
+  const intAngle = Math.acos(cosInt);
+  // Degenerate: collinear or back-on-itself
+  if (intAngle < 1e-4 || Math.PI - intAngle < 1e-4) return null;
+  const deltaRad = Math.PI - intAngle;       // Δ = deflection angle
+  const deltaDeg = deltaRad * 180 / Math.PI;
+  const chord = Math.hypot(x2 - x1, y2 - y1);
+  if (chord < 0.5) return null;
+  const h = chord / 2;                       // half-chord
+  const sinHalf = Math.sin(deltaRad / 2);
+  if (sinHalf < 1e-6) return null;
+  const R  = h / sinHalf;                    // radius
+  const T  = R * Math.tan(deltaRad / 2);     // tangent length
+  const L  = R * deltaRad;                   // arc length
+  const M  = R * (1 - Math.cos(deltaRad / 2)); // middle ordinate
+  const E  = R / Math.cos(deltaRad / 2) - R;   // external distance
+  // PO lies on the angular bisector from PI (toward the arc interior)
+  // at distance R / cos(Δ/2) from PI.
+  const bisX = u1x + u2x, bisY = u1y + u2y;
+  const bisLen = Math.hypot(bisX, bisY);
+  if (bisLen < 1e-6) return null;
+  const piToPO = R / Math.cos(deltaRad / 2);
+  const cx = px + (bisX / bisLen) * piToPO;
+  const cy = py + (bisY / bisLen) * piToPO;
+  return { cx, cy, R, delta: deltaDeg, T, L, M, E, chord };
 }
 
-// Build the SVG arc path string for a committed or preview curve.
-function arcPath(x1, y1, x2, y2, ax, ay) {
-  const arc = arcCenter(x1, y1, x2, y2, ax, ay);
+// Build the SVG arc path string from BC, EC, PI.
+function arcPath(x1, y1, x2, y2, px, py) {
+  const arc = computeArcFromPI(x1, y1, x2, y2, px, py);
   if (!arc) return `M ${x1} ${y1} L ${x2} ${y2}`;
-  const { R } = arc;
-  const mx = (x1+x2)/2, my = (y1+y2)/2;
-  const M  = Math.hypot(ax-mx, ay-my);
-  const largeArc = M > R ? 1 : 0;
-  // Sweep: cross-product of (arcMid - BC) × (EC - BC) in SVG y-down coords.
-  // cross < 0  →  arcMid is to the right of BC→EC  →  CW  →  sweep=1
-  const cross = (ax-x1)*(y2-y1) - (ay-y1)*(x2-x1);
+  const { R, delta } = arc;
+  const largeArc = delta > 180 ? 1 : 0;
+  // Sweep: cross-product of (PI - BC) × (EC - BC) in SVG y-down coords.
+  // cross < 0 → PI is right of BC→EC → CW sweep → sweep=1.
+  // The arc always curves toward the PI.
+  const cross = (px - x1) * (y2 - y1) - (py - y1) * (x2 - x1);
   const sweep  = cross < 0 ? 1 : 0;
   return `M ${x1} ${y1} A ${R.toFixed(3)} ${R.toFixed(3)} 0 ${largeArc} ${sweep} ${x2} ${y2}`;
-}
-
-// Compute the full set of horizontal curve elements used in surveying.
-function computeCurveProps(x1, y1, x2, y2, ax, ay) {
-  const arc = arcCenter(x1, y1, x2, y2, ax, ay);
-  if (!arc) return null;
-  const { R } = arc;
-  const chord = Math.hypot(x2-x1, y2-y1);
-  const h     = chord / 2;
-  const mx    = (x1+x2)/2, my = (y1+y2)/2;
-  const M_ord = Math.hypot(ax-mx, ay-my);
-  // Half-delta via arcsin; handle major arcs (M_ord > R means Δ > 180°)
-  const sinHalf = Math.min(1, h / R);
-  let deltaRad  = 2 * Math.asin(sinHalf);
-  if (M_ord > R) deltaRad = 2*Math.PI - deltaRad;
-  const deltaDeg = deltaRad * 180 / Math.PI;
-  const T = R * Math.tan(deltaRad / 2);     // tangent length
-  const L = R * deltaRad;                   // arc length
-  const E = R * (1/Math.cos(deltaRad/2)-1); // external distance
-  const chordBearingDeg = Math.atan2(y2-y1, x2-x1) * 180/Math.PI;
-  return { R, delta: deltaDeg, T: Math.abs(T), L, M: M_ord,
-           E: Math.abs(E), chord, chordBearing: chordBearingDeg };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -200,18 +217,28 @@ function applyLineBearing(s, bearingDeg) {
   return { ...s, x1: cx-dx*half, y1: cy-dy*half, x2: cx+dx*half, y2: cy+dy*half };
 }
 
-// Change arc radius while keeping both endpoints fixed.
-// Sagitta: h = R - sqrt(R² - (chord/2)²); new arc midpoint offset from chord midpoint.
+// Change arc radius while keeping BC and EC fixed, working in the PI model.
+// Preserves which side of the chord the current PI is on.
 function applyArcRadius(s, newR) {
   const { x1, y1, x2, y2 } = s;
-  const chord = Math.hypot(x2-x1, y2-y1);
-  const r = Math.max(newR, chord/2 + 0.1);        // R must be >= chord/2
-  const { ax, ay } = getCurveArcMid(s);
-  const mx = (x1+x2)/2, my = (y1+y2)/2;
-  const side = Math.sign((x2-x1)*(ay-y1) - (y2-y1)*(ax-x1)) || 1;  // which side of chord
-  const h = r - Math.sqrt(r*r - (chord/2)*(chord/2));
-  const dx = -(y2-y1)/chord, dy = (x2-x1)/chord;  // perpendicular unit vector
-  return { ...s, ax: mx + side*dx*h, ay: my + side*dy*h };
+  const chord = Math.hypot(x2 - x1, y2 - y1);
+  const h = chord / 2;
+  const r = Math.max(newR, h + 0.1);              // R must be >= half-chord
+  const { px: cpx, py: cpy } = getCurvePI(s);
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+  // Which side of chord BC→EC is the current PI on?
+  const cross = (cpx - x1) * (y2 - y1) - (cpy - y1) * (x2 - x1);
+  const side  = cross >= 0 ? 1 : -1;
+  // New PI distance from chord midpoint along perpendicular bisector:
+  // sin(Δ/2) = h/R → T = R*tan(Δ/2) → PI_dist = sqrt(T²-h²)
+  const sinHalf = Math.min(1, h / r);
+  const deltaRad = 2 * Math.asin(sinHalf);
+  const T = r * Math.tan(deltaRad / 2);
+  const d = Math.sqrt(Math.max(0, T * T - h * h));
+  // Left-hand perpendicular unit vector of chord BC→EC
+  const perpX = -(y2 - y1) / chord;
+  const perpY =  (x2 - x1) / chord;
+  return { ...s, px: mx + side * perpX * d, py: my + side * perpY * d };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -239,8 +266,8 @@ function ShapeValueCard({ shape: s, onUpdate }) {
     const brg = sh.type === 'line'
       ? ((Math.atan2(sh.x2-sh.x1, -(sh.y2-sh.y1)) * 180/Math.PI) + 360) % 360 : 0;
     const cp = sh.type === 'curve'
-      ? (() => { const {ax,ay} = getCurveArcMid(sh);
-                 return computeCurveProps(sh.x1,sh.y1,sh.x2,sh.y2,ax,ay); })()
+      ? (() => { const {px,py} = getCurvePI(sh);
+                 return computeArcFromPI(sh.x1,sh.y1,sh.x2,sh.y2,px,py); })()
       : null;
     return {
       len:    len.toFixed(2),
@@ -258,7 +285,7 @@ function ShapeValueCard({ shape: s, onUpdate }) {
   // Re-initialise whenever a DIFFERENT shape is selected (shape ID changes).
   // Also re-initialise when the shape object itself changes (after an update)
   // so the field reflects the new committed value on next focus.
-  useEffect(() => { setVals(initVals(s)); }, [s.id, s.x1, s.y1, s.x2, s.y2, s.r, s.w, s.h, s.ax, s.ay, s.ntsLabel]);
+  useEffect(() => { setVals(initVals(s)); }, [s.id, s.x1, s.y1, s.x2, s.y2, s.r, s.w, s.h, s.px, s.py, s.ntsLabel]);
 
   // ── Commit helper ───────────────────────────────────────────────────────
   // Parses the raw string value, validates with guard, applies transform.
@@ -275,8 +302,8 @@ function ShapeValueCard({ shape: s, onUpdate }) {
   // ── Curve props (only for curve type) ───────────────────────────────────
   let cp = null;
   if (s.type === 'curve') {
-    const {ax, ay} = getCurveArcMid(s);
-    cp = computeCurveProps(s.x1, s.y1, s.x2, s.y2, ax, ay);
+    const { px, py } = getCurvePI(s);
+    cp = computeArcFromPI(s.x1, s.y1, s.x2, s.y2, px, py);
   }
 
   // ── Build rows ───────────────────────────────────────────────────────────
@@ -704,11 +731,11 @@ function SketchPage({ page, projectId, onReload }) {
           { key: 'p2', x: shape.x2, y: shape.y2, type: 'endpoint' },
         ];
       case 'curve': {
-        const { ax, ay } = getCurveArcMid(shape);
+        const { px, py } = getCurvePI(shape);
         return [
-          { key: 'p1',  x: shape.x1, y: shape.y1, type: 'endpoint' },
-          { key: 'p2',  x: shape.x2, y: shape.y2, type: 'endpoint' },
-          { key: 'arc', x: ax,        y: ay,        type: 'arc'     },
+          { key: 'p1', x: shape.x1, y: shape.y1, type: 'endpoint' },
+          { key: 'p2', x: shape.x2, y: shape.y2, type: 'endpoint' },
+          { key: 'pi', x: px,        y: py,        type: 'arc'     },
         ];
       }
       case 'circle':
@@ -738,9 +765,9 @@ function SketchPage({ page, projectId, onReload }) {
       switch (shape.type) {
         case 'line':   return { ...shape, x1:shape.x1+dx, y1:shape.y1+dy, x2:shape.x2+dx, y2:shape.y2+dy, ...(piv && {_pivot:piv}) };
         case 'curve': {
-          const { ax: oax, ay: oay } = getCurveArcMid(shape);
+          const { px: opx, py: opy } = getCurvePI(shape);
           return { ...shape, x1:shape.x1+dx, y1:shape.y1+dy, x2:shape.x2+dx, y2:shape.y2+dy,
-            ax: oax+dx, ay: oay+dy, ...(piv && {_pivot:piv}) };
+            px: opx+dx, py: opy+dy, ...(piv && {_pivot:piv}) };
         }
         case 'circle': return { ...shape, cx:shape.cx+dx, cy:shape.cy+dy, ...(piv && {_pivot:piv}) };
         case 'rect':   return { ...shape, x:shape.x+dx, y:shape.y+dy, ...(piv && {_pivot:piv}) };
@@ -754,10 +781,10 @@ function SketchPage({ page, projectId, onReload }) {
         if (nodeKey === 'p2') return { ...shape, x2: shape.x2+dx, y2: shape.y2+dy };
         break;
       case 'curve': {
-        const { ax: cax, ay: cay } = getCurveArcMid(shape);
-        if (nodeKey === 'p1')  return { ...shape, x1: shape.x1+dx, y1: shape.y1+dy };
-        if (nodeKey === 'p2')  return { ...shape, x2: shape.x2+dx, y2: shape.y2+dy };
-        if (nodeKey === 'arc') return { ...shape, ax: cax+dx, ay: cay+dy };
+        const { px: cpx, py: cpy } = getCurvePI(shape);
+        if (nodeKey === 'p1') return { ...shape, x1: shape.x1+dx, y1: shape.y1+dy };
+        if (nodeKey === 'p2') return { ...shape, x2: shape.x2+dx, y2: shape.y2+dy };
+        if (nodeKey === 'pi') return { ...shape, px: cpx+dx, py: cpy+dy };
         break;
       }
       case 'circle':
@@ -901,32 +928,29 @@ function SketchPage({ page, projectId, onReload }) {
       setDrawState({ type: 'line', x1: sp.x, y1: sp.y, x2: sp.x, y2: sp.y, layerId: activeLayerId });
     }
 
-    // ── Curve: 3-click  BC → EC → arc-midpoint ───────────────────────────────
+    // ── Curve: 3-click  BC → EC → PI ─────────────────────────────────────────
+    // Phase 1: click places BC; mouse shows dashed chord to cursor (EC preview).
+    // Phase 2: click places EC; mouse tracks PI — arc updates live.
+    // Phase 3: click places PI and commits the curve.
     if (tool === 'curve') {
       const sp = snapEnabled ? snapToNodes(pt) : pt;
       if (!drawState) {
         // Click 1: set BC
         setDrawState({ type: 'curve', phase: 1,
           x1: sp.x, y1: sp.y, x2: sp.x, y2: sp.y,
-          ax: sp.x, ay: sp.y, layerId: activeLayerId });
+          px: sp.x, py: sp.y, layerId: activeLayerId });
       } else if (drawState.phase === 1) {
-        // Click 2: lock EC, compute default arc-midpoint offset (chord/6 left of chord)
-        const ex = sp.x, ey = sp.y;
-        const len = Math.hypot(ex-drawState.x1, ey-drawState.y1);
-        const mx  = (drawState.x1+ex)/2, my = (drawState.y1+ey)/2;
-        const perpX = -(ey-drawState.y1)/(len||1);
-        const perpY =  (ex-drawState.x1)/(len||1);
-        const off   = len/6;
-        setDrawState(d => ({ ...d, phase: 2, x2: ex, y2: ey,
-          ax: mx + off*perpX, ay: my + off*perpY }));
+        // Click 2: lock EC; transition to phase 2 (PI follows mouse)
+        const ec = snapEnabled ? snapToNodes(pt) : pt;
+        setDrawState(d => ({ ...d, phase: 2, x2: ec.x, y2: ec.y,
+          px: ec.x, py: ec.y }));
       } else if (drawState.phase === 2) {
-        // Click 3: commit with current arc-midpoint (mouse position)
-        const { ax: fax, ay: fay } = drawState;
+        // Click 3: commit with current PI position
         const _crvId = newId();
         commitShapes([...shapes, { id: _crvId, type: 'curve',
           x1: drawState.x1, y1: drawState.y1,
           x2: drawState.x2, y2: drawState.y2,
-          ax: fax, ay: fay,
+          px: drawState.px,  py: drawState.py,
           stroke: STROKE, strokeWidth: STROKE_W,
           layerId: drawState.layerId || activeLayerId }]);
         setSelectedId(_crvId);
@@ -1088,11 +1112,11 @@ function SketchPage({ page, projectId, onReload }) {
     }
 
     // ── Apply snap during drawing ─────────────────────────────────────────────
-    // Phase 2 of curve (arc-midpoint placement) is free-form — no endpoint snap.
+    // Curve phase 2 (PI placement) is free-form — no endpoint snap on the PI.
     let pt = rawPt;
     if (snapEnabled && drawState) {
-      const isCurveArc = drawState.type === 'curve' && drawState.phase === 2;
-      if (!isCurveArc) pt = snapToNodes(rawPt);
+      const isCurvePI = drawState.type === 'curve' && drawState.phase === 2;
+      if (!isCurvePI) pt = snapToNodes(rawPt);
       else setSnapPoint(null);
     } else {
       setSnapPoint(null);
@@ -1107,8 +1131,8 @@ function SketchPage({ page, projectId, onReload }) {
         // EC tracks snapped mouse (phase 1: choosing second endpoint)
         setDrawState(d => ({ ...d, x2: pt.x, y2: pt.y }));
       } else if (drawState.phase === 2) {
-        // Arc-midpoint tracks raw mouse — user is shaping the arc freely
-        setDrawState(d => ({ ...d, ax: rawPt.x, ay: rawPt.y }));
+        // PI tracks raw mouse — user is shaping the curve by moving the PI
+        setDrawState(d => ({ ...d, px: rawPt.x, py: rawPt.y }));
       }
     } else if (drawState.type === 'circle') {
       const r = Math.hypot(pt.x - drawState.cx, pt.y - drawState.cy);
@@ -1191,31 +1215,29 @@ function SketchPage({ page, projectId, onReload }) {
       if (s.type === 'line') {
         if (distToSegment(tp, {x:s.x1,y:s.y1}, {x:s.x2,y:s.y2}) < thresh) return s;
       } else if (s.type === 'curve') {
-        const cam  = getCurveArcMid(s);
-        const carc = arcCenter(s.x1, s.y1, s.x2, s.y2, cam.ax, cam.ay);
+        const { px: cpx, py: cpy } = getCurvePI(s);
+        const carc = computeArcFromPI(s.x1, s.y1, s.x2, s.y2, cpx, cpy);
         if (carc) {
-          // Loose pre-filter: bail if tp is nowhere near the circle.
-          const dtc = Math.hypot(tp.x - carc.cx, tp.y - carc.cy);
-          if (Math.abs(dtc - carc.R) < thresh * 4) {
-            // Determine arc direction (CW or CCW) by checking whether M falls
-            // in the CW span from A to B or the CCW span.
-            const angA = Math.atan2(s.y1  - carc.cy, s.x1  - carc.cx);
-            const angM = Math.atan2(cam.ay - carc.cy, cam.ax - carc.cx);
-            const angB = Math.atan2(s.y2   - carc.cy, s.x2  - carc.cx);
-            // Normalise to [0, 2π) relative to angA
-            const cw = a => { let r = a - angA; while (r < 0) r += 2*Math.PI; while (r >= 2*Math.PI) r -= 2*Math.PI; return r; };
-            const mCW = cw(angM), bCW = cw(angB);
-            // mCW ≤ bCW → M is before B going CW → arc travels CW
-            const dir  = (mCW <= bCW) ? 1 : -1;
-            const span = (dir === 1) ? bCW : (2 * Math.PI - bCW);
-            // Sample the arc at ~6 px intervals and test distance to tp
-            const N = Math.max(10, Math.ceil(span * carc.R / 6));
-            const t2 = thresh * thresh;
-            for (let j = 0; j <= N; j++) {
-              const a  = angA + dir * (j / N) * span;
-              const dx = tp.x - (carc.cx + carc.R * Math.cos(a));
-              const dy = tp.y - (carc.cy + carc.R * Math.sin(a));
-              if (dx * dx + dy * dy < t2) { return s; }
+          const { cx, cy, R } = carc;
+          // Quick pre-filter: skip if tp is nowhere near the circle ring
+          const dtc = Math.hypot(tp.x - cx, tp.y - cy);
+          if (Math.abs(dtc - R) < thresh * 4) {
+            // Fine test: is tp within thresh of the arc radius?
+            if (Math.abs(dtc - R) < thresh) {
+              // Verify tp falls on the drawn arc segment (BC→EC in the correct sweep direction)
+              // Sweep direction is determined by which side of BC→EC the PI is on.
+              const cross = (cpx - s.x1) * (s.y2 - s.y1) - (cpy - s.y1) * (s.x2 - s.x1);
+              const sweepCW = cross < 0;   // true → CW arc (sweep=1 in SVG)
+              const angA = Math.atan2(s.y1  - cy, s.x1  - cx);
+              const angB = Math.atan2(s.y2  - cy, s.x2  - cx);
+              const angP = Math.atan2(tp.y  - cy, tp.x  - cx);
+              // Normalise angB and angP relative to angA in the sweep direction
+              const norm = sweepCW
+                ? a => { let r = angA - a; while (r < 0) r += 2*Math.PI; return r; }
+                : a => { let r = a - angA; while (r < 0) r += 2*Math.PI; return r; };
+              const nB = norm(angB), nP = norm(angP);
+              // Also handle large arcs (Δ > 180°) — nB tells us the arc span
+              if (nP <= nB + 1e-6) return s;
             }
           }
         } else {
@@ -1360,8 +1382,8 @@ function SketchPage({ page, projectId, onReload }) {
       switch (s.type) {
         case 'line':   add(s.x1,s.y1); add(s.x2,s.y2); break;
         case 'curve': {
-          const { ax, ay } = getCurveArcMid(s);
-          add(s.x1,s.y1); add(s.x2,s.y2); add(ax,ay); break;
+          const { px, py } = getCurvePI(s);
+          add(s.x1,s.y1); add(s.x2,s.y2); add(px,py); break;
         }
         case 'circle':
           add(s.cx-s.r,s.cy); add(s.cx+s.r,s.cy);
@@ -1420,8 +1442,8 @@ function SketchPage({ page, projectId, onReload }) {
           stroke={s.stroke} strokeWidth={s.strokeWidth} strokeLinecap="round" style={sel} />;
         break;
       case 'curve': {
-        const { ax: rax, ay: ray } = getCurveArcMid(s);
-        inner = <path d={arcPath(s.x1, s.y1, s.x2, s.y2, rax, ray)}
+        const { px: rpx, py: rpy } = getCurvePI(s);
+        inner = <path d={arcPath(s.x1, s.y1, s.x2, s.y2, rpx, rpy)}
           stroke={s.stroke} strokeWidth={s.strokeWidth} fill="none" strokeLinecap="round" style={sel} />;
         break;
       }
@@ -1468,7 +1490,7 @@ function SketchPage({ page, projectId, onReload }) {
         case 'line':   nx = (s.x1+s.x2)/2; ny = (s.y1+s.y2)/2; break;
         case 'circle': nx = s.cx;           ny = s.cy;           break;
         case 'rect':   nx = s.x + s.w/2;   ny = s.y + s.h/2;   break;
-        case 'curve':  { const { ax, ay } = getCurveArcMid(s); nx = ax; ny = ay; break; }
+        case 'curve':  { const { px, py } = getCurvePI(s); nx = px; ny = py; break; }
         default: return null;
       }
       return dimTextEl(nx, ny, 0, s.ntsLabel + ' *', ps);
@@ -1500,15 +1522,15 @@ function SketchPage({ page, projectId, onReload }) {
         return D(mx + nx*OFF, my + ny*OFF, ang, fmtDim(len));
       }
       case 'curve': {
-        const { ax: rax, ay: ray } = getCurveArcMid(s);
-        const cp = computeCurveProps(s.x1, s.y1, s.x2, s.y2, rax, ray);
+        const { px: rpx, py: rpy } = getCurvePI(s);
+        const cp = computeArcFromPI(s.x1, s.y1, s.x2, s.y2, rpx, rpy);
         if (!cp || cp.L < 5 * ps) return null;
-        // Push label outward from chord midpoint along the arc-midpoint direction
+        // Push labels outward from chord midpoint along the PI direction
         const mx = (s.x1+s.x2)/2, my = (s.y1+s.y2)/2;
-        const olen = Math.hypot(rax-mx, ray-my) || 1;
-        const ux = (rax-mx)/olen, uy = (ray-my)/olen;
-        const lx1 = rax + ux * OFF,            ly1 = ray + uy * OFF;
-        const lx2 = rax + ux * (OFF + 12*ps),  ly2 = ray + uy * (OFF + 12*ps);
+        const olen = Math.hypot(rpx-mx, rpy-my) || 1;
+        const ux = (rpx-mx)/olen, uy = (rpy-my)/olen;
+        const lx1 = rpx + ux * OFF,            ly1 = rpy + uy * OFF;
+        const lx2 = rpx + ux * (OFF + 12*ps),  ly2 = rpy + uy * (OFF + 12*ps);
         const r0 = rot ? rotatePoint(lx1, ly1, piv.x, piv.y, rot) : { x: lx1, y: ly1 };
         const r1 = rot ? rotatePoint(lx2, ly2, piv.x, piv.y, rot) : { x: lx2, y: ly2 };
         return <>
@@ -1564,21 +1586,30 @@ function SketchPage({ page, projectId, onReload }) {
             setDragNode({ shapeId: shape.id, nodeKey: n.key });
             setDragStart({ svgX: screenToWorld(ev).x, svgY: screenToWorld(ev).y, snapshot: shapes });
           };
-          if (n.key === 'arc') {
-            // Arc midpoint handle — green diamond with guide line from chord midpoint
+          if (n.key === 'pi') {
+            // PI handle — green diamond with guide line from chord midpoint to PI
             const midRaw = { x: (shape.x1+shape.x2)/2, y: (shape.y1+shape.y2)/2 };
             const midRot = rot ? rotatePoint(midRaw.x, midRaw.y, piv.x, piv.y, rot) : midRaw;
             const sz = 7 * ps;
             const pts = `${np.x},${np.y-sz} ${np.x+sz},${np.y} ${np.x},${np.y+sz} ${np.x-sz},${np.y}`;
             return (
-              <g key="arc">
+              <g key="pi">
+                {/* Dashed guide from chord midpoint to PI */}
                 <line x1={midRot.x} y1={midRot.y} x2={np.x} y2={np.y}
                   stroke="rgba(34,197,94,0.45)" strokeWidth={ps} strokeDasharray={`${4*ps},${3*ps}`}
                   style={{ pointerEvents: 'none' }} />
+                {/* PI diamond handle */}
                 <polygon points={pts}
                   fill="rgba(34,197,94,0.18)" stroke="#22C55E" strokeWidth={1.5 * ps}
                   style={{ cursor: 'move' }}
                   onPointerDown={onDown} />
+                {/* "PI" label */}
+                <text x={np.x} y={np.y - sz - 4*ps}
+                  textAnchor="middle" dominantBaseline="auto"
+                  fontSize={7.5 * ps} fontFamily="Courier New, monospace"
+                  fill="#22C55E" stroke="rgba(10,15,35,0.7)" strokeWidth={1.8*ps}
+                  paintOrder="stroke fill"
+                  style={{ pointerEvents: 'none', userSelect: 'none' }}>PI</text>
               </g>
             );
           }
@@ -1659,7 +1690,7 @@ function SketchPage({ page, projectId, onReload }) {
       }
       case 'curve':
         if (drawState.phase === 1) {
-          // Phase 1: show dashed chord BC→EC + chord length label
+          // Phase 1: dashed chord line BC→cursor + endpoint dot + chord length label
           const len = Math.hypot(drawState.x2-drawState.x1, drawState.y2-drawState.y1);
           const mx  = (drawState.x1+drawState.x2)/2, my = (drawState.y1+drawState.y2)/2;
           const nx  = len > 0 ? -(drawState.y2-drawState.y1)/len : 0;
@@ -1667,34 +1698,46 @@ function SketchPage({ page, projectId, onReload }) {
           const ang = Math.atan2(drawState.y2-drawState.y1, drawState.x2-drawState.x1) * 180/Math.PI;
           return <>
             <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />
+            <circle cx={drawState.x1} cy={drawState.y1} r={4*ps} fill="#3B82F6" opacity={0.7} />
             {showDims && len >= 5*ps && dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtDim(len), ps)}
           </>;
         } else {
-          // Phase 2: live circular arc + green diamond at arc-midpoint + guide dashes
-          const { ax: pax, ay: pay } = drawState;
-          const arcD = arcPath(drawState.x1, drawState.y1, drawState.x2, drawState.y2, pax, pay);
+          // Phase 2: live circular arc from BC to EC shaped by PI cursor position.
+          // Construction lines: dashed back-tangent (BC→PI) and forward-tangent (PI→EC).
+          const { px: ppx, py: ppy } = drawState;
+          const arcD = arcPath(drawState.x1, drawState.y1, drawState.x2, drawState.y2, ppx, ppy);
+          const cp   = showDims ? computeArcFromPI(drawState.x1, drawState.y1, drawState.x2, drawState.y2, ppx, ppy) : null;
           const midX = (drawState.x1+drawState.x2)/2, midY = (drawState.y1+drawState.y2)/2;
-          const sz = 6;
-          const dpts = `${pax},${pay-sz} ${pax+sz},${pay} ${pax},${pay+sz} ${pax-sz},${pay}`;
-          const aInfo = arcCenter(drawState.x1, drawState.y1, drawState.x2, drawState.y2, pax, pay);
-          const cp   = showDims ? computeCurveProps(drawState.x1, drawState.y1, drawState.x2, drawState.y2, pax, pay) : null;
-          const olen = Math.hypot(pax-midX, pay-midY) || 1;
-          const ux   = (pax-midX)/olen, uy = (pay-midY)/olen;
+          const sz   = 7 * ps;
+          const dpts = `${ppx},${ppy-sz} ${ppx+sz},${ppy} ${ppx},${ppy+sz} ${ppx-sz},${ppy}`;
+          const olen = Math.hypot(ppx-midX, ppy-midY) || 1;
+          const ux   = (ppx-midX)/olen, uy = (ppy-midY)/olen;
           return <>
+            {/* Live arc */}
             <path d={arcD} {...props} />
-            <line x1={midX} y1={midY} x2={pax} y2={pay}
-              stroke="rgba(34,197,94,0.5)" strokeWidth={1} strokeDasharray="4,3" />
-            <polygon points={dpts} fill="rgba(34,197,94,0.25)" stroke="#22C55E" strokeWidth={1.5} opacity={0.9} />
-            {/* BC and EC dot indicators */}
-            <circle cx={drawState.x1} cy={drawState.y1} r={4} fill="#3B82F6" opacity={0.6} />
-            <circle cx={drawState.x2} cy={drawState.y2} r={4} fill="#3B82F6" opacity={0.6} />
-            {/* Radius indicator: faint line from centre to arc-midpoint */}
-            {aInfo && <line x1={aInfo.cx} y1={aInfo.cy} x2={pax} y2={pay}
-              stroke="rgba(34,197,94,0.2)" strokeWidth={1} strokeDasharray="2,4" />}
-            {/* Live arc-length + radius labels */}
+            {/* Tangent construction lines: BC→PI and PI→EC */}
+            <line x1={drawState.x1} y1={drawState.y1} x2={ppx} y2={ppy}
+              stroke="rgba(34,197,94,0.4)" strokeWidth={ps} strokeDasharray={`${4*ps},${3*ps}`}
+              style={{ pointerEvents: 'none' }} />
+            <line x1={ppx} y1={ppy} x2={drawState.x2} y2={drawState.y2}
+              stroke="rgba(34,197,94,0.4)" strokeWidth={ps} strokeDasharray={`${4*ps},${3*ps}`}
+              style={{ pointerEvents: 'none' }} />
+            {/* BC and EC endpoint dots */}
+            <circle cx={drawState.x1} cy={drawState.y1} r={4*ps} fill="#3B82F6" opacity={0.7} />
+            <circle cx={drawState.x2} cy={drawState.y2} r={4*ps} fill="#3B82F6" opacity={0.7} />
+            {/* PI diamond handle */}
+            <polygon points={dpts} fill="rgba(34,197,94,0.25)" stroke="#22C55E"
+              strokeWidth={1.5*ps} opacity={0.95} style={{ pointerEvents: 'none' }} />
+            <text x={ppx} y={ppy - sz - 4*ps}
+              textAnchor="middle" dominantBaseline="auto"
+              fontSize={7.5*ps} fontFamily="Courier New, monospace"
+              fill="#22C55E" stroke="rgba(10,15,35,0.7)" strokeWidth={1.8*ps}
+              paintOrder="stroke fill"
+              style={{ pointerEvents: 'none', userSelect: 'none' }}>PI</text>
+            {/* Live arc-length + radius labels near PI */}
             {showDims && cp && cp.L >= 5*ps && <>
-              {dimTextEl(pax + ux*OFF,           pay + uy*OFF,           0, `L ${fmtDim(cp.L)}`, ps)}
-              {dimTextEl(pax + ux*(OFF + 12*ps), pay + uy*(OFF + 12*ps), 0, `R ${fmtDim(cp.R)}`, ps)}
+              {dimTextEl(ppx + ux*OFF,           ppy + uy*OFF,           0, `L ${fmtDim(cp.L)}`, ps)}
+              {dimTextEl(ppx + ux*(OFF + 12*ps), ppy + uy*(OFF + 12*ps), 0, `R ${fmtDim(cp.R)}`, ps)}
             </>}
           </>;
         }
@@ -2008,8 +2051,8 @@ function SketchPage({ page, projectId, onReload }) {
           {/* Curve draw-phase live preview (read-only badge) */}
           {showValueCard && (() => {
             if (!drawState || drawState.type !== 'curve' || drawState.phase !== 2) return null;
-            const cp = computeCurveProps(drawState.x1, drawState.y1,
-                                         drawState.x2, drawState.y2, drawState.ax, drawState.ay);
+            const cp = computeArcFromPI(drawState.x1, drawState.y1,
+                                       drawState.x2, drawState.y2, drawState.px, drawState.py);
             if (!cp) return null;
             const lStyle = { color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 };
             const rStyle = { display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.6 };
