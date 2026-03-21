@@ -601,7 +601,9 @@ function SketchPage({ page, projectId, onReload }) {
   // svgSizeRef: raw CSS pixel dimensions of the SVG container (updated by ResizeObserver).
   // Used to compute pixelScale (ps) = viewBox.w / svgSizeRef.w = world-units per CSS pixel.
   // ps = 1.0 at zoom:1, ps = 0.5 at zoom:2, etc.
-  const svgSizeRef    = useRef({ w: 800, h: 600 });
+  // Seeded from page.containerSize so the ResizeObserver's proportional scale
+  // calculation is based on the saved container size, not the 800×600 default.
+  const svgSizeRef    = useRef(page.containerSize || { w: 800, h: 600 });
   // ── Zoom / Pan refs ────────────────────────────────────────────────────────
   // activePtrsRef: tracks all active pointer IDs and their client positions.
   //   When size >= 2 we're in pinch/pan mode; single-pointer drawing is suppressed.
@@ -617,11 +619,15 @@ function SketchPage({ page, projectId, onReload }) {
   // At zoom:1  → w = containerWidth, h = containerHeight (1:1 pixel mapping).
   // Zoom in    → shrink w and h (more world-space per pixel).
   // Pan        → shift x and y.
-  const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 800, h: 600 });
+  // Restored from page.viewBox if available so the user sees the same view on reload.
+  const _initVB = page.viewBox || { x: 0, y: 0, w: 800, h: 600 };
+  const [viewBox, setViewBox] = useState(_initVB);
   // latestViewBoxRef: always holds the most recent viewBox value so that native
   // DOM event listeners (wheel, middle-mouse pan) can read it without stale closures.
   // Updated after every render via a no-dep-array useEffect below.
-  const latestViewBoxRef = useRef({ x: 0, y: 0, w: 800, h: 600 });
+  const latestViewBoxRef = useRef(_initVB);
+  // vbSaveRef: debounce timer for persisting the viewBox to DB.
+  const vbSaveRef = useRef(null);
 
   // Keep viewBox in sync with the actual container size, preserving zoom level
   // when the window resizes.
@@ -649,6 +655,21 @@ function SketchPage({ page, projectId, onReload }) {
   // Keep latestViewBoxRef current after every render so native event listeners
   // can always read the latest viewBox without being captured in stale closures.
   useEffect(() => { latestViewBoxRef.current = viewBox; });
+
+  // Persist viewBox and container size to DB after 1 s of inactivity so the user
+  // returns to the same pan position and zoom level on reload.
+  // Container size is saved alongside so the ResizeObserver can proportionally
+  // scale the zoom level correctly across different screen sizes.
+  useEffect(() => {
+    clearTimeout(vbSaveRef.current);
+    vbSaveRef.current = setTimeout(() => {
+      DB.updatePage(projectId, page.id, {
+        viewBox,
+        containerSize: svgSizeRef.current,
+      });
+    }, 1000);
+    return () => clearTimeout(vbSaveRef.current);
+  }, [viewBox.x, viewBox.y, viewBox.w, viewBox.h]);
 
   // ── Native canvas input handlers (wheel zoom, middle-mouse pan, context menu) ──
   // All three are attached as native DOM listeners on svgWrapRef rather than as
@@ -2315,40 +2336,44 @@ function SketchPage({ page, projectId, onReload }) {
             const _ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
             const niceVal    = niceScaleBarValue(scaleDenom, viewBox.w, svgSizeRef.current.w, units);
             const barWorldPx = realToPx(niceVal, scaleDenom, units);
-            const barScreenW = Math.round(barWorldPx / _ps);
+            const barScreenW = Math.max(4, Math.round(barWorldPx / _ps));
             const unitLabel  = units === 'ft' ? "'" : ' m';
             const niceStr    = niceVal < 1
               ? niceVal.toFixed(niceVal < 0.01 ? 3 : 2)
-              : niceVal >= 1000 ? (niceVal/1000).toFixed(1) + (units === 'm' ? ' km' : "'")
+              : niceVal >= 1000 ? (niceVal / 1000).toFixed(1) + (units === 'm' ? ' km' : "'")
               : String(niceVal);
+            // The canvas background is light (#FEFEFE grid paper) so we use dark ink
+            // colours and a semi-opaque backdrop pill for contrast.
             return (
               <div style={{
-                position: 'absolute', bottom: 12,
-                right: 16,
+                position: 'absolute', bottom: 12, right: 16,
                 pointerEvents: 'none', zIndex: 12,
-                display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3,
+                display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2,
+                background: 'rgba(255,255,255,0.72)',
+                border: '1px solid rgba(30,60,150,0.14)',
+                borderRadius: 5, padding: '3px 7px',
+                backdropFilter: 'blur(3px)',
               }}>
-                {/* Scale ratio label */}
+                {/* Scale ratio */}
                 <span style={{
-                  fontSize: 9, fontFamily: 'Courier New, monospace',
-                  color: 'rgba(255,255,255,0.38)', letterSpacing: '0.05em',
+                  fontSize: 8.5, fontFamily: 'Courier New, monospace',
+                  color: 'rgba(30,50,130,0.55)', letterSpacing: '0.06em',
                 }}>1 : {scaleDenom.toLocaleString()}</span>
-                {/* Bar + distance label */}
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2 }}>
-                  {/* Ticked bar: left cap | fill | right cap */}
-                  <svg width={barScreenW} height={8} style={{ overflow: 'visible' }}>
-                    <line x1={0} y1={4} x2={barScreenW} y2={4}
-                      stroke="rgba(255,255,255,0.65)" strokeWidth={2} />
-                    <line x1={0} y1={1} x2={0} y2={7}
-                      stroke="rgba(255,255,255,0.65)" strokeWidth={1.5} />
-                    <line x1={barScreenW} y1={1} x2={barScreenW} y2={7}
-                      stroke="rgba(255,255,255,0.65)" strokeWidth={1.5} />
-                  </svg>
-                  <span style={{
-                    fontSize: 9, fontFamily: 'Courier New, monospace',
-                    color: 'rgba(255,255,255,0.55)', textAlign: 'center', letterSpacing: '0.03em',
-                  }}>{niceStr}{niceVal >= 1000 ? '' : unitLabel}</span>
-                </div>
+                {/* Ticked bar */}
+                <svg width={barScreenW} height={7} style={{ overflow: 'visible', display: 'block' }}>
+                  <line x1={0} y1={3.5} x2={barScreenW} y2={3.5}
+                    stroke="rgba(20,50,140,0.7)" strokeWidth={1.5} />
+                  <line x1={0}          y1={0.5} x2={0}          y2={6.5}
+                    stroke="rgba(20,50,140,0.7)" strokeWidth={1.5} />
+                  <line x1={barScreenW} y1={0.5} x2={barScreenW} y2={6.5}
+                    stroke="rgba(20,50,140,0.7)" strokeWidth={1.5} />
+                </svg>
+                {/* Distance label */}
+                <span style={{
+                  fontSize: 8.5, fontFamily: 'Courier New, monospace',
+                  color: 'rgba(20,50,140,0.70)', textAlign: 'center', letterSpacing: '0.03em',
+                  width: '100%', textAlign: 'center',
+                }}>{niceStr}{niceVal >= 1000 ? '' : unitLabel}</span>
               </div>
             );
           })()}
