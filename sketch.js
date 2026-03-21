@@ -786,8 +786,29 @@ function SketchPage({ page, projectId, onReload }) {
         break;
       case 'curve': {
         const { px: cpx, py: cpy } = getCurvePI(shape);
-        if (nodeKey === 'p1') return { ...shape, x1: shape.x1+dx, y1: shape.y1+dy };
-        if (nodeKey === 'p2') return { ...shape, x2: shape.x2+dx, y2: shape.y2+dy };
+        if (nodeKey === 'p1' || nodeKey === 'p2') {
+          // Move the dragged endpoint; keep the other endpoint exactly fixed.
+          // Re-project PI onto the NEW chord's perp bisector at the same signed
+          // depth it had on the old chord — this preserves the curve's radius/
+          // bulge and prevents the arc from warping when an endpoint is adjusted.
+          const nx1 = nodeKey === 'p1' ? shape.x1 + dx : shape.x1;
+          const ny1 = nodeKey === 'p1' ? shape.y1 + dy : shape.y1;
+          const nx2 = nodeKey === 'p2' ? shape.x2 + dx : shape.x2;
+          const ny2 = nodeKey === 'p2' ? shape.y2 + dy : shape.y2;
+          // Signed depth of old PI along old perp bisector
+          const oldCh = Math.hypot(shape.x2-shape.x1, shape.y2-shape.y1) || 1;
+          const omx = (shape.x1+shape.x2)/2, omy = (shape.y1+shape.y2)/2;
+          const opX = -(shape.y2-shape.y1)/oldCh, opY = (shape.x2-shape.x1)/oldCh;
+          const t = (cpx - omx) * opX + (cpy - omy) * opY;
+          // Place PI at the same signed depth on the new chord's perp bisector
+          const newCh = Math.hypot(nx2-nx1, ny2-ny1) || 1;
+          const nmx = (nx1+nx2)/2, nmy = (ny1+ny2)/2;
+          const npX = -(ny2-ny1)/newCh, npY = (nx2-nx1)/newCh;
+          const minT = newCh * 0.05;
+          const ct = t >= 0 ? Math.max(minT, t) : Math.min(-minT, t);
+          return { ...shape, x1: nx1, y1: ny1, x2: nx2, y2: ny2,
+                   px: nmx + npX * ct, py: nmy + npY * ct };
+        }
         if (nodeKey === 'pi') {
           // Constrain PI to the perpendicular bisector of BC-EC.
           // The PI for a symmetric circular curve always lies on this line,
@@ -959,10 +980,15 @@ function SketchPage({ page, projectId, onReload }) {
           x1: sp.x, y1: sp.y, x2: sp.x, y2: sp.y,
           px: sp.x, py: sp.y, layerId: activeLayerId });
       } else if (drawState.phase === 1) {
-        // Click 2: lock EC; transition to phase 2 (PI follows mouse)
+        // Click 2: lock EC; transition to phase 2 (PI follows mouse).
+        // Guard inside the functional callback — on fast mobile taps the outer
+        // drawState closure may be stale (still phase 1) when click 3 fires.
+        // Without the guard the click-3 tap would re-run this branch and
+        // overwrite x2/y2 with the PI tap position.
         const ec = snapEnabled ? snapToNodes(pt) : pt;
-        setDrawState(d => ({ ...d, phase: 2, x2: ec.x, y2: ec.y,
-          px: ec.x, py: ec.y }));
+        setDrawState(d => d?.phase === 1
+          ? { ...d, phase: 2, x2: ec.x, y2: ec.y, px: ec.x, py: ec.y }
+          : d);
       } else if (drawState.phase === 2) {
         // Click 3: commit with current PI position
         const _crvId = newId();
@@ -1147,19 +1173,25 @@ function SketchPage({ page, projectId, onReload }) {
       setDrawState(d => ({ ...d, x2: pt.x, y2: pt.y }));
     } else if (drawState.type === 'curve') {
       if (drawState.phase === 1) {
-        // EC tracks snapped mouse (phase 1: choosing second endpoint)
-        setDrawState(d => ({ ...d, x2: pt.x, y2: pt.y }));
+        // EC tracks snapped mouse (phase 1: choosing second endpoint).
+        // Guard inside callback — stale closure may still read phase 1 on a
+        // fast follow-up move after click 2 transitions us to phase 2.
+        setDrawState(d => d?.phase === 1 ? { ...d, x2: pt.x, y2: pt.y } : d);
       } else if (drawState.phase === 2) {
         // PI tracks the perpendicular bisector of BC-EC — constraining lateral drift.
-        // Project raw mouse position onto the perp bisector through the chord midpoint.
-        const { x1, y1, x2, y2 } = drawState;
-        const chord = Math.hypot(x2-x1, y2-y1) || 1;
-        const mx = (x1+x2)/2, my = (y1+y2)/2;
-        const perpX = -(y2-y1)/chord, perpY = (x2-x1)/chord;
-        const t = (rawPt.x - mx) * perpX + (rawPt.y - my) * perpY;
-        const minT = chord * 0.05;
-        const ct = t >= 0 ? Math.max(minT, t) : Math.min(-minT, t);
-        setDrawState(d => ({ ...d, px: mx + perpX * ct, py: my + perpY * ct }));
+        // All BC/EC coords come from fresh `d` inside the callback so rapid moves
+        // after the phase 1→2 transition always use the locked EC position.
+        const _rawX = rawPt.x, _rawY = rawPt.y;
+        setDrawState(d => {
+          if (!d || d.phase !== 2) return d;
+          const chord = Math.hypot(d.x2-d.x1, d.y2-d.y1) || 1;
+          const mx = (d.x1+d.x2)/2, my = (d.y1+d.y2)/2;
+          const perpX = -(d.y2-d.y1)/chord, perpY = (d.x2-d.x1)/chord;
+          const t = (_rawX - mx) * perpX + (_rawY - my) * perpY;
+          const minT = chord * 0.05;
+          const ct = t >= 0 ? Math.max(minT, t) : Math.min(-minT, t);
+          return { ...d, px: mx + perpX * ct, py: my + perpY * ct };
+        });
       }
     } else if (drawState.type === 'circle') {
       const r = Math.hypot(pt.x - drawState.cx, pt.y - drawState.cy);
