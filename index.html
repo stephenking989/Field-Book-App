@@ -42,6 +42,7 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hyperformula@2.6.1/dist/hyperformula.full.min.js"></script>
 
   <style>
     *, *::before, *::after { box-sizing: border-box; }
@@ -150,6 +151,128 @@
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #DDD6C8; border-radius: 3px; }
 
+    /* ── Enhanced Data Page ──────────────────────────────────────── */
+    .dp-formula-bar {
+      background: #F0EBE0;
+      border-bottom: 1.5px solid #DDD6C8;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      gap: 6px;
+      min-height: 34px;
+      flex-shrink: 0;
+    }
+    .dp-formula-bar .cell-ref {
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      font-weight: 700;
+      color: #2D6A4F;
+      min-width: 36px;
+      text-align: center;
+      background: rgba(45,106,79,0.08);
+      border-radius: 4px;
+      padding: 2px 5px;
+      flex-shrink: 0;
+    }
+    .dp-formula-bar .fx-label {
+      font-size: 12px;
+      color: #9CA3AF;
+      font-style: italic;
+      flex-shrink: 0;
+    }
+    .dp-formula-bar input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      color: #2C2C2C;
+      min-width: 0;
+    }
+    .dp-cell-active {
+      background: rgba(45,106,79,0.10) !important;
+      outline: 2px solid #2D6A4F;
+      outline-offset: -1px;
+      z-index: 1;
+      position: relative;
+    }
+    .dp-cell-formula {
+      color: #1a5c3a !important;
+      font-style: italic;
+    }
+    .dp-cell-dms {
+      color: #1a3a8c !important;
+    }
+    .dp-cell-error {
+      color: #dc2626 !important;
+      font-size: 11px;
+    }
+    .dp-col-header {
+      cursor: pointer;
+      user-select: none;
+    }
+    .dp-col-header:hover { background: rgba(45,106,79,0.08) !important; }
+    .dp-col-header.active-col { background: rgba(45,106,79,0.15) !important; color: #1a3a2a !important; }
+    .dp-row-num {
+      width: 28px;
+      min-width: 28px;
+      max-width: 28px;
+      text-align: center;
+      font-size: 10px;
+      color: #9CA3AF;
+      font-family: 'Courier New', monospace;
+      background: #F0EBE0;
+      border-right: 1.5px solid #DDD6C8 !important;
+      padding: 0 2px;
+      cursor: default;
+      user-select: none;
+    }
+    .dp-row-num.active-row { background: rgba(45,106,79,0.12); color: #2D6A4F; font-weight: 700; }
+    .dp-toolbar {
+      background: #F0EBE0;
+      border-bottom: 1.5px solid #DDD6C8;
+      display: flex;
+      align-items: center;
+      padding: 4px 8px;
+      gap: 4px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+    .dp-toolbar button {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 5px;
+      border: 1px solid #DDD6C8;
+      background: white;
+      color: #2C2C2C;
+      font-family: 'Courier New', monospace;
+      cursor: pointer;
+      white-space: nowrap;
+      line-height: 1.4;
+    }
+    .dp-toolbar button:active { background: #D8F3DC; border-color: #2D6A4F; }
+    .dp-toolbar .dp-tb-sep { width: 1px; height: 18px; background: #DDD6C8; margin: 0 2px; flex-shrink: 0; }
+    .dp-toolbar .dp-tb-label { font-size: 10px; color: #9CA3AF; padding: 0 4px; }
+    .dp-col-type-badge {
+      display: inline-block;
+      font-size: 8px;
+      padding: 0 3px;
+      border-radius: 3px;
+      margin-left: 3px;
+      vertical-align: middle;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+    .dp-col-type-dms  { background: #dbeafe; color: #1d4ed8; }
+    .dp-col-type-num  { background: #d1fae5; color: #065f46; }
+    .dp-col-type-text { background: #f3f4f6; color: #6b7280; }
+    .dp-sum-row td {
+      background: #F0EBE0 !important;
+      font-weight: 700;
+      border-top: 2px solid #2D6A4F !important;
+      font-size: 12px;
+    }
     /* ── Animations ─────────────────────────────────────────────── */
     .screen-enter { animation: slideUp 0.18s ease-out; }
     @keyframes slideUp {
@@ -637,9 +760,14 @@
     function handleTypeSelect(type) {
       let pageData = { type };
       if (type === 'data') {
+        // Each column now carries: id, label, colType ('text'|'num'|'dms'), width
         const cols = [
-          { id: 'c1', label: '' }, { id: 'c2', label: '' }, { id: 'c3', label: '' },
-          { id: 'c4', label: '' }, { id: 'c5', label: '' }, { id: 'c6', label: '' },
+          { id: 'c1', label: 'Station', colType: 'text', width: 90 },
+          { id: 'c2', label: 'BS',      colType: 'num',  width: 80 },
+          { id: 'c3', label: 'HI',      colType: 'num',  width: 80 },
+          { id: 'c4', label: 'FS',      colType: 'num',  width: 80 },
+          { id: 'c5', label: 'Elev',    colType: 'num',  width: 80 },
+          { id: 'c6', label: 'Notes',   colType: 'text', width: 120 },
         ];
         const rows = Array.from({ length: 27 }, (_, i) => {
           const cells = {};
@@ -879,11 +1007,14 @@
   }
 
   function AddColumnsModal({ columns: initCols, onConfirm, onBack, onClose }) {
-    const [cols, setCols] = useState(initCols && initCols.length ? initCols : [{ id: 'col_' + Date.now(), label: '' }]);
+    const defaultCols = initCols && initCols.length
+      ? initCols
+      : [{ id: 'col_' + Date.now(), label: '', colType: 'num', width: 80 }];
+    const [cols, setCols] = useState(defaultCols);
 
     function addCol() {
       if (cols.length >= 10) return;
-      setCols([...cols, { id: 'col_' + Date.now() + '_' + Math.random().toString(36).slice(2), label: '' }]);
+      setCols([...cols, { id: 'col_' + Date.now() + '_' + Math.random().toString(36).slice(2), label: '', colType: 'num', width: 80 }]);
     }
     function removeCol(id) {
       if (cols.length <= 1) return;
@@ -892,8 +1023,13 @@
     function setLabel(id, label) {
       setCols(cols.map(c => c.id === id ? { ...c, label } : c));
     }
+    function setColType(id, colType) {
+      setCols(cols.map(c => c.id === id ? { ...c, colType } : c));
+    }
 
     const valid = cols.filter(c => c.label.trim()).length;
+    const typeColors = { text: '#6b7280', num: '#065f46', dms: '#1d4ed8' };
+    const typeLabels = { text: 'TXT', num: 'NUM', dms: 'DMS' };
 
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -903,7 +1039,8 @@
             <Ico.Back /> Back
           </button>
           <h2 className="text-lg font-bold text-fb-dark mb-1">Define Columns</h2>
-          <p className="text-fb-muted text-sm mb-5">Name each column for this data page. Up to 10 columns.</p>
+          <p className="text-fb-muted text-sm mb-1">Name each column and choose its type. Up to 10 columns.</p>
+          <p className="text-fb-muted text-xs mb-4 font-data">TXT = text/notes &nbsp;·&nbsp; NUM = decimal number &nbsp;·&nbsp; DMS = angle (°′″)</p>
 
           <div className="space-y-2 mb-4">
             {cols.map((col, i) => (
@@ -918,6 +1055,17 @@
                   autoFocus={i === 0}
                   className="flex-1 px-3 py-2 rounded-xl border-2 border-gray-200 focus:border-fb-mid outline-none text-fb-text text-sm font-data transition-colors"
                 />
+                {/* Type cycle button */}
+                <button
+                  onClick={() => {
+                    const cycle = { text: 'num', num: 'dms', dms: 'text' };
+                    setColType(col.id, cycle[col.colType || 'num']);
+                  }}
+                  className="px-2 py-1 rounded-lg border text-xs font-bold font-data flex-shrink-0"
+                  style={{ borderColor: typeColors[col.colType || 'num'], color: typeColors[col.colType || 'num'], background: typeColors[col.colType || 'num'] + '18' }}
+                  title="Tap to cycle: TXT → NUM → DMS">
+                  {typeLabels[col.colType || 'num']}
+                </button>
                 <button onClick={() => removeCol(col.id)} className="p-2 text-gray-300 active:text-red-400 flex-shrink-0">
                   <Ico.Trash />
                 </button>
@@ -1134,20 +1282,172 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // DMS ENGINE  — shared by DataPage
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Parse a DMS string entered by the user into decimal degrees.
+  // Accepts all of these formats:
+  //   "45 34 23"        → 45°34'23"  (space-separated — the primary fast-entry method)
+  //   "45 34"           → 45°34'00"
+  //   "45"              → 45°00'00"
+  //   "45.5"            → treated as decimal degrees (no spaces)
+  //   "45°34'23""       → classical DMS notation
+  //   "-45 34 23"       → negative (south / west bearings)
+  // Returns decimal degrees (number) or null if unparseable.
+  function parseDMSInput(raw) {
+    if (!raw || !raw.trim()) return null;
+    const s = raw.trim();
+    // Already a plain decimal number (no spaces, no degree symbol)
+    if (/^-?\d+(\.\d+)?$/.test(s)) return parseFloat(s);
+    // Space-separated: "D M S" or "D M" or just "D"
+    const spaceMatch = s.match(/^(-?)(\d+)\s+(\d+)(?:\s+(\d+(?:\.\d+)?))?$/);
+    if (spaceMatch) {
+      const sign = spaceMatch[1] === '-' ? -1 : 1;
+      const d = parseInt(spaceMatch[2], 10);
+      const m = parseInt(spaceMatch[3], 10);
+      const sec = spaceMatch[4] ? parseFloat(spaceMatch[4]) : 0;
+      if (m >= 60 || sec >= 60) return null;
+      return sign * (d + m / 60 + sec / 3600);
+    }
+    // Classical notation: 45°34'23" or 45d34m23s etc.
+    const classicMatch = s.match(/^(-?)(\d+)[°d]\s*(\d+)['\'m]\s*(\d+(?:\.\d+)?)["\"s]?$/);
+    if (classicMatch) {
+      const sign = classicMatch[1] === '-' ? -1 : 1;
+      const d = parseInt(classicMatch[2], 10);
+      const m = parseInt(classicMatch[3], 10);
+      const sec = parseFloat(classicMatch[4]);
+      if (m >= 60 || sec >= 60) return null;
+      return sign * (d + m / 60 + sec / 3600);
+    }
+    return null;
+  }
+
+  // Format decimal degrees as D°MM'SS.s" for display in DMS columns.
+  function formatDMS(dd) {
+    if (dd === null || dd === undefined || isNaN(dd)) return '';
+    const sign = dd < 0 ? '-' : '';
+    const abs  = Math.abs(dd);
+    const d    = Math.floor(abs);
+    const mf   = (abs - d) * 60;
+    const m    = Math.floor(mf);
+    const sf   = (mf - m) * 60;
+    const s    = Math.round(sf * 10) / 10;   // 1 decimal place on seconds
+    const ss   = s < 10 ? '0' + s.toFixed(1) : s.toFixed(1);
+    return `${sign}${d}°${String(m).padStart(2,'0')}'${ss}"`;
+  }
+
+  // Convert decimal degrees to a compact DMS string for formula storage.
+  // e.g. 45.5722... → "45 34 20.0" (space-separated, for re-parsing)
+  function ddToDMSParts(dd) {
+    if (dd === null || isNaN(dd)) return '';
+    const sign = dd < 0 ? '-' : '';
+    const abs  = Math.abs(dd);
+    const d    = Math.floor(abs);
+    const mf   = (abs - d) * 60;
+    const m    = Math.floor(mf);
+    const s    = Math.round((mf - m) * 600) / 10;
+    return `${sign}${d} ${m} ${s.toFixed(1)}`;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // HYPERFORMULA ENGINE  — one instance per DataPage mount
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Build a 2-D array of raw values suitable for HyperFormula from the page data.
+  // DMS columns store their decimal-degree equivalent so formulas work numerically.
+  function buildHFSheet(columns, rows) {
+    return rows.map(row =>
+      columns.map(col => {
+        const raw = (row.cells || {})[col.id] || '';
+        if (!raw.trim()) return '';
+        if (raw.startsWith('=')) return raw;   // formula — pass through
+        if ((col.colType || 'num') === 'dms') {
+          const dd = parseDMSInput(raw);
+          return dd !== null ? dd : raw;
+        }
+        const num = parseFloat(raw);
+        return isNaN(num) ? raw : num;
+      })
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // DATA PAGE
   // ─────────────────────────────────────────────────────────────────────────────
 
   function DataPage({ page, projectId, onReload }) {
-    const [rows, setRows] = useState(page.rows || []);
-    const [editingCol, setEditingCol] = useState(null);
-    const [newColName, setNewColName] = useState('');
     const columns = page.columns || [];
+    const [rows, setRows]               = useState(page.rows || []);
+    const [activeCell, setActiveCell]   = useState(null);   // { rowIdx, colIdx }
+    const [editingCell, setEditingCell] = useState(null);   // { rowIdx, colIdx }
+    const [editValue, setEditValue]     = useState('');
+    const [formulaBarVal, setFormulaBarVal] = useState('');
+    const [colModal, setColModal]       = useState(null);   // null | { col }
+    const [colModalForm, setColModalForm] = useState({});
+    const [templateModal, setTemplateModal] = useState(false);
+    const [hf, setHf]                   = useState(null);
+    const [calcResults, setCalcResults] = useState({});    // { 'r_xxx_cId': displayValue }
+    const inputRef  = useRef(null);
+    const fbInputRef = useRef(null);
+    const tableRef   = useRef(null);
 
+    // Sync rows when page changes
     useEffect(() => { setRows(page.rows || []); }, [page.id]);
+
+    // Initialise / refresh HyperFormula whenever rows or columns change
+    useEffect(() => {
+      if (typeof HyperFormula === 'undefined') return;
+      try {
+        const sheetData = buildHFSheet(columns, rows);
+        let instance;
+        if (hf) {
+          try { hf.destroy(); } catch(e) {}
+        }
+        instance = HyperFormula.buildFromArray(sheetData, {
+          licenseKey: 'gpl-v3',
+          precisionRounding: 10,
+        });
+        setHf(instance);
+        // Compute display values for every cell
+        const results = {};
+        rows.forEach((row, ri) => {
+          columns.forEach((col, ci) => {
+            const raw = (row.cells || {})[col.id] || '';
+            if (!raw.trim()) return;
+            if (raw.startsWith('=')) {
+              try {
+                const val = instance.getCellValue({ sheet: 0, row: ri, col: ci });
+                const colType = col.colType || 'num';
+                if (typeof val === 'number') {
+                  results[row.id + '_' + col.id] = colType === 'dms' ? formatDMS(val) : String(Math.round(val * 1e8) / 1e8);
+                } else if (val instanceof Error || (val && val.type)) {
+                  results[row.id + '_' + col.id] = '#ERR';
+                } else {
+                  results[row.id + '_' + col.id] = String(val ?? '');
+                }
+              } catch(e) {
+                results[row.id + '_' + col.id] = '#ERR';
+              }
+            } else if ((col.colType || 'num') === 'dms') {
+              const dd = parseDMSInput(raw);
+              if (dd !== null) results[row.id + '_' + col.id] = formatDMS(dd);
+            }
+          });
+        });
+        setCalcResults(results);
+      } catch(e) {
+        console.warn('[DataPage] HyperFormula error:', e);
+      }
+    }, [rows, page.id]);
 
     function persistRows(updated) {
       setRows(updated);
       DB.updatePage(projectId, page.id, { rows: updated });
+    }
+
+    function persistColumns(updated) {
+      DB.updatePage(projectId, page.id, { columns: updated });
+      onReload();
     }
 
     function addRow() {
@@ -1157,106 +1457,481 @@
       persistRows([...rows, row]);
     }
 
-    function updateCell(rowId, colId, val) {
-      persistRows(rows.map(r => r.id === rowId ? { ...r, cells: { ...r.cells, [colId]: val } } : r));
+    function addRows(n) {
+      const newRows = Array.from({ length: n }, (_, i) => {
+        const cells = {};
+        columns.forEach(c => { cells[c.id] = ''; });
+        return { id: 'r_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2), cells };
+      });
+      persistRows([...rows, ...newRows]);
     }
 
     function deleteRow(rowId) {
       persistRows(rows.filter(r => r.id !== rowId));
     }
 
-    function startRenameCol(col) {
-      setEditingCol(col.id);
-      setNewColName(col.label);
+    function updateCell(rowId, colId, val) {
+      persistRows(rows.map(r => r.id === rowId ? { ...r, cells: { ...r.cells, [colId]: val } } : r));
     }
 
-    function saveColRename() {
-      if (!newColName.trim()) { setEditingCol(null); return; }
-      const updated = columns.map(c => c.id === editingCol ? { ...c, label: newColName.trim() } : c);
-      DB.updatePage(projectId, page.id, { columns: updated });
-      onReload();
-      setEditingCol(null);
+    // ── Cell interaction handlers ───────────────────────────────────────
+
+    function colLetter(ci) {
+      // A, B, C ... Z, AA, AB ...
+      let s = '';
+      let n = ci + 1;
+      while (n > 0) { s = String.fromCharCode(64 + (n % 26 || 26)) + s; n = Math.floor((n - 1) / 26); }
+      return s;
     }
+
+    function cellRef(ri, ci) { return colLetter(ci) + (ri + 1); }
+
+    function activateCell(ri, ci) {
+      setActiveCell({ rowIdx: ri, colIdx: ci });
+      const row = rows[ri];
+      const col = columns[ci];
+      if (!row || !col) return;
+      const raw = (row.cells || {})[col.id] || '';
+      setFormulaBarVal(raw);
+      // Focus the table container so grid-level keyboard events fire
+      setTimeout(() => { if (tableRef.current) tableRef.current.focus(); }, 0);
+    }
+
+    function startEdit(ri, ci) {
+      const row = rows[ri];
+      const col = columns[ci];
+      if (!row || !col) return;
+      const raw = (row.cells || {})[col.id] || '';
+      setEditingCell({ rowIdx: ri, colIdx: ci });
+      setEditValue(raw);
+      setFormulaBarVal(raw);
+      setTimeout(() => inputRef.current && inputRef.current.focus(), 0);
+    }
+
+    function commitEdit(ri, ci, val) {
+      const row = rows[ri];
+      const col = columns[ci];
+      if (!row || !col) { setEditingCell(null); return; }
+      // For DMS columns: if user typed space-separated numbers, keep as-is (raw storage)
+      // The display layer will format it; HF gets the decimal equivalent
+      updateCell(row.id, col.id, val.trim());
+      setEditingCell(null);
+      setFormulaBarVal(val.trim());
+    }
+
+    function handleCellKeyDown(e, ri, ci) {
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        commitEdit(ri, ci, editValue);
+        // Move to next cell
+        if (e.key === 'Tab') {
+          const nextCi = e.shiftKey ? ci - 1 : ci + 1;
+          if (nextCi >= 0 && nextCi < columns.length) { activateCell(ri, nextCi); startEdit(ri, nextCi); }
+          else if (!e.shiftKey && ri + 1 < rows.length) { activateCell(ri + 1, 0); startEdit(ri + 1, 0); }
+        } else {
+          if (ri + 1 < rows.length) { activateCell(ri + 1, ci); startEdit(ri + 1, ci); }
+        }
+      } else if (e.key === 'Escape') {
+        setEditingCell(null);
+        setEditValue('');
+      }
+    }
+
+    // ── Grid-level keyboard handler (fires when a cell is selected but NOT in edit mode) ──
+    function handleGridKeyDown(e) {
+      // Ignore if focus is inside an input (formula bar or inline cell editor)
+      if (e.target.tagName === 'INPUT') return;
+      if (!activeCell) return;
+      const { rowIdx: ri, colIdx: ci } = activeCell;
+
+      // Delete / Backspace → clear the selected cell
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        const row = rows[ri];
+        const col = columns[ci];
+        if (row && col) {
+          updateCell(row.id, col.id, '');
+          setFormulaBarVal('');
+        }
+        return;
+      }
+
+      // Arrow key navigation (no edit mode)
+      if (e.key === 'ArrowDown')  { e.preventDefault(); if (ri + 1 < rows.length)    activateCell(ri + 1, ci); return; }
+      if (e.key === 'ArrowUp')    { e.preventDefault(); if (ri - 1 >= 0)              activateCell(ri - 1, ci); return; }
+      if (e.key === 'ArrowRight') { e.preventDefault(); if (ci + 1 < columns.length) activateCell(ri, ci + 1); return; }
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); if (ci - 1 >= 0)             activateCell(ri, ci - 1); return; }
+
+      // Enter / F2 → enter edit mode keeping existing value
+      if (e.key === 'Enter' || e.key === 'F2') {
+        e.preventDefault();
+        startEdit(ri, ci);
+        return;
+      }
+
+      // Printable character → enter edit mode, discard existing value, pre-fill with typed char
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        const row = rows[ri];
+        const col = columns[ci];
+        if (!row || !col) return;
+        setEditingCell({ rowIdx: ri, colIdx: ci });
+        setEditValue(e.key);
+        setFormulaBarVal(e.key);
+        setTimeout(() => {
+          if (inputRef.current) {
+            inputRef.current.focus();
+            // Move cursor to end
+            inputRef.current.setSelectionRange(1, 1);
+          }
+        }, 0);
+      }
+    }
+
+    function handleFormulaBarCommit(e) {
+      if (e.key === 'Enter' && activeCell) {
+        const { rowIdx: ri, colIdx: ci } = activeCell;
+        const row = rows[ri];
+        const col = columns[ci];
+        if (row && col) {
+          updateCell(row.id, col.id, formulaBarVal.trim());
+          setEditingCell(null);
+        }
+      }
+    }
+
+    // ── Column modal helpers ──────────────────────────────────────────
+
+    function openColModal(col) {
+      setColModal({ col });
+      setColModalForm({ label: col.label, colType: col.colType || 'num', width: col.width || 80 });
+    }
+
+    function saveColModal() {
+      if (!colModalForm.label.trim()) { setColModal(null); return; }
+      const updated = columns.map(c =>
+        c.id === colModal.col.id
+          ? { ...c, label: colModalForm.label.trim(), colType: colModalForm.colType, width: colModalForm.width }
+          : c
+      );
+      persistColumns(updated);
+      setColModal(null);
+    }
+
+    function deleteCol(colId) {
+      if (!window.confirm('Delete this column and all its data?')) return;
+      const updated = columns.filter(c => c.id !== colId);
+      const updatedRows = rows.map(r => {
+        const cells = { ...r.cells };
+        delete cells[colId];
+        return { ...r, cells };
+      });
+      DB.updatePage(projectId, page.id, { columns: updated, rows: updatedRows });
+      onReload();
+      setColModal(null);
+    }
+
+    function addColumn() {
+      const newId = 'c_' + Date.now();
+      const updated = [...columns, { id: newId, label: 'Col ' + (columns.length + 1), colType: 'num', width: 80 }];
+      const updatedRows = rows.map(r => ({ ...r, cells: { ...r.cells, [newId]: '' } }));
+      DB.updatePage(projectId, page.id, { columns: updated, rows: updatedRows });
+      onReload();
+    }
+
+    // ── Template presets ──────────────────────────────────────────────
+
+    const TEMPLATES = [
+      {
+        name: 'Level Loop',
+        desc: 'BS · HI · FS · Elev · Check',
+        cols: [
+          { id: 'tc1', label: 'Station', colType: 'text', width: 90 },
+          { id: 'tc2', label: 'BS',      colType: 'num',  width: 75 },
+          { id: 'tc3', label: 'HI',      colType: 'num',  width: 85 },
+          { id: 'tc4', label: 'FS',      colType: 'num',  width: 75 },
+          { id: 'tc5', label: 'Elev',    colType: 'num',  width: 85 },
+          { id: 'tc6', label: 'Check',   colType: 'num',  width: 75 },
+          { id: 'tc7', label: 'Notes',   colType: 'text', width: 120 },
+        ],
+      },
+      {
+        name: 'Angle Observations',
+        desc: 'Pt · Circle ① · Circle ② · Mean · Notes',
+        cols: [
+          { id: 'ta1', label: 'To Pt',    colType: 'text', width: 75 },
+          { id: 'ta2', label: 'Circle 1', colType: 'dms',  width: 100 },
+          { id: 'ta3', label: 'Circle 2', colType: 'dms',  width: 100 },
+          { id: 'ta4', label: 'Circle 3', colType: 'dms',  width: 100 },
+          { id: 'ta5', label: 'Mean',     colType: 'dms',  width: 100 },
+          { id: 'ta6', label: 'Notes',    colType: 'text', width: 120 },
+        ],
+      },
+      {
+        name: 'Traverse',
+        desc: 'Leg · Bearing · Distance · Lat · Dep · Notes',
+        cols: [
+          { id: 'tv1', label: 'Leg',      colType: 'text', width: 60 },
+          { id: 'tv2', label: 'Bearing',  colType: 'dms',  width: 100 },
+          { id: 'tv3', label: 'Distance', colType: 'num',  width: 90 },
+          { id: 'tv4', label: 'Latitude', colType: 'num',  width: 90 },
+          { id: 'tv5', label: 'Departure',colType: 'num',  width: 90 },
+          { id: 'tv6', label: 'Notes',    colType: 'text', width: 120 },
+        ],
+      },
+      {
+        name: 'Stadia / Topo',
+        desc: 'Station · H.Dist · Vert% · Rod · HI · Elev · Desc',
+        cols: [
+          { id: 'ts1', label: 'Station', colType: 'text', width: 80 },
+          { id: 'ts2', label: 'H.Dist',  colType: 'num',  width: 75 },
+          { id: 'ts3', label: 'Vert%',   colType: 'num',  width: 70 },
+          { id: 'ts4', label: 'Rod',     colType: 'num',  width: 70 },
+          { id: 'ts5', label: 'HI',      colType: 'num',  width: 70 },
+          { id: 'ts6', label: 'Elev',    colType: 'num',  width: 80 },
+          { id: 'ts7', label: 'Desc',    colType: 'text', width: 120 },
+        ],
+      },
+      {
+        name: 'Construction Stakes',
+        desc: 'Station · + · HI · Cut/Fill · Elev · Grade · Notes',
+        cols: [
+          { id: 'cs1', label: 'Station', colType: 'text', width: 80 },
+          { id: 'cs2', label: '+',       colType: 'num',  width: 60 },
+          { id: 'cs3', label: 'HI',      colType: 'num',  width: 70 },
+          { id: 'cs4', label: 'Cut/Fill',colType: 'num',  width: 80 },
+          { id: 'cs5', label: 'Elev',    colType: 'num',  width: 80 },
+          { id: 'cs6', label: 'Grade',   colType: 'num',  width: 70 },
+          { id: 'cs7', label: 'Notes',   colType: 'text', width: 120 },
+        ],
+      },
+    ];
+
+    function applyTemplate(tpl) {
+      const newRows = Array.from({ length: 27 }, (_, i) => {
+        const cells = {};
+        tpl.cols.forEach(c => { cells[c.id] = ''; });
+        return { id: 'r_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2), cells };
+      });
+      DB.updatePage(projectId, page.id, { columns: tpl.cols, rows: newRows });
+      onReload();
+      setTemplateModal(false);
+    }
+
+    // ── Column sum footer ─────────────────────────────────────────────
+
+    function colSum(col) {
+      if ((col.colType || 'num') === 'text') return '';
+      let total = 0;
+      let hasNum = false;
+      rows.forEach(row => {
+        const raw = (row.cells || {})[col.id] || '';
+        if (!raw.trim()) return;
+        if (raw.startsWith('=')) {
+          const key = row.id + '_' + col.id;
+          const disp = calcResults[key];
+          if (disp && !disp.startsWith('#')) { const n = parseFloat(disp.replace(/[°'"]/g, '')); if (!isNaN(n)) { total += n; hasNum = true; } }
+        } else if ((col.colType || 'num') === 'dms') {
+          const dd = parseDMSInput(raw);
+          if (dd !== null) { total += dd; hasNum = true; }
+        } else {
+          const n = parseFloat(raw);
+          if (!isNaN(n)) { total += n; hasNum = true; }
+        }
+      });
+      if (!hasNum) return '';
+      return (col.colType || 'num') === 'dms' ? formatDMS(total) : (Math.round(total * 1e6) / 1e6).toString();
+    }
+
+    // ── Display value for a cell ──────────────────────────────────────
+
+    function displayValue(row, col) {
+      const raw = (row.cells || {})[col.id] || '';
+      if (!raw.trim()) return { text: '', isFormula: false, isDMS: false, isError: false };
+      const key = row.id + '_' + col.id;
+      if (raw.startsWith('=')) {
+        const res = calcResults[key] || '';
+        const isError = res === '#ERR' || res.startsWith('#');
+        const isDMS = (col.colType || 'num') === 'dms' && !isError;
+        return { text: res, isFormula: true, isDMS, isError };
+      }
+      if ((col.colType || 'num') === 'dms') {
+        const disp = calcResults[key] || formatDMS(parseDMSInput(raw));
+        return { text: disp || raw, isFormula: false, isDMS: true, isError: false };
+      }
+      return { text: raw, isFormula: false, isDMS: false, isError: false };
+    }
+
+    // ── Column width ──────────────────────────────────────────────────
+
+    const colWidth = (col) => col.width || 80;
+
+    // ── Active cell info for formula bar ─────────────────────────────
+
+    const activeCellRef = activeCell
+      ? cellRef(activeCell.rowIdx, activeCell.colIdx)
+      : '';
+
+    const typeColors = { text: '#6b7280', num: '#065f46', dms: '#1d4ed8' };
+    const typeLabels = { text: 'TXT', num: 'NUM', dms: 'DMS' };
 
     if (columns.length === 0) {
       return (
         <div className="page-ruled flex flex-col items-center justify-center py-16 px-6 text-center">
-          <p className="text-fb-muted text-sm">No columns defined for this page.</p>
+          <p className="text-fb-muted text-sm mb-4">No columns defined for this page.</p>
+          <button onClick={() => setTemplateModal(true)}
+            className="px-5 py-2.5 rounded-xl text-white font-semibold text-sm active:opacity-80"
+            style={{ background: '#2D6A4F' }}>
+            Choose a Template
+          </button>
         </div>
       );
     }
 
-    // Width = max of (header label, widest cell value), capped at 220px
-    const colWidth = (col) => {
-      const PX_PER_CHAR = 8.4; // Courier New ~13px
-      const PADDING = 20;
-      const headerPx = Math.max(52, (col.label || '').length * PX_PER_CHAR + PADDING);
-      const maxCellPx = rows.reduce((max, row) => {
-        const len = ((row.cells || {})[col.id] || '').length * PX_PER_CHAR + PADDING;
-        return len > max ? len : max;
-      }, 0);
-      return Math.min(220, Math.max(headerPx, maxCellPx, 52));
-    };
-
     return (
-      <div>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
 
-        {/* Rename column modal */}
-        {editingCol && (
-          <div className="modal-backdrop" onClick={() => setEditingCol(null)}>
-            <div className="modal-sheet" onClick={e => e.stopPropagation()}>
-              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
-              <h2 className="text-lg font-bold text-fb-dark mb-4">Rename Column</h2>
-              <input
-                type="text" value={newColName} onChange={e => setNewColName(e.target.value)}
-                autoFocus maxLength={20}
-                className="w-full px-3 py-2.5 rounded-xl border-2 border-fb-mid outline-none text-fb-text text-sm font-data"
-                onKeyDown={e => e.key === 'Enter' && saveColRename()}
-              />
-              <div className="flex gap-3 mt-5">
-                <button onClick={() => setEditingCol(null)} className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold text-sm">Cancel</button>
-                <button onClick={saveColRename} className="flex-1 py-3 rounded-xl text-white font-semibold text-sm" style={{ background: '#2D6A4F' }}>Save</button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* ── Toolbar ── */}
+        <div className="dp-toolbar">
+          <span className="dp-tb-label">Insert:</span>
+          <button onClick={addRow} title="Add 1 row">+ Row</button>
+          <button onClick={() => addRows(5)} title="Add 5 rows">+5 Rows</button>
+          <button onClick={addColumn} title="Add column">+ Col</button>
+          <div className="dp-tb-sep" />
+          <span className="dp-tb-label">Sheet:</span>
+          <button onClick={() => setTemplateModal(true)} title="Apply a surveyor template">Templates</button>
+          <div className="dp-tb-sep" />
+          <span className="dp-tb-label">Formulas:</span>
+          <button onClick={() => {
+            if (!activeCell) return;
+            const { rowIdx: ri, colIdx: ci } = activeCell;
+            const row = rows[ri]; const col = columns[ci];
+            if (!row || !col) return;
+            // Build SUM range for this column, all rows above
+            const startRef = cellRef(0, ci);
+            const endRef   = cellRef(ri - 1, ci);
+            const formula  = ri > 0 ? `=SUM(${startRef}:${endRef})` : '=SUM(A1:A1)';
+            setEditValue(formula);
+            startEdit(ri, ci);
+          }} title="Insert SUM formula for this column">Σ SUM</button>
+          <button onClick={() => {
+            if (!activeCell) return;
+            const { rowIdx: ri, colIdx: ci } = activeCell;
+            const row = rows[ri]; const col = columns[ci];
+            if (!row || !col) return;
+            const startRef = cellRef(0, ci);
+            const endRef   = cellRef(ri - 1, ci);
+            const formula  = ri > 0 ? `=AVERAGE(${startRef}:${endRef})` : '=AVERAGE(A1:A1)';
+            setEditValue(formula);
+            startEdit(ri, ci);
+          }} title="Insert AVERAGE formula">ø AVG</button>
+          <button onClick={() => {
+            if (!activeCell) return;
+            const { rowIdx: ri, colIdx: ci } = activeCell;
+            const row = rows[ri]; const col = columns[ci];
+            if (!row || !col) return;
+            // Difference: current cell = cell above minus cell two above (useful for level checks)
+            const above1 = ri >= 1 ? cellRef(ri - 1, ci) : cellRef(0, ci);
+            const above2 = ri >= 2 ? cellRef(ri - 2, ci) : cellRef(0, ci);
+            const formula = `=${above1}-${above2}`;
+            setEditValue(formula);
+            startEdit(ri, ci);
+          }} title="Insert difference formula (row above minus 2 rows above)">Δ DIFF</button>
+        </div>
 
-        {/* Table */}
-        <div className="overflow-x-auto" style={{ background: '#FDFAF4' }}>
-          <table className="fb-table">
+        {/* ── Formula bar ── */}
+        <div className="dp-formula-bar">
+          <span className="cell-ref">{activeCellRef || '—'}</span>
+          <span className="fx-label">fx</span>
+          <input
+            ref={fbInputRef}
+            value={formulaBarVal}
+            onChange={e => {
+              setFormulaBarVal(e.target.value);
+              if (activeCell) {
+                const row = rows[activeCell.rowIdx];
+                const col = columns[activeCell.colIdx];
+                if (row && col) setEditValue(e.target.value);
+              }
+            }}
+            onKeyDown={handleFormulaBarCommit}
+            placeholder="Select a cell to view or edit its value..."
+            spellCheck={false}
+          />
+        </div>
+
+        {/* ── Table ── */}
+        <div ref={tableRef} tabIndex={0} onKeyDown={handleGridKeyDown}
+          style={{ flex: 1, overflowX: 'auto', overflowY: 'auto', background: '#FDFAF4', outline: 'none' }}>
+          <table className="fb-table" style={{ tableLayout: 'fixed', width: 'max-content', minWidth: '100%' }}>
             <thead>
               <tr>
-                {columns.map(col => (
-                  <th key={col.id} style={{ minWidth: colWidth(col) }}
-                    onClick={() => startRenameCol(col)}
-                    title="Tap to rename">
+                {/* Row number gutter */}
+                <th className="dp-row-num" style={{ position: 'sticky', top: 0, left: 0, zIndex: 3 }}>#</th>
+                {columns.map((col, ci) => (
+                  <th key={col.id}
+                    className={`dp-col-header${activeCell && activeCell.colIdx === ci ? ' active-col' : ''}`}
+                    style={{ width: colWidth(col), minWidth: colWidth(col) }}
+                    onClick={() => openColModal(col)}
+                    title="Tap to edit column settings">
                     {col.label}
+                    <span className={`dp-col-type-badge dp-col-type-${col.colType || 'num'}`}>
+                      {typeLabels[col.colType || 'num']}
+                    </span>
                   </th>
                 ))}
-                <th style={{ minWidth: 32, width: 32 }}></th>
+                <th style={{ width: 32, minWidth: 32 }}></th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={columns.length + 1}
+                  <td colSpan={columns.length + 2}
                     style={{ textAlign: 'center', padding: '18px 10px', color: '#9CA3AF', fontStyle: 'italic', fontSize: 12, background: 'transparent', height: 'auto' }}>
-                    Tap + Add Row to begin
+                    Tap + Row in the toolbar to begin
                   </td>
                 </tr>
               )}
-              {rows.map(row => (
+              {rows.map((row, ri) => (
                 <tr key={row.id}>
-                  {columns.map(col => (
-                    <td key={col.id} style={{ minWidth: colWidth(col) }}>
-                      <input
-                        type="text"
-                        value={row.cells[col.id] !== undefined ? row.cells[col.id] : ''}
-                        onChange={e => updateCell(row.id, col.id, e.target.value)}
-                      />
-                    </td>
-                  ))}
+                  {/* Row number */}
+                  <td className={`dp-row-num${activeCell && activeCell.rowIdx === ri ? ' active-row' : ''}`}>{ri + 1}</td>
+                  {columns.map((col, ci) => {
+                    const isActive = activeCell && activeCell.rowIdx === ri && activeCell.colIdx === ci;
+                    const isEditing = editingCell && editingCell.rowIdx === ri && editingCell.colIdx === ci;
+                    const { text, isFormula, isDMS, isError } = displayValue(row, col);
+                    return (
+                      <td key={col.id}
+                        className={isActive ? 'dp-cell-active' : ''}
+                        style={{ width: colWidth(col), minWidth: colWidth(col) }}
+                        onClick={() => { activateCell(ri, ci); }}
+                        onDoubleClick={() => startEdit(ri, ci)}>
+                        {isEditing ? (
+                          <input
+                            ref={inputRef}
+                            type="text"
+                            value={editValue}
+                            onChange={e => { setEditValue(e.target.value); setFormulaBarVal(e.target.value); }}
+                            onBlur={() => commitEdit(ri, ci, editValue)}
+                            onKeyDown={e => handleCellKeyDown(e, ri, ci)}
+                            style={{ display: 'block', width: '100%', height: 32, padding: '0 5px',
+                              background: 'rgba(45,106,79,0.06)', border: 'none', outline: 'none',
+                              fontFamily: 'Courier New, monospace', fontSize: 13, textAlign: 'center', color: '#2C2C2C' }}
+                          />
+                        ) : (
+                          <span
+                            className={isError ? 'dp-cell-error' : isDMS ? 'dp-cell-dms' : isFormula ? 'dp-cell-formula' : ''}
+                            style={{ display: 'block', height: 32, lineHeight: '32px', padding: '0 5px',
+                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                              cursor: 'default', userSelect: 'none' }}
+                            onDoubleClick={() => startEdit(ri, ci)}>
+                            {text}
+                          </span>
+                        )}
+                      </td>
+                    );
+                  })}
                   <td className="td-action">
                     <button onClick={() => deleteRow(row.id)}
                       className="w-8 h-8 flex items-center justify-center text-gray-300 active:text-red-400 mx-auto">
@@ -1265,17 +1940,132 @@
                   </td>
                 </tr>
               ))}
+              {/* ── Column sum footer ── */}
+              {rows.length > 0 && (
+                <tr className="dp-sum-row">
+                  <td className="dp-row-num" style={{ fontWeight: 700, color: '#2D6A4F', fontSize: 9 }}>Σ</td>
+                  {columns.map(col => (
+                    <td key={col.id} style={{ width: colWidth(col), minWidth: colWidth(col) }}>
+                      <span style={{ display: 'block', height: 32, lineHeight: '32px', padding: '0 5px',
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        color: (col.colType || 'num') === 'dms' ? '#1a3a8c' : '#065f46' }}>
+                        {colSum(col)}
+                      </span>
+                    </td>
+                  ))}
+                  <td></td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
 
-        {/* Add row */}
-        <div className="px-4 py-3 border-t border-fb-border bg-fb-cream2/50 flex items-center gap-4">
-          <button onClick={addRow} className="flex items-center gap-1.5 text-fb-mid font-semibold text-sm active:opacity-70">
-            <Ico.Plus /> Add Row
-          </button>
-          <span className="text-xs text-fb-muted ml-auto font-data">{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
+        {/* ── Status bar ── */}
+        <div className="px-4 py-2 border-t border-fb-border bg-fb-cream2/50 flex items-center gap-4 flex-shrink-0" style={{ fontSize: 11 }}>
+          <span className="text-fb-muted font-data">{rows.length} rows · {columns.length} cols</span>
+          {activeCell && (
+            <span className="text-fb-mid font-data font-semibold">
+              {activeCellRef}
+              {columns[activeCell.colIdx] && (
+                <span style={{ color: typeColors[columns[activeCell.colIdx].colType || 'num'], marginLeft: 4 }}>
+                  [{typeLabels[columns[activeCell.colIdx].colType || 'num']}]
+                </span>
+              )}
+            </span>
+          )}
+          <span className="ml-auto text-fb-muted" style={{ fontSize: 10 }}>Select · type to edit · Del to clear · ↑↓←→ navigate</span>
         </div>
+
+        {/* ── Column settings modal ── */}
+        {colModal && (
+          <div className="modal-backdrop" onClick={() => setColModal(null)}>
+            <div className="modal-sheet" onClick={e => e.stopPropagation()}>
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+              <h2 className="text-lg font-bold text-fb-dark mb-4">Column Settings</h2>
+              <div className="space-y-4">
+                <div>
+                  <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-1">Label</p>
+                  <input type="text" value={colModalForm.label}
+                    onChange={e => setColModalForm(f => ({ ...f, label: e.target.value }))}
+                    autoFocus maxLength={20}
+                    className="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 focus:border-fb-mid outline-none text-fb-text text-sm font-data"
+                    onKeyDown={e => e.key === 'Enter' && saveColModal()}
+                  />
+                </div>
+                <div>
+                  <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-2">Column Type</p>
+                  <div className="flex gap-2">
+                    {['text', 'num', 'dms'].map(t => (
+                      <button key={t}
+                        onClick={() => setColModalForm(f => ({ ...f, colType: t }))}
+                        className="flex-1 py-2 rounded-xl border-2 text-sm font-bold font-data"
+                        style={{
+                          borderColor: colModalForm.colType === t ? typeColors[t] : '#DDD6C8',
+                          color: colModalForm.colType === t ? typeColors[t] : '#9CA3AF',
+                          background: colModalForm.colType === t ? typeColors[t] + '18' : 'white',
+                        }}>
+                        {typeLabels[t]}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-fb-muted mt-2">
+                    {colModalForm.colType === 'dms' && 'Enter angles as “45 34 23” (D M S) or “45°34\'23"”. Displays as D°MM\'SS.s".'}
+                    {colModalForm.colType === 'num' && 'Decimal numbers. Formulas like =SUM(A1:A5) work in this column.'}
+                    {colModalForm.colType === 'text' && 'Free text — station IDs, descriptions, notes.'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-1">Width (px)</p>
+                  <input type="number" value={colModalForm.width}
+                    onChange={e => setColModalForm(f => ({ ...f, width: Math.max(50, Math.min(300, parseInt(e.target.value) || 80)) }))}
+                    min={50} max={300}
+                    className="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 focus:border-fb-mid outline-none text-fb-text text-sm font-data"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-3 mt-5">
+                <button onClick={() => deleteCol(colModal.col.id)}
+                  className="py-3 px-4 rounded-xl border-2 border-red-200 text-red-400 font-semibold text-sm active:bg-red-50">
+                  Delete
+                </button>
+                <button onClick={() => setColModal(null)} className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold text-sm">Cancel</button>
+                <button onClick={saveColModal} className="flex-1 py-3 rounded-xl text-white font-semibold text-sm" style={{ background: '#2D6A4F' }}>Save</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Template modal ── */}
+        {templateModal && (
+          <div className="modal-backdrop" onClick={() => setTemplateModal(false)}>
+            <div className="modal-sheet" onClick={e => e.stopPropagation()}>
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+              <h2 className="text-lg font-bold text-fb-dark mb-1">Surveyor Templates</h2>
+              <p className="text-fb-muted text-xs mb-4">Applying a template will replace the current columns and clear all rows.</p>
+              <div className="space-y-2">
+                {TEMPLATES.map(tpl => (
+                  <button key={tpl.name}
+                    onClick={() => {
+                      if (rows.some(r => Object.values(r.cells || {}).some(v => v.trim())))
+                        if (!window.confirm('This will clear all existing data. Continue?')) return;
+                      applyTemplate(tpl);
+                    }}
+                    className="w-full flex items-start gap-3 p-3 rounded-xl border-2 border-gray-100 active:border-fb-mid text-left">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-fb-text text-sm">{tpl.name}</p>
+                      <p className="text-fb-muted text-xs mt-0.5 font-data">{tpl.desc}</p>
+                    </div>
+                    <Ico.ChevR />
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => setTemplateModal(false)}
+                className="w-full mt-4 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold text-sm">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
