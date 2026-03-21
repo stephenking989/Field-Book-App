@@ -589,8 +589,10 @@ function SketchPage({ page, projectId, onReload }) {
     ? page.layers : [{ id: 'l_1', name: 'Layer 1', visible: true }];
   const [layers,         setLayers]         = useState(_initLayers);
   const [activeLayerId,  setActiveLayerId]  = useState(_initLayers[0].id);
-  const [rightPanelOpen,   setRightPanelOpen]   = useState(true);
+  const [rightPanelOpen,   setRightPanelOpen]   = useState(false);
   const [collapsedLayers,  setCollapsedLayers]  = useState(new Set());
+  const [headerOpen,       setHeaderOpen]       = useState(false);
+  const [notesOpen,        setNotesOpen]        = useState(false);
 
   const svgRef      = useRef(null);
   const svgWrapRef  = useRef(null);
@@ -1921,7 +1923,34 @@ function SketchPage({ page, projectId, onReload }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
+      {/* ── Page Header — collapsible tombstone ─────────────────────────── */}
+      {headerOpen
+        ? <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
+        : null}
+      {/* Slim collapse/expand bar — always visible */}
+      <button
+        onClick={() => setHeaderOpen(o => !o)}
+        style={{
+          flexShrink: 0, height: 20, display: 'flex', alignItems: 'center',
+          justifyContent: 'space-between', padding: '0 10px',
+          background: 'rgba(245,242,235,0.96)',
+          borderBottom: '1px solid rgba(180,160,110,0.25)',
+          cursor: 'pointer', outline: 'none', border: 'none', width: '100%',
+        }}
+      >
+        <span style={{
+          fontSize: 9.5, fontFamily: 'Courier New, monospace',
+          color: 'rgba(60,50,30,0.65)', letterSpacing: '0.03em', overflow: 'hidden',
+          textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {page.pageNumber ? `Pg ${page.pageNumber}` : ''}
+          {page.pageNumber && page.title ? ' · ' : ''}
+          {page.title || (headerOpen ? '' : 'tap to show page info')}
+        </span>
+        <span style={{ fontSize: 9, color: 'rgba(60,50,30,0.4)', flexShrink: 0, marginLeft: 6 }}>
+          {headerOpen ? '▲' : '▼'}
+        </span>
+      </button>
 
       {/* ── Top Toolbar ──────────────────────────────────────────────────── */}
       <div style={{
@@ -2295,7 +2324,7 @@ function SketchPage({ page, projectId, onReload }) {
             return (
               <div style={{
                 position: 'absolute', bottom: 12,
-                right: rightPanelOpen ? 186 : 30,
+                right: 16,
                 pointerEvents: 'none', zIndex: 12,
                 display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3,
               }}>
@@ -2556,15 +2585,41 @@ function SketchPage({ page, projectId, onReload }) {
         </div>
       </div>
 
-      {/* Notes strip */}
-      <div style={{ borderTop: '1px solid rgba(80,120,200,0.18)', background: 'rgba(255,255,255,0.9)', flexShrink: 0 }}>
-        <textarea
-          value={notes}
-          onChange={e => handleNotesChange(e.target.value)}
-          placeholder="Sketch notes, labels, bearings, dimensions..."
-          className="w-full px-4 py-3 text-sm font-data text-fb-text bg-transparent resize-none outline-none"
-          rows={3}
-        />
+      {/* Notes strip — collapsible */}
+      <div style={{ flexShrink: 0, borderTop: '1px solid rgba(80,120,200,0.18)' }}>
+        {/* Toggle bar */}
+        <button
+          onClick={() => setNotesOpen(o => !o)}
+          style={{
+            width: '100%', height: 22, display: 'flex', alignItems: 'center',
+            justifyContent: 'space-between', padding: '0 10px',
+            background: 'rgba(245,248,255,0.96)',
+            border: 'none', borderBottom: notesOpen ? '1px solid rgba(80,120,200,0.15)' : 'none',
+            cursor: 'pointer', outline: 'none',
+          }}
+        >
+          <span style={{
+            fontSize: 9.5, fontFamily: 'Courier New, monospace',
+            color: 'rgba(40,60,120,0.55)', letterSpacing: '0.04em',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {notesOpen ? 'Notes' : (notes.trim() ? notes.replace(/\n/g, ' ').slice(0, 55) + (notes.length > 55 ? '…' : '') : 'Notes')}
+          </span>
+          <span style={{ fontSize: 9, color: 'rgba(40,60,120,0.4)', flexShrink: 0, marginLeft: 6 }}>
+            {notesOpen ? '▼' : '▲'}
+          </span>
+        </button>
+        {/* Textarea — only rendered when open */}
+        {notesOpen && (
+          <textarea
+            value={notes}
+            onChange={e => handleNotesChange(e.target.value)}
+            placeholder="Sketch notes, labels, bearings, dimensions..."
+            className="w-full px-4 py-3 text-sm font-data text-fb-text bg-transparent resize-none outline-none"
+            rows={3}
+            style={{ background: 'rgba(255,255,255,0.92)', display: 'block', width: '100%' }}
+          />
+        )}
       </div>
     </div>
   );
