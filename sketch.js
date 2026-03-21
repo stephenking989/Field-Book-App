@@ -632,6 +632,18 @@ function SketchPage({ page, projectId, onReload }) {
   const [openMenu, setOpenMenu] = useState(null); // null | 'view' | 'scale'
   const [menuPos,  setMenuPos]  = useState({ x: 0 });
 
+  // Close any open dropdown when the user clicks outside the toolbar
+  useEffect(() => {
+    if (!openMenu) return;
+    function onDoc(e) {
+      if (toolbarRef.current && !toolbarRef.current.contains(e.target)) {
+        setOpenMenu(null);
+      }
+    }
+    document.addEventListener('pointerdown', onDoc, { capture: true });
+    return () => document.removeEventListener('pointerdown', onDoc, { capture: true });
+  }, [openMenu]);
+
   // ── Layers ────────────────────────────────────────────────────────────────
   const _initLayers = (page.layers && page.layers.length)
     ? page.layers : [{ id: 'l_1', name: 'Layer 1', visible: true }];
@@ -645,6 +657,7 @@ function SketchPage({ page, projectId, onReload }) {
   const svgRef      = useRef(null);
   const svgWrapRef  = useRef(null);
   const textareaRef = useRef(null);
+  const toolbarRef  = useRef(null);   // top toolbar — used to anchor dropdown position
   const saveTimer   = useRef(null);
   // svgSizeRef: raw CSS pixel dimensions of the SVG container (updated by ResizeObserver).
   // Used to compute pixelScale (ps) = viewBox.w / svgSizeRef.w = world-units per CSS pixel.
@@ -2145,25 +2158,17 @@ function SketchPage({ page, projectId, onReload }) {
       </button>
 
       {/* ── Top Toolbar ──────────────────────────────────────────────────── */}
-      <div style={{
+      <div ref={toolbarRef} className="sketch-top-bar" style={{
         height: 36, flexShrink: 0, position: 'relative',
         background: 'rgba(22,30,60,0.92)', backdropFilter: 'blur(6px)',
         borderBottom: '1px solid rgba(255,255,255,0.08)',
-        zIndex: 20,
+        zIndex: 20, overflow: 'visible',
       }}>
-
-        {/* Click-away backdrop — closes any open dropdown when tapping outside */}
-        {openMenu && (
-          <div
-            style={{ position: 'fixed', inset: 0, zIndex: 98 }}
-            onPointerDown={() => setOpenMenu(null)}
-          />
-        )}
 
         {/* ── View dropdown panel ──────────────────────────────────────── */}
         {openMenu === 'view' && (
           <div style={{
-            position: 'fixed', top: 36, left: menuPos.x, zIndex: 100,
+            position: 'absolute', top: 36, left: menuPos.x, zIndex: 100,
             background: 'rgba(16,22,48,0.98)', backdropFilter: 'blur(10px)',
             border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
             boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
@@ -2200,8 +2205,8 @@ function SketchPage({ page, projectId, onReload }) {
         {/* ── Scale dropdown panel ─────────────────────────────────────── */}
         {openMenu === 'scale' && (
           <div style={{
-            position: 'fixed', top: 36,
-            left: Math.max(4, Math.min(menuPos.x, (typeof window !== 'undefined' ? window.innerWidth : 800) - 236)),
+            position: 'absolute', top: 36,
+            left: Math.max(4, menuPos.x),
             zIndex: 100,
             background: 'rgba(16,22,48,0.98)', backdropFilter: 'blur(10px)',
             border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
@@ -2287,10 +2292,11 @@ function SketchPage({ page, projectId, onReload }) {
                   if (e.key === 'Escape') { setScaleInput(String(scaleDenom)); e.target.blur(); }
                 }}
                 style={{
-                  flex: 1, height: 26, background: 'rgba(255,255,255,0.08)',
+                  flex: 1, height: 26, minWidth: 0, background: 'rgba(255,255,255,0.08)',
                   border: '1px solid rgba(255,255,255,0.18)', borderRadius: 4,
                   color: 'rgba(255,255,255,0.9)', fontFamily: 'Courier New, monospace',
-                  fontSize: 11, padding: '0 8px', outline: 'none', textAlign: 'right',
+                  fontSize: 11, padding: '0 10px', outline: 'none', textAlign: 'left',
+                  boxSizing: 'border-box',
                 }}
               />
             </div>
@@ -2344,8 +2350,9 @@ function SketchPage({ page, projectId, onReload }) {
           {/* ── View menu button ──────────────────────────────────────── */}
           <button
             onClick={e => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              setMenuPos({ x: rect.left });
+              const btnRect = e.currentTarget.getBoundingClientRect();
+              const barRect = toolbarRef.current ? toolbarRef.current.getBoundingClientRect() : { left: 0 };
+              setMenuPos({ x: btnRect.left - barRect.left });
               setOpenMenu(m => m === 'view' ? null : 'view');
             }}
             title="View options — Grid, Dims, Card, Scale Bar"
@@ -2370,8 +2377,9 @@ function SketchPage({ page, projectId, onReload }) {
           {/* ── Scale menu button ─────────────────────────────────────── */}
           <button
             onClick={e => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              setMenuPos({ x: rect.left });
+              const btnRect = e.currentTarget.getBoundingClientRect();
+              const barRect = toolbarRef.current ? toolbarRef.current.getBoundingClientRect() : { left: 0 };
+              setMenuPos({ x: btnRect.left - barRect.left });
               setOpenMenu(m => m === 'scale' ? null : 'scale');
             }}
             title="Scale &amp; units"
