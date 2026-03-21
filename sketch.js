@@ -1673,29 +1673,41 @@ function SketchPage({ page, projectId, onReload }) {
   }
 
   // ── Dynamic SVG grid (Phase 4) ────────────────────────────────────────────
-  // Renders minor + major gridlines as SVG <line> elements in world-space, so
-  // they stay perfectly aligned with shapes at any zoom/pan.  Lines are
-  // counter-scaled by ps so they stay a constant visual thickness on screen.
+  // Grid is tied to the scale bar: one major square = one scale bar unit.
+  // 5 minor divisions per major square — matches Rite in the Rain grid style.
+  // Lines are counter-scaled by ps so they stay constant thickness on screen.
   function renderGrid() {
-    const ps          = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-    const interval    = niceGridInterval(scaleDenom, viewBox.w, svgSizeRef.current.w, units);
-    const intervalPx  = realToPx(interval, scaleDenom, units);
-    if (!intervalPx || intervalPx <= 0) return null;
+    const containerW = svgSizeRef.current.w || viewBox.w;
+    const ps         = viewBox.w / containerW;
 
-    const minorStroke = 0.5 * ps;
-    const majorStroke = 1.0 * ps;
-    const minorColor  = 'rgba(80,120,200,0.12)';
-    const majorColor  = 'rgba(80,120,200,0.28)';
+    // Major interval = the same nice real-world value shown on the scale bar.
+    const majorReal = niceScaleBarValue(scaleDenom, viewBox.w, containerW, units);
+    const majorPx   = realToPx(majorReal, scaleDenom, units);
+    if (!majorPx || majorPx <= 0) return null;
+
+    // Minor interval = 1/5 of major (5 divisions per square).
+    const minorPx = majorPx / 5;
+
+    // If minor lines would be < 4 screen px apart, skip them to avoid noise.
+    const skipMinor = (minorPx / ps) < 4;
+    const intervalPx = skipMinor ? majorPx : minorPx;
+
+    const minorStroke = 0.4 * ps;
+    const majorStroke = 0.9 * ps;
+    const minorColor  = 'rgba(80,120,200,0.13)';
+    const majorColor  = 'rgba(80,120,200,0.32)';
 
     const lines = [];
 
-    // Vertical lines (constant x)
+    // ── Vertical lines ──────────────────────────────────────────────────────
     const xStart = Math.floor(viewBox.x / intervalPx);
     const xEnd   = Math.ceil((viewBox.x + viewBox.w) / intervalPx);
     let xCount   = 0;
-    for (let i = xStart; i <= xEnd && xCount < 150; i++, xCount++) {
-      const x       = i * intervalPx;
-      const isMajor = i % 5 === 0;
+    for (let i = xStart; i <= xEnd && xCount < 300; i++, xCount++) {
+      const x = i * intervalPx;
+      // majorPx = 5 * minorPx exactly, so i % 5 === 0 ↔ world coord is a
+      // multiple of majorPx — alignment is correct from any starting index.
+      const isMajor = skipMinor || (i % 5 === 0);
       lines.push(
         <line key={`gx${i}`}
           x1={x} y1={viewBox.y}
@@ -1706,16 +1718,16 @@ function SketchPage({ page, projectId, onReload }) {
       );
     }
 
-    // Horizontal lines (constant y)
+    // ── Horizontal lines ────────────────────────────────────────────────────
     const yStart = Math.floor(viewBox.y / intervalPx);
     const yEnd   = Math.ceil((viewBox.y + viewBox.h) / intervalPx);
     let yCount   = 0;
-    for (let i = yStart; i <= yEnd && yCount < 150; i++, yCount++) {
+    for (let i = yStart; i <= yEnd && yCount < 300; i++, yCount++) {
       const y       = i * intervalPx;
-      const isMajor = i % 5 === 0;
+      const isMajor = skipMinor || (i % 5 === 0);
       lines.push(
         <line key={`gy${i}`}
-          x1={viewBox.x}     y1={y}
+          x1={viewBox.x}             y1={y}
           x2={viewBox.x + viewBox.w} y2={y}
           stroke={isMajor ? majorColor : minorColor}
           strokeWidth={isMajor ? majorStroke : minorStroke}
