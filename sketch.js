@@ -628,6 +628,10 @@ function SketchPage({ page, projectId, onReload }) {
   const [showDims,      setShowDims]      = useState(true);
   const [showValueCard, setShowValueCard] = useState(true);
 
+  // ── Dropdown menus ─────────────────────────────────────────────────────────
+  const [openMenu, setOpenMenu] = useState(null); // null | 'view' | 'scale'
+  const [menuPos,  setMenuPos]  = useState({ x: 0 });
+
   // ── Layers ────────────────────────────────────────────────────────────────
   const _initLayers = (page.layers && page.layers.length)
     ? page.layers : [{ id: 'l_1', name: 'Layer 1', visible: true }];
@@ -1019,6 +1023,7 @@ function SketchPage({ page, projectId, onReload }) {
   // ── Pointer down ───────────────────────────────────────────────────────────
   function onPointerDown(e) {
     if (e.target.closest('.sketch-ribbon')) return;
+    setOpenMenu(null);
 
     // ── Bug fix 1: if a text edit is in progress, commit it and stop ────────
     // Don't call preventDefault here so the textarea blur fires naturally too.
@@ -2141,216 +2146,267 @@ function SketchPage({ page, projectId, onReload }) {
 
       {/* ── Top Toolbar ──────────────────────────────────────────────────── */}
       <div style={{
-        height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px',
+        height: 36, flexShrink: 0, position: 'relative',
         background: 'rgba(22,30,60,0.92)', backdropFilter: 'blur(6px)',
         borderBottom: '1px solid rgba(255,255,255,0.08)',
+        zIndex: 20,
       }}>
-        {/* Snap toggle */}
-        <button
-          onClick={() => { setSnapEnabled(v => !v); setSnapPoint(null); }}
-          title={snapEnabled ? 'Node snap ON — click to disable' : 'Node snap OFF — click to enable'}
-          style={{
-            height: 26, padding: '0 10px', borderRadius: 4,
-            display: 'flex', alignItems: 'center', gap: 5,
-            background: snapEnabled ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.06)',
-            border: `1px solid ${snapEnabled ? 'rgba(34,197,94,0.55)' : 'rgba(255,255,255,0.14)'}`,
-            color: snapEnabled ? '#4ADE80' : 'rgba(255,255,255,0.45)',
-            cursor: 'pointer', fontSize: 11,
-            fontFamily: 'Courier New, monospace', outline: 'none', transition: 'all 0.15s',
-          }}
-        >
-          <span style={{ fontSize: 14, lineHeight: 1 }}>⊙</span>
-          <span style={{ letterSpacing: '0.03em' }}>Snap</span>
-        </button>
 
-        {/* Grid toggle */}
-        <button
-          onClick={() => setShowGrid(v => !v)}
-          title={showGrid ? 'Grid ON — click to hide' : 'Grid OFF — click to show'}
-          style={{
-            height: 26, padding: '0 10px', borderRadius: 4,
-            display: 'flex', alignItems: 'center', gap: 5,
-            background: showGrid ? 'rgba(52,211,153,0.15)' : 'rgba(255,255,255,0.06)',
-            border: `1px solid ${showGrid ? 'rgba(52,211,153,0.5)' : 'rgba(255,255,255,0.14)'}`,
-            color: showGrid ? '#6EE7B7' : 'rgba(255,255,255,0.45)',
-            cursor: 'pointer', fontSize: 11,
-            fontFamily: 'Courier New, monospace', outline: 'none', transition: 'all 0.15s',
-          }}
-        >
-          <span style={{ fontSize: 13, lineHeight: 1 }}>⊞</span>
-          <span style={{ letterSpacing: '0.03em' }}>Grid</span>
-        </button>
-
-        {/* Dims toggle */}
-        <button
-          onClick={() => setShowDims(v => !v)}
-          title={showDims ? 'Dimension labels ON — click to hide' : 'Dimension labels OFF — click to show'}
-          style={{
-            height: 26, padding: '0 10px', borderRadius: 4,
-            display: 'flex', alignItems: 'center', gap: 5,
-            background: showDims ? 'rgba(99,179,237,0.18)' : 'rgba(255,255,255,0.06)',
-            border: `1px solid ${showDims ? 'rgba(99,179,237,0.55)' : 'rgba(255,255,255,0.14)'}`,
-            color: showDims ? '#90CDF4' : 'rgba(255,255,255,0.45)',
-            cursor: 'pointer', fontSize: 11,
-            fontFamily: 'Courier New, monospace', outline: 'none', transition: 'all 0.15s',
-          }}
-        >
-          <span style={{ fontSize: 13, lineHeight: 1 }}>◫</span>
-          <span style={{ letterSpacing: '0.03em' }}>Dims</span>
-        </button>
-
-        {/* Card toggle */}
-        <button
-          onClick={() => setShowValueCard(v => !v)}
-          title={showValueCard ? 'Shape value card ON — click to hide' : 'Shape value card OFF — click to show'}
-          style={{
-            height: 26, padding: '0 10px', borderRadius: 4,
-            display: 'flex', alignItems: 'center', gap: 5,
-            background: showValueCard ? 'rgba(167,139,250,0.18)' : 'rgba(255,255,255,0.06)',
-            border: `1px solid ${showValueCard ? 'rgba(167,139,250,0.55)' : 'rgba(255,255,255,0.14)'}`,
-            color: showValueCard ? '#C4B5FD' : 'rgba(255,255,255,0.45)',
-            cursor: 'pointer', fontSize: 11,
-            fontFamily: 'Courier New, monospace', outline: 'none', transition: 'all 0.15s',
-          }}
-        >
-          <span style={{ fontSize: 12, lineHeight: 1 }}>▤</span>
-          <span style={{ letterSpacing: '0.03em' }}>Card</span>
-        </button>
-
-        {/* Separator */}
-        <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
-
-        {/* Zoom % readout */}
-        <span style={{
-          fontSize: 10, fontFamily: 'Courier New, monospace', letterSpacing: '0.03em',
-          color: 'rgba(255,255,255,0.4)', minWidth: 36, textAlign: 'right',
-          userSelect: 'none',
-        }}>
-          {Math.round((svgSizeRef.current.w / viewBox.w) * 100)}%
-        </span>
-
-        {/* Zoom to Extents */}
-        <button
-          onClick={zoomToExtents}
-          title="Zoom to fit all shapes"
-          style={{
-            height: 26, padding: '0 8px', borderRadius: 4,
-            display: 'flex', alignItems: 'center', gap: 4,
-            background: 'rgba(255,255,255,0.06)',
-            border: '1px solid rgba(255,255,255,0.14)',
-            color: 'rgba(255,255,255,0.55)',
-            cursor: 'pointer', fontSize: 11,
-            fontFamily: 'Courier New, monospace', outline: 'none',
-          }}
-        >
-          <span style={{ fontSize: 13, lineHeight: 1 }}>⊡</span>
-          <span>Fit</span>
-        </button>
-
-        {/* Reset zoom */}
-        <button
-          onClick={zoomReset}
-          title="Reset zoom to 100%"
-          style={{
-            height: 26, padding: '0 8px', borderRadius: 4,
-            display: 'flex', alignItems: 'center', gap: 4,
-            background: 'rgba(255,255,255,0.06)',
-            border: '1px solid rgba(255,255,255,0.14)',
-            color: 'rgba(255,255,255,0.55)',
-            cursor: 'pointer', fontSize: 11,
-            fontFamily: 'Courier New, monospace', outline: 'none',
-          }}
-        >
-          <span style={{ fontSize: 12, lineHeight: 1 }}>1:1</span>
-        </button>
-
-        {/* Pan hint — only shown while actively panning */}
-        {isPanActive && (
-          <span style={{
-            fontSize: 10, fontFamily: 'Courier New, monospace',
-            color: 'rgba(255,255,255,0.35)', marginLeft: 4,
-          }}>panning…</span>
+        {/* Click-away backdrop — closes any open dropdown when tapping outside */}
+        {openMenu && (
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 98 }}
+            onPointerDown={() => setOpenMenu(null)}
+          />
         )}
 
-        {/* ── Scale controls ─────────────────────────────────────────── */}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+        {/* ── View dropdown panel ──────────────────────────────────────── */}
+        {openMenu === 'view' && (
+          <div style={{
+            position: 'fixed', top: 36, left: menuPos.x, zIndex: 100,
+            background: 'rgba(16,22,48,0.98)', backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
+            boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+            minWidth: 185, padding: '4px 0',
+            fontFamily: 'Courier New, monospace',
+          }}>
+            {[
+              { label: 'Grid',      icon: '⊞', state: showGrid,      set: () => setShowGrid(v => !v),      activeCol: '#6EE7B7', activeBg: 'rgba(52,211,153,0.15)' },
+              { label: 'Dims',      icon: '◫', state: showDims,      set: () => setShowDims(v => !v),      activeCol: '#90CDF4', activeBg: 'rgba(99,179,237,0.18)' },
+              { label: 'Card',      icon: '▤', state: showValueCard, set: () => setShowValueCard(v => !v), activeCol: '#C4B5FD', activeBg: 'rgba(167,139,250,0.18)' },
+              { label: 'Scale Bar', icon: '⊟', state: showScaleBar,  set: () => setShowScaleBar(v => !v),  activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
+            ].map(({ label, icon, state, set, activeCol, activeBg }) => (
+              <button key={label}
+                onClick={set}
+                style={{
+                  width: '100%', height: 34, display: 'flex', alignItems: 'center',
+                  gap: 10, padding: '0 14px',
+                  background: state ? activeBg : 'transparent',
+                  border: 'none', cursor: 'pointer', textAlign: 'left',
+                  color: state ? activeCol : 'rgba(255,255,255,0.55)',
+                  fontSize: 11,
+                }}
+              >
+                <span style={{ fontSize: 14, lineHeight: 1, width: 16 }}>{icon}</span>
+                <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>{label}</span>
+                <span style={{ fontSize: 10, color: state ? activeCol : 'rgba(255,255,255,0.22)', marginLeft: 8 }}>
+                  {state ? 'on' : 'off'}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
 
-          {/* Scale bar toggle */}
+        {/* ── Scale dropdown panel ─────────────────────────────────────── */}
+        {openMenu === 'scale' && (
+          <div style={{
+            position: 'fixed', top: 36,
+            left: Math.max(4, Math.min(menuPos.x, (typeof window !== 'undefined' ? window.innerWidth : 800) - 236)),
+            zIndex: 100,
+            background: 'rgba(16,22,48,0.98)', backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
+            boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+            width: 232, padding: '8px 0',
+            fontFamily: 'Courier New, monospace',
+          }}>
+
+            {/* Zoom controls row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px 8px' }}>
+              <button
+                onClick={() => { zoomToExtents(); setOpenMenu(null); }}
+                title="Zoom to fit all shapes"
+                style={{
+                  height: 26, padding: '0 10px', borderRadius: 4, flex: 1,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                  background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.14)',
+                  color: 'rgba(255,255,255,0.65)', cursor: 'pointer', fontSize: 11, outline: 'none',
+                }}
+              >
+                <span style={{ fontSize: 13 }}>⊡</span>
+                <span>Fit</span>
+              </button>
+              <button
+                onClick={() => { zoomReset(); setOpenMenu(null); }}
+                title="Reset zoom to 100%"
+                style={{
+                  height: 26, padding: '0 10px', borderRadius: 4, flex: 1,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.14)',
+                  color: 'rgba(255,255,255,0.65)', cursor: 'pointer', fontSize: 11, outline: 'none',
+                }}
+              >
+                <span style={{ fontSize: 11 }}>1 : 1</span>
+              </button>
+              <span style={{
+                fontSize: 10, color: 'rgba(255,255,255,0.35)',
+                userSelect: 'none', minWidth: 34, textAlign: 'right',
+              }}>
+                {Math.round((svgSizeRef.current.w / viewBox.w) * 100)}%
+              </span>
+            </div>
+
+            <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '0 10px 8px' }} />
+
+            {/* Units row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px 8px' }}>
+              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', flex: 1 }}>Units</span>
+              <button
+                onClick={() => {
+                  const next = units === 'm' ? 'ft' : 'm';
+                  setUnits(next);
+                  persist(undefined, undefined, undefined, { units: next });
+                }}
+                title="Toggle units: metres / feet"
+                style={{
+                  height: 26, padding: '0 16px', borderRadius: 4,
+                  background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
+                  color: 'rgba(255,255,255,0.85)', cursor: 'pointer',
+                  fontSize: 11, fontWeight: 600,
+                  fontFamily: 'Courier New, monospace', outline: 'none',
+                }}
+              >{units}</button>
+            </div>
+
+            {/* Scale row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px 8px' }}>
+              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>Scale  1 :</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={scaleInput}
+                onChange={e => setScaleInput(e.target.value)}
+                onBlur={e => {
+                  const n = parseInt(e.target.value, 10);
+                  const next = (!isNaN(n) && n >= 1) ? Math.min(n, MAX_SCALE) : scaleDenom;
+                  setScaleDenom(next);
+                  setScaleInput(String(next));
+                  persist(undefined, undefined, undefined, { scaleDenom: next });
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') e.target.blur();
+                  if (e.key === 'Escape') { setScaleInput(String(scaleDenom)); e.target.blur(); }
+                }}
+                style={{
+                  flex: 1, height: 26, background: 'rgba(255,255,255,0.08)',
+                  border: '1px solid rgba(255,255,255,0.18)', borderRadius: 4,
+                  color: 'rgba(255,255,255,0.9)', fontFamily: 'Courier New, monospace',
+                  fontSize: 11, padding: '0 8px', outline: 'none', textAlign: 'right',
+                }}
+              />
+            </div>
+
+            {/* Slider row */}
+            <div style={{ padding: '0 14px 4px' }}>
+              <input
+                type="range" min={0} max={100} step={1}
+                value={scaleToSlider(scaleDenom)}
+                onChange={e => {
+                  const next = sliderToScale(Number(e.target.value));
+                  setScaleDenom(next);
+                  setScaleInput(String(next));
+                  persist(undefined, undefined, undefined, { scaleDenom: next });
+                }}
+                style={{ width: '100%', cursor: 'pointer', accentColor: '#60A5FA' }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* ── Scrollable inner button row ──────────────────────────────── */}
+        <div style={{
+          height: '100%', display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px',
+          overflowX: 'auto', overflowY: 'hidden',
+          scrollbarWidth: 'none', msOverflowStyle: 'none',
+          position: 'relative', zIndex: 99,
+        }}>
+
+          {/* Snap toggle */}
           <button
-            onClick={() => setShowScaleBar(v => !v)}
-            title={showScaleBar ? 'Scale bar ON — click to hide' : 'Scale bar OFF — click to show'}
+            onClick={() => { setSnapEnabled(v => !v); setSnapPoint(null); setOpenMenu(null); }}
+            title={snapEnabled ? 'Node snap ON — click to disable' : 'Node snap OFF — click to enable'}
             style={{
-              height: 26, padding: '0 8px', borderRadius: 4,
-              display: 'flex', alignItems: 'center', gap: 4,
-              background: showScaleBar ? 'rgba(251,191,36,0.15)' : 'rgba(255,255,255,0.06)',
-              border: `1px solid ${showScaleBar ? 'rgba(251,191,36,0.45)' : 'rgba(255,255,255,0.14)'}`,
-              color: showScaleBar ? '#FCD34D' : 'rgba(255,255,255,0.4)',
-              cursor: 'pointer', fontSize: 10,
+              height: 26, padding: '0 10px', borderRadius: 4, flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 5,
+              background: snapEnabled ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.06)',
+              border: `1px solid ${snapEnabled ? 'rgba(34,197,94,0.55)' : 'rgba(255,255,255,0.14)'}`,
+              color: snapEnabled ? '#4ADE80' : 'rgba(255,255,255,0.45)',
+              cursor: 'pointer', fontSize: 11,
+              fontFamily: 'Courier New, monospace', outline: 'none', transition: 'all 0.15s',
+            }}
+          >
+            <span style={{ fontSize: 14, lineHeight: 1 }}>⊙</span>
+            <span style={{ letterSpacing: '0.03em' }}>Snap</span>
+          </button>
+
+          {/* Separator */}
+          <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
+
+          {/* ── View menu button ──────────────────────────────────────── */}
+          <button
+            onClick={e => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              setMenuPos({ x: rect.left });
+              setOpenMenu(m => m === 'view' ? null : 'view');
+            }}
+            title="View options — Grid, Dims, Card, Scale Bar"
+            style={{
+              height: 26, padding: '0 10px', borderRadius: 4, flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 5,
+              background: openMenu === 'view'
+                ? 'rgba(255,255,255,0.14)'
+                : (showGrid || showDims || showValueCard || showScaleBar)
+                  ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.04)',
+              border: `1px solid ${openMenu === 'view' ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.14)'}`,
+              color: openMenu === 'view' ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.6)',
+              cursor: 'pointer', fontSize: 11,
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
-          >⊟</button>
+          >
+            <span style={{ fontSize: 13, lineHeight: 1 }}>◨</span>
+            <span style={{ letterSpacing: '0.03em' }}>View</span>
+            <span style={{ fontSize: 8, opacity: 0.5, marginLeft: 1 }}>▾</span>
+          </button>
 
-          {/* Unit toggle m / ft */}
+          {/* ── Scale menu button ─────────────────────────────────────── */}
           <button
-            onClick={() => {
-              const next = units === 'm' ? 'ft' : 'm';
-              setUnits(next);
-              persist(undefined, undefined, undefined, { units: next });
+            onClick={e => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              setMenuPos({ x: rect.left });
+              setOpenMenu(m => m === 'scale' ? null : 'scale');
             }}
-            title="Toggle units: metres / feet"
+            title="Scale &amp; units"
             style={{
-              height: 26, padding: '0 8px', borderRadius: 4, minWidth: 28,
-              background: 'rgba(255,255,255,0.06)',
-              border: '1px solid rgba(255,255,255,0.18)',
-              color: 'rgba(255,255,255,0.75)',
-              cursor: 'pointer', fontSize: 10, fontWeight: 600,
+              height: 26, padding: '0 10px', borderRadius: 4, flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 5,
+              background: openMenu === 'scale' ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.06)',
+              border: `1px solid ${openMenu === 'scale' ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.14)'}`,
+              color: openMenu === 'scale' ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.6)',
+              cursor: 'pointer', fontSize: 11,
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
-          >{units === 'm' ? 'm' : "ft"}</button>
+          >
+            <span style={{ fontSize: 12, lineHeight: 1 }}>⊞</span>
+            <span style={{ letterSpacing: '0.03em' }}>Scale</span>
+            <span style={{ fontSize: 8, opacity: 0.5, marginLeft: 1 }}>▾</span>
+          </button>
 
-          {/* Scale label */}
+          {/* Zoom % readout */}
           <span style={{
-            fontSize: 10, fontFamily: 'Courier New, monospace',
-            color: 'rgba(255,255,255,0.4)', userSelect: 'none', whiteSpace: 'nowrap',
-          }}>1 :</span>
+            fontSize: 10, fontFamily: 'Courier New, monospace', letterSpacing: '0.03em',
+            color: 'rgba(255,255,255,0.35)', minWidth: 34, textAlign: 'right',
+            userSelect: 'none', flexShrink: 0,
+          }}>
+            {Math.round((svgSizeRef.current.w / viewBox.w) * 100)}%
+          </span>
 
-          {/* Scale denominator text input */}
-          <input
-            type="text"
-            inputMode="numeric"
-            value={scaleInput}
-            onChange={e => setScaleInput(e.target.value)}
-            onBlur={e => {
-              const n = parseInt(e.target.value, 10);
-              const next = (!isNaN(n) && n >= 1) ? Math.min(n, MAX_SCALE) : scaleDenom;
-              setScaleDenom(next);
-              setScaleInput(String(next));
-              persist(undefined, undefined, undefined, { scaleDenom: next });
-            }}
-            onKeyDown={e => {
-              if (e.key === 'Enter') e.target.blur();
-              if (e.key === 'Escape') { setScaleInput(String(scaleDenom)); e.target.blur(); }
-            }}
-            style={{
-              width: 52, height: 24, background: 'rgba(255,255,255,0.07)',
-              border: '1px solid rgba(255,255,255,0.18)', borderRadius: 3,
-              color: 'rgba(255,255,255,0.85)', fontFamily: 'Courier New, monospace',
-              fontSize: 10, padding: '0 5px', outline: 'none', textAlign: 'right',
-            }}
-          />
+          {/* Pan hint */}
+          {isPanActive && (
+            <span style={{
+              fontSize: 10, fontFamily: 'Courier New, monospace',
+              color: 'rgba(255,255,255,0.35)', marginLeft: 4, flexShrink: 0,
+            }}>panning…</span>
+          )}
 
-          {/* Log slider — snaps to common scales */}
-          <input
-            type="range" min={0} max={100} step={1}
-            value={scaleToSlider(scaleDenom)}
-            onChange={e => {
-              const next = sliderToScale(Number(e.target.value));
-              setScaleDenom(next);
-              setScaleInput(String(next));
-              persist(undefined, undefined, undefined, { scaleDenom: next });
-            }}
-            style={{ width: 72, cursor: 'pointer', accentColor: '#60A5FA' }}
-          />
         </div>
       </div>
 
@@ -2385,38 +2441,42 @@ function SketchPage({ page, projectId, onReload }) {
             {ribbonOpen ? '◀' : '▶'}
           </button>
 
-          {/* Tool buttons — only show when open */}
-          {ribbonOpen && TOOLS.map(t => (
-            <button
-              key={t.id}
-              onClick={() => { setTool(t.id); setSelectedId(null); setDrawState(null); setPrevTool(null); }}
-              title={t.label}
-              style={{
-                width: 52, height: 46, flexShrink: 0,
-                display: 'flex', flexDirection: 'column', alignItems: 'center',
-                justifyContent: 'center', gap: 2,
-                background: tool === t.id ? 'rgba(59,130,246,0.28)' : 'none',
-                borderLeft: tool === t.id ? '2px solid #3B82F6' : '2px solid transparent',
-                borderTop: 'none', borderRight: 'none', borderBottom: 'none',
-                color: tool === t.id ? '#93C5FD' : 'rgba(255,255,255,0.55)',
-                cursor: 'pointer',
-                transition: 'background 0.15s, color 0.15s',
-              }}
-            >
-              <span style={{ fontSize: 16, lineHeight: 1 }}>{t.icon}</span>
-              <span style={{ fontSize: 7, letterSpacing: '0.04em', textTransform: 'uppercase', lineHeight: 1 }}>
-                {t.label}
-              </span>
-            </button>
-          ))}
+          {/* Tool buttons — scrollable column */}
+          {ribbonOpen && (
+            <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+              {TOOLS.map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => { setTool(t.id); setSelectedId(null); setDrawState(null); setPrevTool(null); }}
+                  title={t.label}
+                  style={{
+                    width: 52, height: 46, flexShrink: 0,
+                    display: 'flex', flexDirection: 'column', alignItems: 'center',
+                    justifyContent: 'center', gap: 2,
+                    background: tool === t.id ? 'rgba(59,130,246,0.28)' : 'none',
+                    borderLeft: tool === t.id ? '2px solid #3B82F6' : '2px solid transparent',
+                    borderTop: 'none', borderRight: 'none', borderBottom: 'none',
+                    color: tool === t.id ? '#93C5FD' : 'rgba(255,255,255,0.55)',
+                    cursor: 'pointer',
+                    transition: 'background 0.15s, color 0.15s',
+                  }}
+                >
+                  <span style={{ fontSize: 16, lineHeight: 1 }}>{t.icon}</span>
+                  <span style={{ fontSize: 7, letterSpacing: '0.04em', textTransform: 'uppercase', lineHeight: 1 }}>
+                    {t.label}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
 
-          {/* Delete selected — shown when a shape is selected */}
+          {/* Delete selected — pinned at bottom, outside the scroll area */}
           {ribbonOpen && selectedId && (
             <button
               onClick={() => { commitShapes(shapes.filter(s => s.id !== selectedId)); setSelectedId(null); }}
               title="Delete selected"
               style={{
-                marginTop: 'auto', width: 52, height: 40, flexShrink: 0,
+                flexShrink: 0, width: 52, height: 40,
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
                 justifyContent: 'center', gap: 2,
                 background: 'rgba(239,68,68,0.15)', border: 'none',
