@@ -197,6 +197,19 @@ function toDMS(deg) {
   return `${sign}${d}°${String(m).padStart(2,'0')}'${String(s).padStart(2,'0')}"`;
 }
 
+// Normalise a text rotation angle so the label always reads upright (never
+// upside-down). Steps:
+//   1. Wrap to [0°, 360°)  — handles negative angles and large values
+//   2. Flip the upside-down band (90°, 270°] by subtracting 180°  → (-90°, 90°]
+//   3. Re-center to (-180°, 180°] to keep SVG happy
+// Result is always in (-90°, 90°] — readable at any zoom, scale, or rotation.
+function normAng(a) {
+  a = ((a % 360) + 360) % 360;       // → [0, 360)
+  if (a > 90 && a <= 270) a -= 180;  // → (-90, 90]  (flip upside-down range)
+  if (a > 180) a -= 360;             // → (-90, 90]  (handle 270–360 band)
+  return a;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SHAPE GEOMETRY MUTATIONS  —  used by the Shape Value Card editable fields
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1811,14 +1824,13 @@ function SketchPage({ page, projectId, onReload }) {
 
     // Rotate anchor (rawX, rawY) by the shape's own rotation, then render text
     // at that world position with text angle adjusted to match rotated direction.
+    // normAng() ensures the result is always in (-90°, 90°] so text is never
+    // upside-down regardless of the shape's rotation or the label's base angle.
     function D(rawX, rawY, ang, txt) {
       const { x: lx, y: ly } = rot
         ? rotatePoint(rawX, rawY, piv.x, piv.y, rot)
         : { x: rawX, y: rawY };
-      let a = (ang + rot) % 360;
-      if (a >  90) a -= 180;
-      if (a < -90) a += 180;
-      return dimTextEl(lx, ly, a, txt, ps);
+      return dimTextEl(lx, ly, normAng(ang + rot), txt, ps);
     }
 
     switch (s.type) {
@@ -2004,11 +2016,12 @@ function SketchPage({ page, projectId, onReload }) {
         const ny  = len > 0 ?  (drawState.x2-drawState.x1)/len : 1;
         const ang = Math.atan2(drawState.y2-drawState.y1, drawState.x2-drawState.x1) * 180/Math.PI;
         const az  = len > 0 ? ((Math.atan2(drawState.x2-drawState.x1, -(drawState.y2-drawState.y1))*180/Math.PI)+360)%360 : 0;
+        const na  = normAng(ang);
         return <>
           <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />
           {showDims && len >= 5*ps && <>
-            {dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtPxAsReal(len, scaleDenom, units), ps)}
-            {dimTextEl(mx - nx*OFF, my - ny*OFF, ang, toDMS(az), ps)}
+            {dimTextEl(mx + nx*OFF, my + ny*OFF, na, fmtPxAsReal(len, scaleDenom, units), ps)}
+            {dimTextEl(mx - nx*OFF, my - ny*OFF, na, toDMS(az), ps)}
           </>}
         </>;
       }
@@ -2021,12 +2034,13 @@ function SketchPage({ page, projectId, onReload }) {
           const ny  = len > 0 ?  (drawState.x2-drawState.x1)/len : 1;
           const ang = Math.atan2(drawState.y2-drawState.y1, drawState.x2-drawState.x1) * 180/Math.PI;
           const az  = len > 0 ? ((Math.atan2(drawState.x2-drawState.x1, -(drawState.y2-drawState.y1))*180/Math.PI)+360)%360 : 0;
+          const na  = normAng(ang);
           return <>
             <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />
             <circle cx={drawState.x1} cy={drawState.y1} r={4*ps} fill="#3B82F6" opacity={0.7} />
             {showDims && len >= 5*ps && <>
-              {dimTextEl(mx + nx*OFF, my + ny*OFF, ang, fmtPxAsReal(len, scaleDenom, units), ps)}
-              {dimTextEl(mx - nx*OFF, my - ny*OFF, ang, toDMS(az), ps)}
+              {dimTextEl(mx + nx*OFF, my + ny*OFF, na, fmtPxAsReal(len, scaleDenom, units), ps)}
+              {dimTextEl(mx - nx*OFF, my - ny*OFF, na, toDMS(az), ps)}
             </>}
           </>;
         } else {
