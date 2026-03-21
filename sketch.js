@@ -140,10 +140,14 @@ function arcPath(x1, y1, x2, y2, px, py) {
   const { R, delta } = arc;
   const largeArc = delta > 180 ? 1 : 0;
   // Sweep: cross-product of (PI - BC) × (EC - BC) in SVG y-down coords.
-  // cross < 0 → PI is right of BC→EC → CW sweep → sweep=1.
-  // The arc always curves toward the PI.
+  // SVG sweep=1 = positive-angle direction = CW on screen.
+  // cross > 0 → PI is LEFT of BC→EC (above chord for horizontal BC→EC).
+  // PO goes to opposite side (below chord), and the arc must travel CW
+  // to reach the top of the circle — i.e., toward PI.  sweep=1.
+  // cross < 0 → PI RIGHT of BC→EC → PO above chord → arc goes CCW (sweep=0)
+  // toward bottom, i.e., toward PI.
   const cross = (px - x1) * (y2 - y1) - (py - y1) * (x2 - x1);
-  const sweep  = cross < 0 ? 1 : 0;
+  const sweep  = cross > 0 ? 1 : 0;
   return `M ${x1} ${y1} A ${R.toFixed(3)} ${R.toFixed(3)} 0 ${largeArc} ${sweep} ${x2} ${y2}`;
 }
 
@@ -784,7 +788,22 @@ function SketchPage({ page, projectId, onReload }) {
         const { px: cpx, py: cpy } = getCurvePI(shape);
         if (nodeKey === 'p1') return { ...shape, x1: shape.x1+dx, y1: shape.y1+dy };
         if (nodeKey === 'p2') return { ...shape, x2: shape.x2+dx, y2: shape.y2+dy };
-        if (nodeKey === 'pi') return { ...shape, px: cpx+dx, py: cpy+dy };
+        if (nodeKey === 'pi') {
+          // Constrain PI to the perpendicular bisector of BC-EC.
+          // The PI for a symmetric circular curve always lies on this line,
+          // so we only allow movement along it (controls curve depth, not lateral drift).
+          const { x1, y1, x2, y2 } = shape;
+          const chord = Math.hypot(x2-x1, y2-y1) || 1;
+          const mx = (x1+x2)/2, my = (y1+y2)/2;
+          const perpX = -(y2-y1)/chord, perpY = (x2-x1)/chord;  // left-hand unit normal
+          const rawPx = cpx + dx, rawPy = cpy + dy;
+          // Signed projection distance from chord midpoint along perp bisector
+          const t = (rawPx - mx) * perpX + (rawPy - my) * perpY;
+          // Clamp to avoid degenerate flat curve
+          const minT = chord * 0.05;
+          const ct = t >= 0 ? Math.max(minT, t) : Math.min(-minT, t);
+          return { ...shape, px: mx + perpX * ct, py: my + perpY * ct };
+        }
         break;
       }
       case 'circle':
@@ -1131,8 +1150,16 @@ function SketchPage({ page, projectId, onReload }) {
         // EC tracks snapped mouse (phase 1: choosing second endpoint)
         setDrawState(d => ({ ...d, x2: pt.x, y2: pt.y }));
       } else if (drawState.phase === 2) {
-        // PI tracks raw mouse — user is shaping the curve by moving the PI
-        setDrawState(d => ({ ...d, px: rawPt.x, py: rawPt.y }));
+        // PI tracks the perpendicular bisector of BC-EC — constraining lateral drift.
+        // Project raw mouse position onto the perp bisector through the chord midpoint.
+        const { x1, y1, x2, y2 } = drawState;
+        const chord = Math.hypot(x2-x1, y2-y1) || 1;
+        const mx = (x1+x2)/2, my = (y1+y2)/2;
+        const perpX = -(y2-y1)/chord, perpY = (x2-x1)/chord;
+        const t = (rawPt.x - mx) * perpX + (rawPt.y - my) * perpY;
+        const minT = chord * 0.05;
+        const ct = t >= 0 ? Math.max(minT, t) : Math.min(-minT, t);
+        setDrawState(d => ({ ...d, px: mx + perpX * ct, py: my + perpY * ct }));
       }
     } else if (drawState.type === 'circle') {
       const r = Math.hypot(pt.x - drawState.cx, pt.y - drawState.cy);
@@ -1227,16 +1254,19 @@ function SketchPage({ page, projectId, onReload }) {
               // Verify tp falls on the drawn arc segment (BC→EC in the correct sweep direction)
               // Sweep direction is determined by which side of BC→EC the PI is on.
               const cross = (cpx - s.x1) * (s.y2 - s.y1) - (cpy - s.y1) * (s.x2 - s.x1);
-              const sweepCW = cross < 0;   // true → CW arc (sweep=1 in SVG)
+              // sweepCW = true means SVG sweep=1 (positive-angle / CW on screen)
+              // matches the corrected arcPath convention: cross > 0 → sweep=1
+              const sweepCW = cross > 0;
               const angA = Math.atan2(s.y1  - cy, s.x1  - cx);
               const angB = Math.atan2(s.y2  - cy, s.x2  - cx);
               const angP = Math.atan2(tp.y  - cy, tp.x  - cx);
-              // Normalise angB and angP relative to angA in the sweep direction
+              // Normalise: how far along the arc (in the sweep direction) is each angle?
+              // sweepCW (increasing theta): distance = (a - angA) mod 2π
+              // !sweepCW (decreasing theta): distance = (angA - a) mod 2π
               const norm = sweepCW
-                ? a => { let r = angA - a; while (r < 0) r += 2*Math.PI; return r; }
-                : a => { let r = a - angA; while (r < 0) r += 2*Math.PI; return r; };
+                ? a => { let r = a - angA; while (r < 0) r += 2*Math.PI; return r; }
+                : a => { let r = angA - a; while (r < 0) r += 2*Math.PI; return r; };
               const nB = norm(angB), nP = norm(angP);
-              // Also handle large arcs (Δ > 180°) — nB tells us the arc span
               if (nP <= nB + 1e-6) return s;
             }
           }
