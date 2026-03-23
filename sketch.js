@@ -975,12 +975,15 @@ function SketchPage({ page, projectId, onReload }) {
           { key: 'br', x: shape.x + shape.w, y: shape.y + shape.h, type: 'endpoint' },
         ];
       case 'text': {
-        const th = shape.h || 80;
+        // s.w / s.h are screen pixels — convert to world units for handle positions
+        const _ps2 = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+        const tw2  = (shape.w || 180) * _ps2;
+        const th2  = (shape.h ||  80) * _ps2;
         return [
-          { key: 'tl', x: shape.x,            y: shape.y,      type: 'endpoint' },
-          { key: 'tr', x: shape.x + shape.w,  y: shape.y,      type: 'endpoint' },
-          { key: 'bl', x: shape.x,            y: shape.y + th, type: 'endpoint' },
-          { key: 'br', x: shape.x + shape.w,  y: shape.y + th, type: 'endpoint' },
+          { key: 'tl', x: shape.x,       y: shape.y,       type: 'endpoint' },
+          { key: 'tr', x: shape.x + tw2, y: shape.y,       type: 'endpoint' },
+          { key: 'bl', x: shape.x,       y: shape.y + th2, type: 'endpoint' },
+          { key: 'br', x: shape.x + tw2, y: shape.y + th2, type: 'endpoint' },
         ];
       }
       default: return [];
@@ -1079,11 +1082,14 @@ function SketchPage({ page, projectId, onReload }) {
         break;
       }
       case 'text': {
-        const th = shape.h || 80;
-        if (nodeKey === 'tl') return { ...shape, x: shape.x+dx, y: shape.y+dy, w: Math.max(40, shape.w-dx), h: Math.max(20, th-dy) };
-        if (nodeKey === 'tr') return { ...shape,                y: shape.y+dy, w: Math.max(40, shape.w+dx), h: Math.max(20, th-dy) };
-        if (nodeKey === 'bl') return { ...shape, x: shape.x+dx,                w: Math.max(40, shape.w-dx), h: Math.max(20, th+dy) };
-        if (nodeKey === 'br') return { ...shape,                                w: Math.max(40, shape.w+dx), h: Math.max(20, th+dy) };
+        // s.w / s.h are screen pixels; dx/dy are world units — divide by ps to match units
+        const _ps3 = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+        const tw3  = shape.w || 180;
+        const th3  = shape.h ||  80;
+        if (nodeKey === 'tl') return { ...shape, x: shape.x+dx, y: shape.y+dy, w: Math.max(40, tw3-dx/_ps3), h: Math.max(20, th3-dy/_ps3) };
+        if (nodeKey === 'tr') return { ...shape,                y: shape.y+dy, w: Math.max(40, tw3+dx/_ps3), h: Math.max(20, th3-dy/_ps3) };
+        if (nodeKey === 'bl') return { ...shape, x: shape.x+dx,                w: Math.max(40, tw3-dx/_ps3), h: Math.max(20, th3+dy/_ps3) };
+        if (nodeKey === 'br') return { ...shape,                                w: Math.max(40, tw3+dx/_ps3), h: Math.max(20, th3+dy/_ps3) };
         break;
       }
     }
@@ -1598,15 +1604,17 @@ function SketchPage({ page, projectId, onReload }) {
     }
 
     // Text bbox drawn — open the textarea at the drawn dimensions.
-    // A tiny drag (< 10px) acts as a click: opens a default-sized box.
+    // drawState.w/h are in world units; convert to screen pixels for storage
+    // (s.w/s.h are kept as screen px so the box stays the same visual size at any zoom).
     if (drawState.type === 'text') {
+      const _psUp = viewBox.w / (svgSizeRef.current.w || viewBox.w);
       const bigEnough = drawState.w > 10 && drawState.h > 10;
       setTextEdit({
         id: newId(),
         x:  bigEnough ? drawState.x  : drawState.ox,
         y:  bigEnough ? drawState.y  : drawState.oy,
-        w:  bigEnough ? drawState.w  : 180,
-        h:  bigEnough ? drawState.h  : 80,
+        w:  bigEnough ? Math.round(drawState.w / _psUp) : 180,
+        h:  bigEnough ? Math.round(drawState.h / _psUp) : 80,
         content: '',
         layerId: drawState.layerId || activeLayerId,
       });
@@ -1668,9 +1676,12 @@ function SketchPage({ page, projectId, onReload }) {
         if (tp.x >= s.x-thresh && tp.x <= s.x+s.w+thresh &&
             tp.y >= s.y-thresh && tp.y <= s.y+s.h+thresh) return s;
       } else if (s.type === 'text') {
-        const sh = s.h || 40;
-        if (tp.x >= s.x-thresh && tp.x <= s.x+(s.w||160)+thresh &&
-            tp.y >= s.y-thresh && tp.y <= s.y+sh+thresh) return s;
+        // s.w / s.h are screen pixels — convert to world units for hit-test bounds
+        const _psHT = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+        const twHT  = (s.w || 180) * _psHT;
+        const thHT  = (s.h ||  80) * _psHT;
+        if (tp.x >= s.x-thresh && tp.x <= s.x+twHT+thresh &&
+            tp.y >= s.y-thresh && tp.y <= s.y+thHT+thresh) return s;
       }
     }
     return null;
@@ -1982,7 +1993,7 @@ function SketchPage({ page, projectId, onReload }) {
     const ps  = viewBox.w / (svgSizeRef.current.w || viewBox.w);
     const hit = hitTest(pt, shapes, 8 * ps);
     if (hit && hit.type === 'text') {
-      setTextEdit({ id: hit.id, x: hit.x, y: hit.y, w: hit.w, content: hit.content, editing: true });
+      setTextEdit({ id: hit.id, x: hit.x, y: hit.y, w: hit.w, h: hit.h || 80, content: hit.content, editing: true });
       commitShapes(shapes.filter(s => s.id !== hit.id));
     }
   }
@@ -2084,14 +2095,18 @@ function SketchPage({ page, projectId, onReload }) {
         // same visual size on screen regardless of zoom — identical to dim labels.
         // The border box is in world coordinates (stays fixed to the drawing).
         const _tps      = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-        const tFontSize = 9.5 * _tps;               // ~same as dim text
+        const tFontSize = 9.5 * _tps;               // counter-scaled: constant screen size
         const tLineH    = tFontSize * 1.55;
-        const tw        = s.w || 180;
-        const th        = s.h || 80;
-        // Courier New is monospace: each char ≈ 0.6× the font size wide.
-        // Subtract a small left+right padding (6px screen = 6*_tps world units).
-        const charW     = tFontSize * 0.601;
-        const maxChars  = Math.max(1, Math.floor((tw - 6 * _tps) / charW));
+        // s.w / s.h are screen pixels — multiply by _tps to get world-space dimensions.
+        // This makes the box counter-scale with zoom: same visual size at any zoom level.
+        const swPx      = s.w || 180;               // screen-pixel width
+        const shPx      = s.h || 80;                // screen-pixel height
+        const tw        = swPx * _tps;              // world-space width
+        const th        = shPx * _tps;              // world-space height
+        // maxChars is purely screen-space (screen px / screen char width) so wrap
+        // stays identical regardless of zoom level.
+        const charW     = 9.5 * 0.601;              // screen px per Courier New char
+        const maxChars  = Math.max(1, Math.floor((swPx - 6) / charW));
         const lines     = wrapText(s.content || '', maxChars);
         inner = (
           <g style={sel}>
@@ -3164,10 +3179,9 @@ function SketchPage({ page, projectId, onReload }) {
               textEdit stores world coordinates; convert to screen pixels for CSS. */}
           {textEdit && (() => {
             const sp  = worldToScreen(textEdit.x, textEdit.y);
-            const _ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-            // Convert world-unit bbox to screen pixels for the textarea
-            const screenW = Math.max(80,  (textEdit.w || 180) / _ps);
-            const screenH = Math.max(40,  (textEdit.h || 80)  / _ps);
+            // textEdit.w/h are already screen pixels — use directly
+            const screenW = Math.max(80,  textEdit.w || 180);
+            const screenH = Math.max(40,  textEdit.h || 80);
             return (
             <div style={{
               position: 'absolute',
