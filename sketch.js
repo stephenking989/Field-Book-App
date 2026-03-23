@@ -1323,10 +1323,40 @@ function SketchPage({ page, projectId, onReload }) {
         return;
       }
 
-      // Body drag: move the whole shape
+      // Body drag: move the whole shape (with snap-to-node when any snap is active).
+      // Check each key point of the shape at its would-be position and snap
+      // whichever corner/endpoint is closest to a candidate.
       if (dragNode.nodeKey === 'body') {
-        const dx = rawPt.x - dragStart.svgX;
-        const dy = rawPt.y - dragStart.svgY;
+        let dx = rawPt.x - dragStart.svgX;
+        let dy = rawPt.y - dragStart.svgY;
+
+        if (anySnapActive) {
+          const snapShape = dragStart.snapshot.find(s => s.id === dragNode.shapeId);
+          if (snapShape) {
+            let bestDist = Infinity;
+            let bestAdj  = null;
+            let bestCand = null;
+            for (const node of getSnapPoints(snapShape)) {
+              const wouldBe = { x: node.x + dx, y: node.y + dy };
+              const cands   = collectSnapCandidates(wouldBe, null, dragNode.shapeId);
+              if (cands.length && cands[0].dist < bestDist) {
+                bestDist = cands[0].dist;
+                bestAdj  = { x: cands[0].pt.x - wouldBe.x, y: cands[0].pt.y - wouldBe.y };
+                bestCand = cands[0];
+              }
+            }
+            if (bestAdj) {
+              dx += bestAdj.x;
+              dy += bestAdj.y;
+              setSnapPoint({ x: bestCand.pt.x, y: bestCand.pt.y, type: bestCand.type });
+            } else {
+              setSnapPoint(null);
+            }
+          }
+        } else {
+          setSnapPoint(null);
+        }
+
         setShapes(dragStart.snapshot.map(s =>
           s.id === dragNode.shapeId ? applyNodeDrag(s, 'body', dx, dy) : s
         ));
@@ -1640,14 +1670,58 @@ function SketchPage({ page, projectId, onReload }) {
     return { x: a.x+t*dx, y: a.y+t*dy };
   }
 
-  // Master snap resolver — replaces snapToNodes().
-  // drawingFrom: start of the active segment being drawn (enables perpendicular snap).
-  // excludeId:   skip this shape's own nodes (for node-drag self-snap prevention).
-  // Sets snapPoint state (with type) and returns snapped world pt (or pt unchanged).
-  function resolveSnap(pt, drawingFrom = null, excludeId = null) {
+  // Returns the nearest point(s) on a shape's actual geometry (edges/arcs).
+  // Used by "On Object" snap — lets endpoints snap anywhere along a line, arc, circle, or rect edge.
+  function nearestOnShape(pt, s) {
+    const rot = s._rot || 0;
+    const piv = getShapePivot(s);
+    const rp  = (x, y) => rot ? rotatePoint(x, y, piv.x, piv.y, rot) : { x, y };
+    const pts = [];
+    if (s.type === 'line') {
+      const f = perpFoot(pt, rp(s.x1, s.y1), rp(s.x2, s.y2));
+      if (f) pts.push(f);
+    } else if (s.type === 'rect') {
+      const { x, y, w, h } = s;
+      const corners = [[x,y],[x+w,y],[x+w,y+h],[x,y+h]];
+      for (let i = 0; i < 4; i++) {
+        const a = rp(corners[i][0], corners[i][1]);
+        const b = rp(corners[(i+1)%4][0], corners[(i+1)%4][1]);
+        const f = perpFoot(pt, a, b);
+        if (f) pts.push(f);
+      }
+    } else if (s.type === 'circle') {
+      const dx = pt.x - s.cx, dy = pt.y - s.cy;
+      const d  = Math.hypot(dx, dy);
+      if (d > 1e-6) pts.push({ x: s.cx + (dx/d)*s.r, y: s.cy + (dy/d)*s.r });
+    } else if (s.type === 'curve') {
+      const cp = computeArcFromPI(s.x1, s.y1, s.x2, s.y2, s.px, s.py);
+      if (cp) {
+        const dx = pt.x - cp.cx, dy = pt.y - cp.cy;
+        const d  = Math.hypot(dx, dy);
+        if (d > 1e-6) {
+          const projected = { x: cp.cx + (dx/d)*cp.R, y: cp.cy + (dy/d)*cp.R };
+          // Only include if projected point lies within the arc's actual sweep
+          const cross   = (s.px - s.x1)*(s.y2 - s.y1) - (s.py - s.y1)*(s.x2 - s.x1);
+          const sweepCW = cross > 0;
+          const norm    = a => ((a % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI);
+          const angA    = Math.atan2(s.y1 - cp.cy, s.x1 - cp.cx);
+          const angB    = Math.atan2(s.y2 - cp.cy, s.x2 - cp.cx);
+          const angP    = Math.atan2(dy, dx);
+          const nP      = sweepCW ? norm(angP - angA) : norm(angA - angP);
+          const nB      = sweepCW ? norm(angB - angA) : norm(angA - angB);
+          if (nP <= nB + 1e-6) pts.push(projected);
+        }
+      }
+    }
+    return pts;
+  }
+
+  // Collect snap candidates around `pt` — pure, no state side-effects.
+  // Used by resolveSnap (drawing/node-drag) and body-drag snap.
+  function collectSnapCandidates(pt, drawingFrom = null, excludeId = null) {
     const ps    = viewBox.w / (svgSizeRef.current.w || viewBox.w);
     const snapR = SNAP_R_PX * ps;
-    const candidates = []; // { pt:{x,y}, dist, type }
+    const candidates = [];
 
     const visibleShapes = shapes.filter(s => {
       const layer = layers.find(l => l.id === (s.layerId || layers[0]?.id));
@@ -1668,6 +1742,7 @@ function SketchPage({ page, projectId, onReload }) {
     // ── 2. Midpoint ────────────────────────────────────────────────────────
     if (snapModes.midpoint) {
       for (const s of visibleShapes) {
+        if (s.id === excludeId) continue;
         const rot = s._rot || 0;
         const piv = getShapePivot(s);
         const rp  = (x, y) => rot ? rotatePoint(x, y, piv.x, piv.y, rot) : { x, y };
@@ -1694,27 +1769,14 @@ function SketchPage({ page, projectId, onReload }) {
       }
     }
 
-    // ── 3. Intersection ────────────────────────────────────────────────────
+    // ── 3. On Object (nearest point on shape geometry) ─────────────────────
+    // Lets an endpoint snap to ANY position along a line, arc, circle, or rect edge.
     if (snapModes.intersection) {
-      const segs    = visibleShapes.flatMap(getSegments);
-      const circles = visibleShapes.filter(s => s.type === 'circle');
-      // Segment / segment
-      for (let i = 0; i < segs.length; i++) {
-        for (let j = i+1; j < segs.length; j++) {
-          const ip = segIntersect(segs[i].a, segs[i].b, segs[j].a, segs[j].b);
-          if (ip) {
-            const d = Math.hypot(pt.x-ip.x, pt.y-ip.y);
-            if (d < snapR) candidates.push({ pt: ip, dist: d, type: 'intersection' });
-          }
-        }
-      }
-      // Segment / circle
-      for (const seg of segs) {
-        for (const c of circles) {
-          for (const ip of lineCircleIntersect(seg.a, seg.b, c.cx, c.cy, c.r)) {
-            const d = Math.hypot(pt.x-ip.x, pt.y-ip.y);
-            if (d < snapR) candidates.push({ pt: ip, dist: d, type: 'intersection' });
-          }
+      for (const s of visibleShapes) {
+        if (s.id === excludeId) continue;
+        for (const np of nearestOnShape(pt, s)) {
+          const d = Math.hypot(pt.x-np.x, pt.y-np.y);
+          if (d < snapR) candidates.push({ pt: np, dist: d, type: 'intersection' });
         }
       }
     }
@@ -1746,9 +1808,16 @@ function SketchPage({ page, projectId, onReload }) {
       }
     }
 
-    // Pick closest; tie-break by priority order
     const PRIORITY = { endpoint: 0, midpoint: 1, intersection: 2, perpendicular: 3, grid: 4 };
     candidates.sort((a, b) => a.dist - b.dist || PRIORITY[a.type] - PRIORITY[b.type]);
+    return candidates;
+  }
+
+  // Master snap resolver — sets snapPoint state and returns snapped world pt.
+  // drawingFrom: start of active drawing segment (enables perpendicular snap).
+  // excludeId:   skip this shape's own nodes (prevents self-snap on drag).
+  function resolveSnap(pt, drawingFrom = null, excludeId = null) {
+    const candidates = collectSnapCandidates(pt, drawingFrom, excludeId);
     const best = candidates[0] || null;
     setSnapPoint(best ? { x: best.pt.x, y: best.pt.y, type: best.type } : null);
     return best ? best.pt : pt;
@@ -2506,7 +2575,7 @@ function SketchPage({ page, projectId, onReload }) {
             {[
               { key: 'endpoint',     label: 'Endpoint',      icon: '◉', col: '#4ADE80', bg: 'rgba(34,197,94,0.15)',   desc: 'Line & curve endpoints' },
               { key: 'midpoint',     label: 'Midpoint',       icon: '◈', col: '#22D3EE', bg: 'rgba(34,211,238,0.15)',  desc: 'Segment midpoints' },
-              { key: 'intersection', label: 'Intersection',   icon: '✕', col: '#FB923C', bg: 'rgba(251,146,60,0.15)',  desc: 'Shape intersections' },
+              { key: 'intersection', label: 'On Object',      icon: '◎', col: '#FB923C', bg: 'rgba(251,146,60,0.15)',  desc: 'Nearest pt on shape' },
               { key: 'perpendicular',label: 'Perpendicular',  icon: '⊾', col: '#C084FC', bg: 'rgba(192,132,252,0.15)', desc: 'Perpendicular foot' },
               { key: 'grid',         label: 'Grid',           icon: '⊞', col: '#FCD34D', bg: 'rgba(251,191,36,0.15)',  desc: 'Grid intersections' },
             ].map(({ key, label, icon, col, bg, desc }) => {
@@ -2838,11 +2907,11 @@ function SketchPage({ page, projectId, onReload }) {
                   points={`${sx},${sy-d} ${sx+d},${sy} ${sx},${sy+d} ${sx-d},${sy}`}
                   fill="none" stroke={col} strokeWidth={sw} opacity={0.9} />;
               } else if (type === 'intersection') {
-                // Orange X
-                const d = r * 0.72;
+                // Orange "on-object" — circle with horizontal bar through it
                 indicator = <>
-                  <line x1={sx-d} y1={sy-d} x2={sx+d} y2={sy+d} stroke={col} strokeWidth={sw} opacity={0.9} strokeLinecap="round" />
-                  <line x1={sx+d} y1={sy-d} x2={sx-d} y2={sy+d} stroke={col} strokeWidth={sw} opacity={0.9} strokeLinecap="round" />
+                  <circle cx={sx} cy={sy} r={r * 0.82} fill="none" stroke={col} strokeWidth={sw} opacity={0.9} />
+                  <line x1={sx - r * 1.15} y1={sy} x2={sx + r * 1.15} y2={sy}
+                    stroke={col} strokeWidth={sw} opacity={0.9} strokeLinecap="round" />
                 </>;
               } else if (type === 'perpendicular') {
                 // Purple square
@@ -2884,11 +2953,6 @@ function SketchPage({ page, projectId, onReload }) {
                 borderRadius: 5, padding: '3px 7px',
                 backdropFilter: 'blur(3px)',
               }}>
-                {/* Scale ratio */}
-                <span style={{
-                  fontSize: 8.5, fontFamily: 'Courier New, monospace',
-                  color: 'rgba(30,50,130,0.55)', letterSpacing: '0.06em',
-                }}>1 : {scaleDenom.toLocaleString()}</span>
                 {/* Ticked bar */}
                 <svg width={barScreenW} height={7} style={{ overflow: 'visible', display: 'block' }}>
                   <line x1={0} y1={3.5} x2={barScreenW} y2={3.5}
