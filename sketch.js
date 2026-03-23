@@ -25,7 +25,7 @@ const ROT_HANDLE_DIST = 44; // px from pivot to rotate handle
 const PIVOT_R = 5;          // pivot crosshair circle radius
 const ROT_R   = 9;          // rotate handle hit radius
 // Node keys that snap (excludes bezier handle 'cp' and body/pivot/rotate pseudo-keys)
-const SNAP_NODES = new Set(['p1', 'p2', 'c', 'r', 'tl', 'br']);
+const SNAP_NODES = new Set(['p1', 'p2', 'c', 'r', 'tl', 'tr', 'bl', 'br']);
 
 const TOOLS = [
   { id: 'select',    label: 'Select',    icon: '↖' },
@@ -664,6 +664,7 @@ function SketchPage({ page, projectId, onReload }) {
   const svgRef      = useRef(null);
   const svgWrapRef  = useRef(null);
   const textareaRef = useRef(null);
+  const lastTapRef  = useRef({ time: 0, x: 0, y: 0 }); // for touch double-tap detection
   const toolbarRef  = useRef(null);   // top toolbar — used to anchor dropdown position
   const saveTimer   = useRef(null);
   // svgSizeRef: raw CSS pixel dimensions of the SVG container (updated by ResizeObserver).
@@ -931,14 +932,20 @@ function SketchPage({ page, projectId, onReload }) {
         ];
       case 'rect':
         return [
-          { key: 'tl', x: shape.x,            y: shape.y,            type: 'endpoint' },
-          { key: 'br', x: shape.x + shape.w,  y: shape.y + shape.h,  type: 'endpoint' },
+          { key: 'tl', x: shape.x,           y: shape.y,           type: 'endpoint' },
+          { key: 'tr', x: shape.x + shape.w, y: shape.y,           type: 'endpoint' },
+          { key: 'bl', x: shape.x,           y: shape.y + shape.h, type: 'endpoint' },
+          { key: 'br', x: shape.x + shape.w, y: shape.y + shape.h, type: 'endpoint' },
         ];
-      case 'text':
+      case 'text': {
+        const th = shape.h || 80;
         return [
-          { key: 'tl', x: shape.x,           y: shape.y,                     type: 'endpoint' },
-          { key: 'br', x: shape.x + shape.w, y: shape.y + (shape.h || 40),   type: 'control'  },
+          { key: 'tl', x: shape.x,            y: shape.y,      type: 'endpoint' },
+          { key: 'tr', x: shape.x + shape.w,  y: shape.y,      type: 'endpoint' },
+          { key: 'bl', x: shape.x,            y: shape.y + th, type: 'endpoint' },
+          { key: 'br', x: shape.x + shape.w,  y: shape.y + th, type: 'endpoint' },
         ];
+      }
       default: return [];
     }
   }
@@ -1029,13 +1036,19 @@ function SketchPage({ page, projectId, onReload }) {
         break;
       case 'rect': {
         if (nodeKey === 'tl') return { ...shape, x: shape.x+dx, y: shape.y+dy, w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h-dy) };
-        if (nodeKey === 'br') return { ...shape, w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h+dy) };
+        if (nodeKey === 'tr') return { ...shape,                y: shape.y+dy, w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h-dy) };
+        if (nodeKey === 'bl') return { ...shape, x: shape.x+dx,                w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h+dy) };
+        if (nodeKey === 'br') return { ...shape,                                w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h+dy) };
         break;
       }
-      case 'text':
-        if (nodeKey === 'tl') return { ...shape, x: shape.x+dx, y: shape.y+dy };
-        if (nodeKey === 'br') return { ...shape, w: Math.max(40, shape.w+dx) };
+      case 'text': {
+        const th = shape.h || 80;
+        if (nodeKey === 'tl') return { ...shape, x: shape.x+dx, y: shape.y+dy, w: Math.max(40, shape.w-dx), h: Math.max(20, th-dy) };
+        if (nodeKey === 'tr') return { ...shape,                y: shape.y+dy, w: Math.max(40, shape.w+dx), h: Math.max(20, th-dy) };
+        if (nodeKey === 'bl') return { ...shape, x: shape.x+dx,                w: Math.max(40, shape.w-dx), h: Math.max(20, th+dy) };
+        if (nodeKey === 'br') return { ...shape,                                w: Math.max(40, shape.w+dx), h: Math.max(20, th+dy) };
         break;
+      }
     }
     return shape;
   }
@@ -1080,10 +1093,12 @@ function SketchPage({ page, projectId, onReload }) {
     // they remain constant in screen pixels regardless of zoom level.
     const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
 
-    // ── Select mode: active when tool is 'select' OR when prevTool is set
-    // (prevTool is set immediately after creating a shape so handles are
-    //  interactive before the tool state has a chance to switch).
-    if (tool === 'select' || prevTool !== null) {
+    // ── Select mode: active when tool is 'select', when prevTool is set
+    // (shape just created — handles stay interactive), or when tool is 'text'
+    // and a text shape is already selected (so handles/drag work).
+    const textToolWithSelection = tool === 'text' && selectedId &&
+      shapes.some(s => s.id === selectedId && s.type === 'text');
+    if (tool === 'select' || prevTool !== null || textToolWithSelection) {
       const isTouch    = e.pointerType === 'touch';
       const nodeThresh = (isTouch ? 28 : NODE_R + 4) * ps;
       const hitThresh  = (isTouch ? 24 : 8) * ps;
@@ -1131,20 +1146,35 @@ function SketchPage({ page, projectId, onReload }) {
         }
       }
 
+      // ── Double-tap on touch: open text shape for editing ─────────────
+      if (e.pointerType === 'touch') {
+        const now = Date.now();
+        const lt  = lastTapRef.current;
+        if (now - lt.time < 350 && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < 30) {
+          const dblHit = hitTest(pt, shapes, 24 * ps);
+          if (dblHit && dblHit.type === 'text') {
+            setTextEdit({ id: dblHit.id, x: dblHit.x, y: dblHit.y,
+              w: dblHit.w, h: dblHit.h || 80, content: dblHit.content, editing: true });
+            commitShapes(shapes.filter(s => s.id !== dblHit.id));
+            lastTapRef.current = { time: 0, x: 0, y: 0 };
+            return;
+          }
+        }
+        lastTapRef.current = { time: now, x: e.clientX, y: e.clientY };
+      }
+
       // ── New selection / deselect ─────────────────────────────────────
       const hit = hitTest(pt, shapes, hitThresh);
       setSelectedId(hit ? hit.id : null);
       setDragNode(null);
       if (!hit && prevTool !== null) {
         // Clicking empty space exits post-create handle mode.
-        // tool was NEVER switched away from the drawing tool, so just clear
-        // prevTool and fall through — this same pointer event will start the
-        // next draw immediately (no extra click needed).
+        // Just deselect — do NOT fall through and start the next shape on the
+        // same click. The user needs a deliberate second click to begin drawing.
         setPrevTool(null);
-        // ← no return: fall through to the drawing tool handler below
-      } else {
         return;
       }
+      return;
     }
 
     if (tool === 'eraser') {
@@ -1155,8 +1185,27 @@ function SketchPage({ page, projectId, onReload }) {
     }
 
     if (tool === 'text') {
-      const id = newId();
-      setTextEdit({ id, x: pt.x, y: pt.y, w: 160, content: '', layerId: activeLayerId });
+      // Click on an existing text shape: select it (first click) or open for
+      // editing (click when already selected). This lets the text tool also
+      // resize text boxes via the corner handles.
+      const hitThresh = (e.pointerType === 'touch' ? 24 : 8) * ps;
+      const txtHit    = hitTest(pt, shapes, hitThresh);
+      if (txtHit && txtHit.type === 'text') {
+        if (selectedId === txtHit.id) {
+          // Second click on same text → open for editing
+          setTextEdit({ id: txtHit.id, x: txtHit.x, y: txtHit.y,
+            w: txtHit.w, h: txtHit.h || 80, content: txtHit.content, editing: true });
+          commitShapes(shapes.filter(s => s.id !== txtHit.id));
+        } else {
+          setSelectedId(txtHit.id);
+          setDragNode(null);
+        }
+        return;
+      }
+      // Click-drag on empty space draws a new text box (same flow as rect).
+      setSelectedId(null);
+      const sp = anySnapActive ? resolveSnap(pt) : pt;
+      setDrawState({ type: 'text', ox: sp.x, oy: sp.y, x: sp.x, y: sp.y, w: 0, h: 0, layerId: activeLayerId });
       return;
     }
 
@@ -1202,26 +1251,11 @@ function SketchPage({ page, projectId, onReload }) {
       }
     }
 
-    // ── Circle: 2-click ───────────────────────────────────────────────────────
+    // ── Circle: click-drag (same model as rect/line) ─────────────────────────
+    // pointerDown sets center, pointerMove updates radius, pointerUp commits.
     if (tool === 'circle') {
       const sp = anySnapActive ? resolveSnap(pt) : pt;
-      if (!drawState) {
-        // Click 1: snap + set center
-        setDrawState({ type: 'circle', phase: 1, cx: sp.x, cy: sp.y, r: 0, layerId: activeLayerId });
-      } else if (drawState.phase === 1) {
-        // Click 2: commit at current radius
-        if (drawState.r > 4) {
-          const _cirId = newId();
-          commitShapes([...shapes, { id: _cirId, type: 'circle',
-            cx: drawState.cx, cy: drawState.cy, r: drawState.r,
-            stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
-            layerId: drawState.layerId || activeLayerId }]);
-          setSelectedId(_cirId);
-          setPrevTool(tool);
-        }
-        setDrawState(null);
-        setSnapPoint(null);
-      }
+      setDrawState({ type: 'circle', cx: sp.x, cy: sp.y, r: 0, layerId: activeLayerId });
     }
 
     if (tool === 'rect') {
@@ -1451,7 +1485,7 @@ function SketchPage({ page, projectId, onReload }) {
     } else if (drawState.type === 'circle') {
       const r = Math.hypot(pt.x - drawState.cx, pt.y - drawState.cy);
       setDrawState(d => ({ ...d, r }));
-    } else if (drawState.type === 'rect') {
+    } else if (drawState.type === 'rect' || drawState.type === 'text') {
       setDrawState(d => ({
         ...d,
         x: Math.min(d.ox, pt.x), y: Math.min(d.oy, pt.y),
@@ -1510,7 +1544,37 @@ function SketchPage({ page, projectId, onReload }) {
       }
       setDrawState(null);
     }
-    // Curve and circle commit on click (handled in onPointerDown), not mouseup.
+
+    // Circle commits on mouseup (click-drag — same model as rect/line)
+    if (drawState.type === 'circle') {
+      if (drawState.r > 4) {
+        const _cirId = newId();
+        commitShapes([...shapes, { id: _cirId, type: 'circle',
+          cx: drawState.cx, cy: drawState.cy, r: drawState.r,
+          stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
+          layerId: drawState.layerId || activeLayerId }]);
+        setSelectedId(_cirId);
+        setPrevTool(tool);
+      }
+      setDrawState(null);
+      setSnapPoint(null);
+    }
+
+    // Text bbox drawn — open the textarea at the drawn dimensions.
+    // A tiny drag (< 10px) acts as a click: opens a default-sized box.
+    if (drawState.type === 'text') {
+      const bigEnough = drawState.w > 10 && drawState.h > 10;
+      setTextEdit({
+        id: newId(),
+        x:  bigEnough ? drawState.x  : drawState.ox,
+        y:  bigEnough ? drawState.y  : drawState.oy,
+        w:  bigEnough ? drawState.w  : 180,
+        h:  bigEnough ? drawState.h  : 80,
+        content: '',
+        layerId: drawState.layerId || activeLayerId,
+      });
+      setDrawState(null);
+    }
   }
 
   // Hit-test — returns first shape the point falls near/within.
@@ -1718,9 +1782,20 @@ function SketchPage({ page, projectId, onReload }) {
 
   // Collect snap candidates around `pt` — pure, no state side-effects.
   // Used by resolveSnap (drawing/node-drag) and body-drag snap.
+  // Each type has a different effective snap radius — endpoint has the
+  // largest "pull" (reaches out 14 screen px) while On Object only fires
+  // within ~7 screen px. This gives endpoint priority over close-but-not-
+  // endpoint snaps and makes the system feel right in the field.
   function collectSnapCandidates(pt, drawingFrom = null, excludeId = null) {
-    const ps    = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-    const snapR = SNAP_R_PX * ps;
+    const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+    // Per-type snap radii (in world units). Larger = stronger pull.
+    const SR = {
+      endpoint:      SNAP_R_PX        * ps,   // 14px — strongest
+      midpoint:      SNAP_R_PX * 0.75 * ps,   // ~10.5px
+      intersection:  SNAP_R_PX * 0.50 * ps,   // ~7px  — weakest (on-object)
+      perpendicular: SNAP_R_PX * 0.70 * ps,   // ~10px
+      grid:          SNAP_R_PX * 0.65 * ps,   // ~9px
+    };
     const candidates = [];
 
     const visibleShapes = shapes.filter(s => {
@@ -1734,7 +1809,7 @@ function SketchPage({ page, projectId, onReload }) {
         if (s.id === excludeId) continue;
         for (const sp of getSnapPoints(s)) {
           const d = Math.hypot(pt.x-sp.x, pt.y-sp.y);
-          if (d < snapR) candidates.push({ pt: sp, dist: d, type: 'endpoint' });
+          if (d < SR.endpoint) candidates.push({ pt: sp, dist: d, type: 'endpoint' });
         }
       }
     }
@@ -1764,7 +1839,7 @@ function SketchPage({ page, projectId, onReload }) {
         }
         for (const m of mids) {
           const d = Math.hypot(pt.x-m.x, pt.y-m.y);
-          if (d < snapR) candidates.push({ pt: m, dist: d, type: 'midpoint' });
+          if (d < SR.midpoint) candidates.push({ pt: m, dist: d, type: 'midpoint' });
         }
       }
     }
@@ -1776,7 +1851,7 @@ function SketchPage({ page, projectId, onReload }) {
         if (s.id === excludeId) continue;
         for (const np of nearestOnShape(pt, s)) {
           const d = Math.hypot(pt.x-np.x, pt.y-np.y);
-          if (d < snapR) candidates.push({ pt: np, dist: d, type: 'intersection' });
+          if (d < SR.intersection) candidates.push({ pt: np, dist: d, type: 'intersection' });
         }
       }
     }
@@ -1788,7 +1863,7 @@ function SketchPage({ page, projectId, onReload }) {
           const foot = perpFoot(drawingFrom, seg.a, seg.b);
           if (!foot) continue;
           const d = Math.hypot(pt.x-foot.x, pt.y-foot.y);
-          if (d < snapR) candidates.push({ pt: foot, dist: d, type: 'perpendicular' });
+          if (d < SR.perpendicular) candidates.push({ pt: foot, dist: d, type: 'perpendicular' });
         }
       }
     }
@@ -1804,7 +1879,7 @@ function SketchPage({ page, projectId, onReload }) {
           y: Math.round(pt.y / minorPx) * minorPx,
         };
         const d = Math.hypot(pt.x-gp.x, pt.y-gp.y);
-        if (d < snapR) candidates.push({ pt: gp, dist: d, type: 'grid' });
+        if (d < SR.grid) candidates.push({ pt: gp, dist: d, type: 'grid' });
       }
     }
 
@@ -1855,13 +1930,10 @@ function SketchPage({ page, projectId, onReload }) {
   function commitText() {
     if (!textEdit) return;
     if (textEdit.content.trim()) {
-      // Capture actual textarea size so the foreignObject matches exactly
-      const ta = textareaRef.current;
-      const w  = ta ? ta.offsetWidth  : (textEdit.w || 160);
-      const h  = ta ? ta.scrollHeight : 80;
       commitShapes([...shapes, { id: textEdit.id, type: 'text',
-        x: textEdit.x, y: textEdit.y, w, h,
-        content: textEdit.content, fontSize: 13, stroke: STROKE,
+        x: textEdit.x, y: textEdit.y,
+        w: textEdit.w || 180, h: textEdit.h || 80,
+        content: textEdit.content, stroke: STROKE,
         layerId: textEdit.layerId || activeLayerId }]);
     }
     setTextEdit(null);
@@ -1970,21 +2042,41 @@ function SketchPage({ page, projectId, onReload }) {
         inner = <rect x={s.x} y={s.y} width={s.w} height={s.h}
           stroke={s.stroke} strokeWidth={s.strokeWidth} fill={s.fill || 'none'} style={sel} />;
         break;
-      case 'text':
+      case 'text': {
+        // Text is rendered as counter-scaled SVG text elements so it stays the
+        // same visual size on screen regardless of zoom — identical to dim labels.
+        // The border box is in world coordinates (stays fixed to the drawing).
+        const _tps      = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+        const tFontSize = 9.5 * _tps;               // ~same as dim text
+        const tLineH    = tFontSize * 1.55;
+        const tw        = s.w || 180;
+        const th        = s.h || 80;
+        const lines     = (s.content || '').split('\n');
         inner = (
-          <foreignObject x={s.x} y={s.y} width={s.w || 160} height={(s.h || 80) + 8} style={sel}>
-            <div xmlns="http://www.w3.org/1999/xhtml" style={{
-              width: '100%', boxSizing: 'border-box',
-              fontFamily: 'Courier New, monospace', fontSize: s.fontSize || 13,
-              color: s.stroke, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              overflowWrap: 'break-word', lineHeight: 1.4, padding: '2px 4px',
-              pointerEvents: 'none', userSelect: 'none',
-            }}>
-              {s.content}
-            </div>
-          </foreignObject>
+          <g style={sel}>
+            {/* Border box — dashed like a note field */}
+            <rect x={s.x} y={s.y} width={tw} height={th}
+              fill="rgba(255,255,248,0.55)"
+              stroke={s.stroke || STROKE} strokeWidth={0.7 * _tps}
+              strokeDasharray={`${3.5*_tps},${2*_tps}`} />
+            {/* Content lines — counter-scaled so font stays constant on screen */}
+            {lines.map((line, i) => (
+              <text key={i}
+                x={s.x + 3 * _tps}
+                y={s.y + tFontSize * 1.25 + i * tLineH}
+                fontSize={tFontSize}
+                fontFamily="Courier New, monospace"
+                fill={s.stroke || STROKE}
+                stroke="rgba(255,255,248,0.7)" strokeWidth={1.6 * _tps}
+                paintOrder="stroke fill"
+                style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                {line || '\u00A0'}
+              </text>
+            ))}
+          </g>
         );
         break;
+      }
       default: return null;
     }
     return <g key={s.id} transform={transform}>{inner}</g>;
@@ -2359,6 +2451,13 @@ function SketchPage({ page, projectId, onReload }) {
           {showDims && w >= 5*ps && dimTextEl(drawState.x + w/2,     drawState.y + h + OFF, 0,   fmtPxAsReal(w, scaleDenom, units), ps)}
           {showDims && h >= 5*ps && dimTextEl(drawState.x + w + OFF, drawState.y + h/2,     -90, fmtPxAsReal(h, scaleDenom, units), ps)}
         </>;
+      }
+      case 'text': {
+        // Text box draw preview — dashed blue rect
+        const w = Math.max(0, drawState.w), h = Math.max(0, drawState.h);
+        return <rect x={drawState.x} y={drawState.y} width={w} height={h}
+          stroke="#3B82F6" strokeWidth={1.5*ps} fill="rgba(59,130,246,0.06)"
+          strokeDasharray={`${4*ps},${2*ps}`} />;
       }
       default: return null;
     }
@@ -2868,7 +2967,7 @@ function SketchPage({ page, projectId, onReload }) {
             {/* Node handles for selected shape.
                 Shows in select mode OR when prevTool is set (shape just created —
                 tool hasn't switched, but we need handles immediately). */}
-            {selectedShape && (tool === 'select' || prevTool !== null) && renderNodes(selectedShape)}
+            {selectedShape && (tool === 'select' || tool === 'text' || prevTool !== null) && renderNodes(selectedShape)}
 
             {/* Preview shape while drawing */}
             {renderPreview()}
@@ -3023,14 +3122,16 @@ function SketchPage({ page, projectId, onReload }) {
           {/* Inline text editor — absolutely positioned in SVG container.
               textEdit stores world coordinates; convert to screen pixels for CSS. */}
           {textEdit && (() => {
-            const sp = worldToScreen(textEdit.x, textEdit.y);
-            // Scale the minimum width too so the textarea matches the SVG text size.
+            const sp  = worldToScreen(textEdit.x, textEdit.y);
             const _ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+            // Convert world-unit bbox to screen pixels for the textarea
+            const screenW = Math.max(80,  (textEdit.w || 180) / _ps);
+            const screenH = Math.max(40,  (textEdit.h || 80)  / _ps);
             return (
             <div style={{
               position: 'absolute',
               left: sp.x, top: sp.y,
-              minWidth: (textEdit.w || 160) / _ps,
+              width: screenW, height: screenH,
               zIndex: 20, pointerEvents: 'all',
             }}>
               <textarea
@@ -3042,19 +3143,13 @@ function SketchPage({ page, projectId, onReload }) {
                 onKeyDown={e => { if (e.key === 'Escape') setTextEdit(null); }}
                 style={{
                   display: 'block',
-                  width: '100%', minHeight: 40,
+                  width: '100%', height: '100%',
                   background: 'rgba(255,255,248,0.97)',
                   border: '1.5px dashed #3B82F6',
-                  outline: 'none', resize: 'both',
-                  fontFamily: 'Courier New, monospace', fontSize: 13,
-                  padding: '2px 4px', lineHeight: 1.4, color: STROKE,
-                  boxSizing: 'border-box', overflow: 'hidden',
-                }}
-                rows={2}
-                onInput={e => {
-                  // Auto-grow height to match content while editing
-                  e.target.style.height = 'auto';
-                  e.target.style.height = e.target.scrollHeight + 'px';
+                  outline: 'none', resize: 'none',
+                  fontFamily: 'Courier New, monospace', fontSize: 11,
+                  padding: '3px 5px', lineHeight: 1.55, color: STROKE,
+                  boxSizing: 'border-box',
                 }}
               />
             </div>
