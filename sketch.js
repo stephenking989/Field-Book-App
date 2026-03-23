@@ -611,8 +611,15 @@ function SketchPage({ page, projectId, onReload }) {
   const [textEdit,    setTextEdit]    = useState(null);  // {id, x, y, w, content}
 
   // ── Snap ──────────────────────────────────────────────────────────────────
-  const [snapEnabled,    setSnapEnabled]    = useState(false);
-  const [snapPoint,      setSnapPoint]      = useState(null);  // {x,y}|null — visual indicator
+  const [snapModes, setSnapModes] = useState({
+    endpoint:      true,   // snap to shape endpoints / corners / centres
+    midpoint:      false,  // snap to midpoints of segments
+    intersection:  false,  // snap to line/line and line/circle intersections
+    perpendicular: false,  // snap to perpendicular foot on a segment
+    grid:          false,  // snap to minor grid intersections
+  });
+  const [snapPoint, setSnapPoint] = useState(null); // {x,y,type}|null — visual indicator
+  const anySnapActive = Object.values(snapModes).some(Boolean);
 
   // ── Scale & Units (Phase 3) ────────────────────────────────────────────────
   const [scaleDenom,    setScaleDenom]    = useState(page.scaleDenom  || 1);
@@ -1154,7 +1161,7 @@ function SketchPage({ page, projectId, onReload }) {
     }
 
     if (tool === 'line') {
-      const sp = snapEnabled ? snapToNodes(pt) : pt;
+      const sp = anySnapActive ? resolveSnap(pt) : pt;
       setDrawState({ type: 'line', x1: sp.x, y1: sp.y, x2: sp.x, y2: sp.y, layerId: activeLayerId });
     }
 
@@ -1163,7 +1170,7 @@ function SketchPage({ page, projectId, onReload }) {
     // Phase 2: click places EC; mouse tracks PI — arc updates live.
     // Phase 3: click places PI and commits the curve.
     if (tool === 'curve') {
-      const sp = snapEnabled ? snapToNodes(pt) : pt;
+      const sp = anySnapActive ? resolveSnap(pt) : pt;
       if (!drawState) {
         // Click 1: set BC
         setDrawState({ type: 'curve', phase: 1,
@@ -1175,7 +1182,7 @@ function SketchPage({ page, projectId, onReload }) {
         // drawState closure may be stale (still phase 1) when click 3 fires.
         // Without the guard the click-3 tap would re-run this branch and
         // overwrite x2/y2 with the PI tap position.
-        const ec = snapEnabled ? snapToNodes(pt) : pt;
+        const ec = anySnapActive ? resolveSnap(pt, { x: drawState.x1, y: drawState.y1 }) : pt;
         setDrawState(d => d?.phase === 1
           ? { ...d, phase: 2, x2: ec.x, y2: ec.y, px: ec.x, py: ec.y }
           : d);
@@ -1197,7 +1204,7 @@ function SketchPage({ page, projectId, onReload }) {
 
     // ── Circle: 2-click ───────────────────────────────────────────────────────
     if (tool === 'circle') {
-      const sp = snapEnabled ? snapToNodes(pt) : pt;
+      const sp = anySnapActive ? resolveSnap(pt) : pt;
       if (!drawState) {
         // Click 1: snap + set center
         setDrawState({ type: 'circle', phase: 1, cx: sp.x, cy: sp.y, r: 0, layerId: activeLayerId });
@@ -1218,7 +1225,7 @@ function SketchPage({ page, projectId, onReload }) {
     }
 
     if (tool === 'rect') {
-      const sp = snapEnabled ? snapToNodes(pt) : pt;
+      const sp = anySnapActive ? resolveSnap(pt) : pt;
       setDrawState({ type: 'rect', ox: sp.x, oy: sp.y, x: sp.x, y: sp.y, w: 0, h: 0, layerId: activeLayerId });
     }
   }
@@ -1328,14 +1335,14 @@ function SketchPage({ page, projectId, onReload }) {
 
       // Regular node drag.
       // When snap is on, project the node to the nearest candidate on any OTHER shape.
-      if (snapEnabled && SNAP_NODES.has(dragNode.nodeKey)) {
+      if (anySnapActive && SNAP_NODES.has(dragNode.nodeKey)) {
         const snapshotShape = dragStart.snapshot.find(s => s.id === dragNode.shapeId);
         const snapshotNode  = snapshotShape && getNodes(snapshotShape).find(n => n.key === dragNode.nodeKey);
         if (snapshotNode) {
           const rot = snapshotShape._rot || 0;
           const piv = getShapePivot(snapshotShape);
           // Snap the screen-space target, excluding the dragged shape so it can't self-snap
-          const snappedScreen = snapToNodes(rawPt, dragNode.shapeId);
+          const snappedScreen = resolveSnap(rawPt, null, dragNode.shapeId);
           // Convert target screen position to the shape's local (unrotated) coordinate space
           const tl = rot ? rotatePoint(snappedScreen.x, snappedScreen.y, piv.x, piv.y, -rot) : snappedScreen;
           const ldx = tl.x - snapshotNode.x;
@@ -1366,12 +1373,21 @@ function SketchPage({ page, projectId, onReload }) {
     }
 
     // ── Apply snap during drawing ─────────────────────────────────────────────
-    // Curve phase 2 (PI placement) is free-form — no endpoint snap on the PI.
+    // Curve phase 2 (PI placement) is free-form — no snap on the PI itself.
     let pt = rawPt;
-    if (snapEnabled && drawState) {
+    if (anySnapActive && drawState) {
       const isCurvePI = drawState.type === 'curve' && drawState.phase === 2;
-      if (!isCurvePI) pt = snapToNodes(rawPt);
-      else setSnapPoint(null);
+      if (!isCurvePI) {
+        // Determine the "drawing from" anchor for perpendicular snap
+        let drawingFrom = null;
+        if (drawState.type === 'line')   drawingFrom = { x: drawState.x1, y: drawState.y1 };
+        if (drawState.type === 'curve')  drawingFrom = { x: drawState.x1, y: drawState.y1 };
+        if (drawState.type === 'rect')   drawingFrom = { x: drawState.ox, y: drawState.oy };
+        if (drawState.type === 'circle') drawingFrom = { x: drawState.cx, y: drawState.cy };
+        pt = resolveSnap(rawPt, drawingFrom);
+      } else {
+        setSnapPoint(null);
+      }
     } else {
       setSnapPoint(null);
     }
@@ -1537,9 +1553,12 @@ function SketchPage({ page, projectId, onReload }) {
     return Math.hypot(p.x-(a.x+t*dx), p.y-(a.y+t*dy));
   }
 
-  // ── Snap helpers ───────────────────────────────────────────────────────────
-  // Returns the snap-candidate points for a shape (rotation-aware).
-  // Lines/curves: endpoints. Circles: centre. Rects: four corners. Text: top-left.
+  // ── Snap Engine (Phase 5) ────────────────────────────────────────────────
+  // Snap radius: 14 screen pixels, converted to world units at current zoom.
+  const SNAP_R_PX = 14;
+
+  // Endpoint candidates for a shape (rotation-aware).
+  // Lines/curves: BC + EC. Circles: centre. Rects: 4 corners. Text: top-left.
   function getSnapPoints(shape) {
     const rot = shape._rot || 0;
     const piv = getShapePivot(shape);
@@ -1549,10 +1568,10 @@ function SketchPage({ page, projectId, onReload }) {
       case 'curve':  raw = [{x:shape.x1,y:shape.y1},{x:shape.x2,y:shape.y2}]; break;
       case 'circle': raw = [{x:shape.cx,y:shape.cy}]; break;
       case 'rect':   raw = [
-        {x:shape.x,          y:shape.y},
-        {x:shape.x+shape.w,  y:shape.y},
-        {x:shape.x,          y:shape.y+shape.h},
-        {x:shape.x+shape.w,  y:shape.y+shape.h},
+        {x:shape.x,         y:shape.y},
+        {x:shape.x+shape.w, y:shape.y},
+        {x:shape.x,         y:shape.y+shape.h},
+        {x:shape.x+shape.w, y:shape.y+shape.h},
       ]; break;
       case 'text': raw = [{x:shape.x,y:shape.y}]; break;
     }
@@ -1560,23 +1579,179 @@ function SketchPage({ page, projectId, onReload }) {
     return raw.map(p => rotatePoint(p.x, p.y, piv.x, piv.y, rot));
   }
 
-  // Tries to snap pt to the nearest committed node within SNAP_R.
-  // excludeId: skip this shape's nodes (used during node-drag so a shape can't snap to itself).
-  // Updates the snap-indicator state and returns the snapped point (or pt if none).
-  function snapToNodes(pt, excludeId = null) {
-    // Keep snap radius constant in screen pixels regardless of zoom.
-    const ps     = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-    const SNAP_R = 10 * ps;
-    let best = null, bestDist = SNAP_R;
-    for (const s of shapes) {
-      if (s.id === excludeId) continue;
-      for (const sp of getSnapPoints(s)) {
-        const d = Math.hypot(pt.x - sp.x, pt.y - sp.y);
-        if (d < bestDist) { bestDist = d; best = sp; }
+  // Extract line segments from a shape (for intersection + perpendicular snaps).
+  function getSegments(s) {
+    const rot = s._rot || 0;
+    const piv = getShapePivot(s);
+    const rp = (x, y) => rot ? rotatePoint(x, y, piv.x, piv.y, rot) : { x, y };
+    switch (s.type) {
+      case 'line': return [{ a: rp(s.x1,s.y1), b: rp(s.x2,s.y2) }];
+      case 'rect': {
+        const { x, y, w, h } = s;
+        return [
+          { a: rp(x,   y),   b: rp(x+w, y) },
+          { a: rp(x+w, y),   b: rp(x+w, y+h) },
+          { a: rp(x+w, y+h), b: rp(x,   y+h) },
+          { a: rp(x,   y+h), b: rp(x,   y) },
+        ];
+      }
+      default: return [];
+    }
+  }
+
+  // Segment / segment intersection. Allows 5% extension to catch near-end hits.
+  function segIntersect(p1, p2, p3, p4) {
+    const d1x = p2.x-p1.x, d1y = p2.y-p1.y;
+    const d2x = p4.x-p3.x, d2y = p4.y-p3.y;
+    const cross = d1x*d2y - d1y*d2x;
+    if (Math.abs(cross) < 1e-8) return null;
+    const t = ((p3.x-p1.x)*d2y - (p3.y-p1.y)*d2x) / cross;
+    const u = ((p3.x-p1.x)*d1y - (p3.y-p1.y)*d1x) / cross;
+    const ext = 0.05;
+    if (t < -ext || t > 1+ext || u < -ext || u > 1+ext) return null;
+    return { x: p1.x + t*d1x, y: p1.y + t*d1y };
+  }
+
+  // Line segment / circle intersection. Returns 0–2 points.
+  function lineCircleIntersect(p1, p2, cx, cy, r) {
+    const dx = p2.x-p1.x, dy = p2.y-p1.y;
+    const fx = p1.x-cx,   fy = p1.y-cy;
+    const a = dx*dx + dy*dy;
+    if (a < 1e-10) return [];
+    const b = 2*(fx*dx + fy*dy);
+    const c = fx*fx + fy*fy - r*r;
+    const disc = b*b - 4*a*c;
+    if (disc < 0) return [];
+    const sq = Math.sqrt(disc);
+    const pts = [];
+    for (const sign of [-1, 1]) {
+      const t = (-b + sign*sq) / (2*a);
+      if (t >= -0.05 && t <= 1.05) pts.push({ x: p1.x+t*dx, y: p1.y+t*dy });
+    }
+    return pts;
+  }
+
+  // Perpendicular foot from point pt onto segment a→b. Returns null if degenerate.
+  function perpFoot(pt, a, b) {
+    const dx = b.x-a.x, dy = b.y-a.y;
+    const lenSq = dx*dx + dy*dy;
+    if (lenSq < 1e-8) return null;
+    const t = Math.max(0, Math.min(1, ((pt.x-a.x)*dx + (pt.y-a.y)*dy) / lenSq));
+    return { x: a.x+t*dx, y: a.y+t*dy };
+  }
+
+  // Master snap resolver — replaces snapToNodes().
+  // drawingFrom: start of the active segment being drawn (enables perpendicular snap).
+  // excludeId:   skip this shape's own nodes (for node-drag self-snap prevention).
+  // Sets snapPoint state (with type) and returns snapped world pt (or pt unchanged).
+  function resolveSnap(pt, drawingFrom = null, excludeId = null) {
+    const ps    = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+    const snapR = SNAP_R_PX * ps;
+    const candidates = []; // { pt:{x,y}, dist, type }
+
+    const visibleShapes = shapes.filter(s => {
+      const layer = layers.find(l => l.id === (s.layerId || layers[0]?.id));
+      return layer?.visible !== false;
+    });
+
+    // ── 1. Endpoint ────────────────────────────────────────────────────────
+    if (snapModes.endpoint) {
+      for (const s of visibleShapes) {
+        if (s.id === excludeId) continue;
+        for (const sp of getSnapPoints(s)) {
+          const d = Math.hypot(pt.x-sp.x, pt.y-sp.y);
+          if (d < snapR) candidates.push({ pt: sp, dist: d, type: 'endpoint' });
+        }
       }
     }
-    setSnapPoint(best);
-    return best || pt;
+
+    // ── 2. Midpoint ────────────────────────────────────────────────────────
+    if (snapModes.midpoint) {
+      for (const s of visibleShapes) {
+        const rot = s._rot || 0;
+        const piv = getShapePivot(s);
+        const rp  = (x, y) => rot ? rotatePoint(x, y, piv.x, piv.y, rot) : { x, y };
+        let mids = [];
+        if (s.type === 'line') {
+          mids = [rp((s.x1+s.x2)/2, (s.y1+s.y2)/2)];
+        } else if (s.type === 'curve') {
+          const cp = computeArcFromPI(s.x1, s.y1, s.x2, s.y2, s.px, s.py);
+          if (cp) {
+            const mx = (s.x1+s.x2)/2, my = (s.y1+s.y2)/2;
+            const pi = getCurvePI(s);
+            const ux = pi.px-mx, uy = pi.py-my;
+            const uLen = Math.hypot(ux, uy) || 1;
+            mids = [{ x: mx+(ux/uLen)*cp.M, y: my+(uy/uLen)*cp.M }];
+          }
+        } else if (s.type === 'rect') {
+          const { x, y, w, h } = s;
+          mids = [rp(x+w/2,y), rp(x+w,y+h/2), rp(x+w/2,y+h), rp(x,y+h/2)];
+        }
+        for (const m of mids) {
+          const d = Math.hypot(pt.x-m.x, pt.y-m.y);
+          if (d < snapR) candidates.push({ pt: m, dist: d, type: 'midpoint' });
+        }
+      }
+    }
+
+    // ── 3. Intersection ────────────────────────────────────────────────────
+    if (snapModes.intersection) {
+      const segs    = visibleShapes.flatMap(getSegments);
+      const circles = visibleShapes.filter(s => s.type === 'circle');
+      // Segment / segment
+      for (let i = 0; i < segs.length; i++) {
+        for (let j = i+1; j < segs.length; j++) {
+          const ip = segIntersect(segs[i].a, segs[i].b, segs[j].a, segs[j].b);
+          if (ip) {
+            const d = Math.hypot(pt.x-ip.x, pt.y-ip.y);
+            if (d < snapR) candidates.push({ pt: ip, dist: d, type: 'intersection' });
+          }
+        }
+      }
+      // Segment / circle
+      for (const seg of segs) {
+        for (const c of circles) {
+          for (const ip of lineCircleIntersect(seg.a, seg.b, c.cx, c.cy, c.r)) {
+            const d = Math.hypot(pt.x-ip.x, pt.y-ip.y);
+            if (d < snapR) candidates.push({ pt: ip, dist: d, type: 'intersection' });
+          }
+        }
+      }
+    }
+
+    // ── 4. Perpendicular ───────────────────────────────────────────────────
+    if (snapModes.perpendicular && drawingFrom) {
+      for (const s of visibleShapes) {
+        for (const seg of getSegments(s)) {
+          const foot = perpFoot(drawingFrom, seg.a, seg.b);
+          if (!foot) continue;
+          const d = Math.hypot(pt.x-foot.x, pt.y-foot.y);
+          if (d < snapR) candidates.push({ pt: foot, dist: d, type: 'perpendicular' });
+        }
+      }
+    }
+
+    // ── 5. Grid ────────────────────────────────────────────────────────────
+    if (snapModes.grid) {
+      const containerW = svgSizeRef.current.w || viewBox.w;
+      const majorPx = realToPx(niceScaleBarValue(scaleDenom, viewBox.w, containerW, units), scaleDenom, units);
+      const minorPx = majorPx / 5;
+      if (minorPx > 0) {
+        const gp = {
+          x: Math.round(pt.x / minorPx) * minorPx,
+          y: Math.round(pt.y / minorPx) * minorPx,
+        };
+        const d = Math.hypot(pt.x-gp.x, pt.y-gp.y);
+        if (d < snapR) candidates.push({ pt: gp, dist: d, type: 'grid' });
+      }
+    }
+
+    // Pick closest; tie-break by priority order
+    const PRIORITY = { endpoint: 0, midpoint: 1, intersection: 2, perpendicular: 3, grid: 4 };
+    candidates.sort((a, b) => a.dist - b.dist || PRIORITY[a.type] - PRIORITY[b.type]);
+    const best = candidates[0] || null;
+    setSnapPoint(best ? { x: best.pt.x, y: best.pt.y, type: best.type } : null);
+    return best ? best.pt : pt;
   }
 
   // ── Layer management ───────────────────────────────────────────────────────
@@ -2318,6 +2493,59 @@ function SketchPage({ page, projectId, onReload }) {
           </div>
         )}
 
+        {/* ── Snap dropdown panel ───────────────────────────────────────── */}
+        {openMenu === 'snap' && (
+          <div style={{
+            position: 'absolute', top: 36, left: menuPos.x, zIndex: 100,
+            background: 'rgba(16,22,48,0.98)', backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
+            boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+            minWidth: 200, padding: '4px 0',
+            fontFamily: 'Courier New, monospace',
+          }}>
+            {[
+              { key: 'endpoint',     label: 'Endpoint',      icon: '◉', col: '#4ADE80', bg: 'rgba(34,197,94,0.15)',   desc: 'Line & curve endpoints' },
+              { key: 'midpoint',     label: 'Midpoint',       icon: '◈', col: '#22D3EE', bg: 'rgba(34,211,238,0.15)',  desc: 'Segment midpoints' },
+              { key: 'intersection', label: 'Intersection',   icon: '✕', col: '#FB923C', bg: 'rgba(251,146,60,0.15)',  desc: 'Shape intersections' },
+              { key: 'perpendicular',label: 'Perpendicular',  icon: '⊾', col: '#C084FC', bg: 'rgba(192,132,252,0.15)', desc: 'Perpendicular foot' },
+              { key: 'grid',         label: 'Grid',           icon: '⊞', col: '#FCD34D', bg: 'rgba(251,191,36,0.15)',  desc: 'Grid intersections' },
+            ].map(({ key, label, icon, col, bg, desc }) => {
+              const on = snapModes[key];
+              return (
+                <button key={key}
+                  onClick={() => setSnapModes(m => ({ ...m, [key]: !m[key] }))}
+                  style={{
+                    width: '100%', height: 38, display: 'flex', alignItems: 'center',
+                    gap: 10, padding: '0 14px',
+                    background: on ? bg : 'transparent',
+                    border: 'none', cursor: 'pointer', textAlign: 'left',
+                    color: on ? col : 'rgba(255,255,255,0.5)',
+                    fontSize: 11,
+                  }}
+                >
+                  <span style={{ fontSize: 14, lineHeight: 1, width: 16, textAlign: 'center' }}>{icon}</span>
+                  <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>{label}</span>
+                  <span style={{ fontSize: 9, color: on ? col : 'rgba(255,255,255,0.2)', opacity: 0.75 }}>{desc}</span>
+                  <span style={{ fontSize: 10, color: on ? col : 'rgba(255,255,255,0.22)', marginLeft: 8, minWidth: 18, textAlign: 'right' }}>
+                    {on ? 'on' : 'off'}
+                  </span>
+                </button>
+              );
+            })}
+            {/* Tangent — future */}
+            <button disabled style={{
+              width: '100%', height: 38, display: 'flex', alignItems: 'center',
+              gap: 10, padding: '0 14px',
+              background: 'transparent', border: 'none', cursor: 'default',
+              color: 'rgba(255,255,255,0.22)', fontSize: 11, opacity: 0.5,
+            }}>
+              <span style={{ fontSize: 14, lineHeight: 1, width: 16, textAlign: 'center' }}>⌒</span>
+              <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>Tangent</span>
+              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.18)' }}>soon</span>
+            </button>
+          </div>
+        )}
+
         {/* ── Scrollable inner button row ──────────────────────────────── */}
         <div style={{
           height: '100%', display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px',
@@ -2326,22 +2554,28 @@ function SketchPage({ page, projectId, onReload }) {
           position: 'relative', zIndex: 99,
         }}>
 
-          {/* Snap toggle */}
+          {/* Snap ▾ dropdown button */}
           <button
-            onClick={() => { setSnapEnabled(v => !v); setSnapPoint(null); setOpenMenu(null); }}
-            title={snapEnabled ? 'Node snap ON — click to disable' : 'Node snap OFF — click to enable'}
+            onClick={e => {
+              const btnRect = e.currentTarget.getBoundingClientRect();
+              const barRect = toolbarRef.current ? toolbarRef.current.getBoundingClientRect() : { left: 0 };
+              setMenuPos({ x: btnRect.left - barRect.left });
+              setOpenMenu(m => m === 'snap' ? null : 'snap');
+            }}
+            title="Snap modes"
             style={{
-              height: 26, padding: '0 10px', borderRadius: 4, flexShrink: 0,
-              display: 'flex', alignItems: 'center', gap: 5,
-              background: snapEnabled ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.06)',
-              border: `1px solid ${snapEnabled ? 'rgba(34,197,94,0.55)' : 'rgba(255,255,255,0.14)'}`,
-              color: snapEnabled ? '#4ADE80' : 'rgba(255,255,255,0.45)',
+              height: 26, padding: '0 8px', borderRadius: 4, flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 4,
+              background: anySnapActive ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.06)',
+              border: `1px solid ${anySnapActive ? 'rgba(34,197,94,0.55)' : 'rgba(255,255,255,0.14)'}`,
+              color: anySnapActive ? '#4ADE80' : 'rgba(255,255,255,0.45)',
               cursor: 'pointer', fontSize: 11,
               fontFamily: 'Courier New, monospace', outline: 'none', transition: 'all 0.15s',
             }}
           >
-            <span style={{ fontSize: 14, lineHeight: 1 }}>⊙</span>
+            <span style={{ fontSize: 13, lineHeight: 1 }}>⊙</span>
             <span style={{ letterSpacing: '0.03em' }}>Snap</span>
+            <span style={{ fontSize: 8, opacity: 0.5, marginLeft: 1 }}>▾</span>
           </button>
 
           {/* Separator */}
@@ -2570,19 +2804,60 @@ function SketchPage({ page, projectId, onReload }) {
             {/* Preview shape while drawing */}
             {renderPreview()}
 
-            {/* Snap indicator — green crosshair at nearest snap point.
-                Radii counter-scaled by ps so the indicator stays the same
-                visual size in screen pixels regardless of zoom. */}
-            {snapEnabled && snapPoint && (() => {
-              const _ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-              return (
-                <g style={{ pointerEvents: 'none' }}>
-                  <circle cx={snapPoint.x} cy={snapPoint.y} r={9 * _ps}
-                    fill="none" stroke="#22C55E" strokeWidth={1.5 * _ps} opacity={0.85} />
-                  <circle cx={snapPoint.x} cy={snapPoint.y} r={2.5 * _ps}
-                    fill="#22C55E" opacity={0.85} />
-                </g>
-              );
+            {/* Snap indicator — per-type visual, counter-scaled so it stays
+                constant visual size in screen pixels regardless of zoom.
+                endpoint:      green circle
+                midpoint:      cyan diamond (rotated square)
+                intersection:  orange X cross
+                perpendicular: purple square
+                grid:          yellow crosshair */}
+            {anySnapActive && snapPoint && (() => {
+              const _ps  = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+              const sx   = snapPoint.x, sy = snapPoint.y;
+              const r    = 8 * _ps;
+              const sw   = 1.5 * _ps;
+              const type = snapPoint.type || 'endpoint';
+              const colors = {
+                endpoint:      '#22C55E',
+                midpoint:      '#22D3EE',
+                intersection:  '#FB923C',
+                perpendicular: '#C084FC',
+                grid:          '#FCD34D',
+              };
+              const col = colors[type] || '#22C55E';
+              let indicator;
+              if (type === 'endpoint') {
+                indicator = <>
+                  <circle cx={sx} cy={sy} r={r} fill="none" stroke={col} strokeWidth={sw} opacity={0.9} />
+                  <circle cx={sx} cy={sy} r={2.5 * _ps} fill={col} opacity={0.9} />
+                </>;
+              } else if (type === 'midpoint') {
+                // Cyan diamond — rotated 45° square
+                const d = r * 0.82;
+                indicator = <polygon
+                  points={`${sx},${sy-d} ${sx+d},${sy} ${sx},${sy+d} ${sx-d},${sy}`}
+                  fill="none" stroke={col} strokeWidth={sw} opacity={0.9} />;
+              } else if (type === 'intersection') {
+                // Orange X
+                const d = r * 0.72;
+                indicator = <>
+                  <line x1={sx-d} y1={sy-d} x2={sx+d} y2={sy+d} stroke={col} strokeWidth={sw} opacity={0.9} strokeLinecap="round" />
+                  <line x1={sx+d} y1={sy-d} x2={sx-d} y2={sy+d} stroke={col} strokeWidth={sw} opacity={0.9} strokeLinecap="round" />
+                </>;
+              } else if (type === 'perpendicular') {
+                // Purple square
+                const d = r * 0.72;
+                indicator = <rect x={sx-d} y={sy-d} width={2*d} height={2*d}
+                  fill="none" stroke={col} strokeWidth={sw} opacity={0.9} />;
+              } else {
+                // Grid — yellow crosshair
+                indicator = <>
+                  <line x1={sx-r} y1={sy} x2={sx+r} y2={sy} stroke={col} strokeWidth={sw} opacity={0.9} strokeLinecap="round" />
+                  <line x1={sx} y1={sy-r} x2={sx} y2={sy+r} stroke={col} strokeWidth={sw} opacity={0.9} strokeLinecap="round" />
+                  <circle cx={sx} cy={sy} r={2.5 * _ps} fill={col} opacity={0.75} />
+                </>;
+              }
+              return <g style={{ pointerEvents: 'none' }}>{indicator}</g>;
             })()}
           </svg>
 
