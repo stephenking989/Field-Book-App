@@ -155,6 +155,43 @@ function arcPath(x1, y1, x2, y2, px, py) {
 // DIMENSION LABEL UTILITIES
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Word-wrap text to fit inside a given character-width budget.
+// Handles explicit \n paragraph breaks; long words that exceed maxChars are
+// hard-broken at the limit so they never overflow the box.
+function wrapText(text, maxChars) {
+  if (maxChars < 1) maxChars = 1;
+  const out = [];
+  for (const para of text.split('\n')) {
+    if (para.length === 0) { out.push(''); continue; }
+    const words = para.split(' ');
+    let cur = '';
+    for (const word of words) {
+      // Hard-break any single word longer than maxChars
+      let w = word;
+      while (w.length > maxChars) {
+        const space = maxChars - cur.length - (cur ? 1 : 0);
+        if (space > 0) {
+          cur = cur ? cur + ' ' + w.slice(0, space) : w.slice(0, space);
+          w   = w.slice(space);
+        }
+        out.push(cur);
+        cur = '';
+      }
+      if (!w) continue;
+      if (!cur) {
+        cur = w;
+      } else if (cur.length + 1 + w.length <= maxChars) {
+        cur += ' ' + w;
+      } else {
+        out.push(cur);
+        cur = w;
+      }
+    }
+    if (cur) out.push(cur);
+  }
+  return out.length ? out : [''];
+}
+
 // Format a world-unit distance for display.
 // Shows enough precision to be useful without being noisy.
 function fmtDim(v) {
@@ -2051,7 +2088,11 @@ function SketchPage({ page, projectId, onReload }) {
         const tLineH    = tFontSize * 1.55;
         const tw        = s.w || 180;
         const th        = s.h || 80;
-        const lines     = (s.content || '').split('\n');
+        // Courier New is monospace: each char ≈ 0.6× the font size wide.
+        // Subtract a small left+right padding (6px screen = 6*_tps world units).
+        const charW     = tFontSize * 0.601;
+        const maxChars  = Math.max(1, Math.floor((tw - 6 * _tps) / charW));
+        const lines     = wrapText(s.content || '', maxChars);
         inner = (
           <g style={sel}>
             {/* Border box — dashed like a note field */}
