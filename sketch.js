@@ -1075,10 +1075,53 @@ function SketchPage({ page, projectId, onReload }) {
         if (nodeKey === 'r') return { ...shape, r: Math.max(4, shape.r+dx) };
         break;
       case 'rect': {
-        if (nodeKey === 'tl') return { ...shape, x: shape.x+dx, y: shape.y+dy, w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h-dy) };
-        if (nodeKey === 'tr') return { ...shape,                y: shape.y+dy, w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h-dy) };
-        if (nodeKey === 'bl') return { ...shape, x: shape.x+dx,                w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h+dy) };
-        if (nodeKey === 'br') return { ...shape,                                w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h+dy) };
+        const rot = shape._rot || 0;
+        if (!rot) {
+          // Unrotated: simple local-space delta — tl=(x,y) is fixed in world space.
+          if (nodeKey === 'tl') return { ...shape, x: shape.x+dx, y: shape.y+dy, w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h-dy) };
+          if (nodeKey === 'tr') return { ...shape,                y: shape.y+dy, w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h-dy) };
+          if (nodeKey === 'bl') return { ...shape, x: shape.x+dx,                w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h+dy) };
+          if (nodeKey === 'br') return { ...shape,                                w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h+dy) };
+        } else {
+          // Rotated: dx/dy arrive as local-space delta (caller already un-rotates).
+          // Recover world-space drag delta and work entirely in world coords so
+          // the OPPOSITE (fixed) corner stays pinned in world space.
+          const rad = rot * Math.PI / 180;
+          const cos = Math.cos(rad), sin = Math.sin(rad);
+          // Local → world: rotate by +rot
+          const wdx = dx * cos - dy * sin;
+          const wdy = dx * sin + dy * cos;
+          // Old pivot (center)
+          const cx = shape.x + shape.w / 2, cy = shape.y + shape.h / 2;
+          // Local corner positions
+          const C = {
+            tl: { x: shape.x,           y: shape.y           },
+            tr: { x: shape.x + shape.w, y: shape.y           },
+            bl: { x: shape.x,           y: shape.y + shape.h },
+            br: { x: shape.x + shape.w, y: shape.y + shape.h },
+          };
+          const opp = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' }[nodeKey];
+          if (!opp) break;
+          const Lf = C[opp], Ld = C[nodeKey]; // local fixed / dragged
+          // World positions of fixed and dragged corners (rotate around old center)
+          const Wfx = cx + (Lf.x-cx)*cos - (Lf.y-cy)*sin;
+          const Wfy = cy + (Lf.x-cx)*sin + (Lf.y-cy)*cos;
+          const Wdx = cx + (Ld.x-cx)*cos - (Ld.y-cy)*sin + wdx; // new world pos of dragged
+          const Wdy = cy + (Ld.x-cx)*sin + (Ld.y-cy)*cos + wdy;
+          // New world center = midpoint of fixed and new-dragged corners
+          const Ncx = (Wfx + Wdx) / 2, Ncy = (Wfy + Wdy) / 2;
+          // Un-rotate both world corners around new center by -rot → new local positions
+          const Lfnx = Ncx + (Wfx-Ncx)*cos + (Wfy-Ncy)*sin;
+          const Lfny = Ncy - (Wfx-Ncx)*sin + (Wfy-Ncy)*cos;
+          const Ldnx = Ncx + (Wdx-Ncx)*cos + (Wdy-Ncy)*sin;
+          const Ldny = Ncy - (Wdx-Ncx)*sin + (Wdy-Ncy)*cos;
+          // New rect: min/max of the two corners; enforce minimum size
+          const nx = Math.min(Lfnx, Ldnx);
+          const ny = Math.min(Lfny, Ldny);
+          const nw = Math.max(10, Math.abs(Ldnx - Lfnx));
+          const nh = Math.max(10, Math.abs(Ldny - Lfny));
+          return { ...shape, x: nx, y: ny, w: nw, h: nh };
+        }
         break;
       }
       case 'text': {
@@ -1420,8 +1463,26 @@ function SketchPage({ page, projectId, onReload }) {
       // This keeps every rendered point at the same screen position
       // regardless of where the new pivot sits.
       if (dragNode.nodeKey === 'pivot') {
-        const dx = rawPt.x - dragStart.svgX;
-        const dy = rawPt.y - dragStart.svgY;
+        let dx = rawPt.x - dragStart.svgX;
+        let dy = rawPt.y - dragStart.svgY;
+
+        // Snap the pivot to nearby shape nodes / snap points.
+        if (anySnapActive) {
+          const pivSnap = dragStart.snapshot.find(s => s.id === dragNode.shapeId);
+          if (pivSnap) {
+            const basePiv = getShapePivot(pivSnap);
+            const wouldBe = { x: basePiv.x + dx, y: basePiv.y + dy };
+            const cands   = collectSnapCandidates(wouldBe, null, dragNode.shapeId);
+            if (cands.length) {
+              dx = cands[0].pt.x - basePiv.x;
+              dy = cands[0].pt.y - basePiv.y;
+              setSnapPoint({ x: cands[0].pt.x, y: cands[0].pt.y, type: cands[0].type });
+            } else {
+              setSnapPoint(null);
+            }
+          }
+        }
+
         setShapes(dragStart.snapshot.map(s => {
           if (s.id !== dragNode.shapeId) return s;
           const basePiv = getShapePivot(s);
