@@ -49,7 +49,7 @@ function getShapePivot(shape) {
     case 'curve':  return { x: (shape.x1+shape.x2)/2,          y: (shape.y1+shape.y2)/2          };
     case 'circle': return { x: shape.cx,                        y: shape.cy                       };
     case 'rect':   return { x: shape.x + shape.w/2,             y: shape.y + shape.h/2            };
-    case 'text':   return { x: shape.x + (shape.w||160)/2,      y: shape.y + (shape.h||40)/2      };
+    case 'text':   return { x: shape.x,                          y: shape.y                        }; // s.x/y is center
     default:       return { x: 0, y: 0 };
   }
 }
@@ -975,15 +975,15 @@ function SketchPage({ page, projectId, onReload }) {
           { key: 'br', x: shape.x + shape.w, y: shape.y + shape.h, type: 'endpoint' },
         ];
       case 'text': {
-        // s.w / s.h are screen pixels — convert to world units for handle positions
+        // s.x/y = world center; s.w/h = screen pixels. Convert half-sizes to world units.
         const _ps2 = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-        const tw2  = (shape.w || 180) * _ps2;
-        const th2  = (shape.h ||  80) * _ps2;
+        const hw2  = (shape.w || 180) * _ps2 / 2;
+        const hh2  = (shape.h ||  80) * _ps2 / 2;
         return [
-          { key: 'tl', x: shape.x,       y: shape.y,       type: 'endpoint' },
-          { key: 'tr', x: shape.x + tw2, y: shape.y,       type: 'endpoint' },
-          { key: 'bl', x: shape.x,       y: shape.y + th2, type: 'endpoint' },
-          { key: 'br', x: shape.x + tw2, y: shape.y + th2, type: 'endpoint' },
+          { key: 'tl', x: shape.x - hw2, y: shape.y - hh2, type: 'endpoint' },
+          { key: 'tr', x: shape.x + hw2, y: shape.y - hh2, type: 'endpoint' },
+          { key: 'bl', x: shape.x - hw2, y: shape.y + hh2, type: 'endpoint' },
+          { key: 'br', x: shape.x + hw2, y: shape.y + hh2, type: 'endpoint' },
         ];
       }
       default: return [];
@@ -1082,14 +1082,16 @@ function SketchPage({ page, projectId, onReload }) {
         break;
       }
       case 'text': {
-        // s.w / s.h are screen pixels; dx/dy are world units — divide by ps to match units
+        // s.x/y = world center; s.w/h = screen pixels; dx/dy = world units.
+        // When dragging a corner, the opposite corner stays fixed and the center
+        // moves by dx/2, dy/2 (midpoint of old and new corner positions).
         const _ps3 = viewBox.w / (svgSizeRef.current.w || viewBox.w);
         const tw3  = shape.w || 180;
         const th3  = shape.h ||  80;
-        if (nodeKey === 'tl') return { ...shape, x: shape.x+dx, y: shape.y+dy, w: Math.max(40, tw3-dx/_ps3), h: Math.max(20, th3-dy/_ps3) };
-        if (nodeKey === 'tr') return { ...shape,                y: shape.y+dy, w: Math.max(40, tw3+dx/_ps3), h: Math.max(20, th3-dy/_ps3) };
-        if (nodeKey === 'bl') return { ...shape, x: shape.x+dx,                w: Math.max(40, tw3-dx/_ps3), h: Math.max(20, th3+dy/_ps3) };
-        if (nodeKey === 'br') return { ...shape,                                w: Math.max(40, tw3+dx/_ps3), h: Math.max(20, th3+dy/_ps3) };
+        if (nodeKey === 'tl') return { ...shape, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3-dx/_ps3), h: Math.max(20, th3-dy/_ps3) };
+        if (nodeKey === 'tr') return { ...shape, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3+dx/_ps3), h: Math.max(20, th3-dy/_ps3) };
+        if (nodeKey === 'bl') return { ...shape, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3-dx/_ps3), h: Math.max(20, th3+dy/_ps3) };
+        if (nodeKey === 'br') return { ...shape, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3+dx/_ps3), h: Math.max(20, th3+dy/_ps3) };
         break;
       }
     }
@@ -1146,6 +1148,26 @@ function SketchPage({ page, projectId, onReload }) {
       const nodeThresh = (isTouch ? 28 : NODE_R + 4) * ps;
       const hitThresh  = (isTouch ? 24 : 8) * ps;
 
+      // ── Double-click / double-tap: open text for editing (all pointer types) ──
+      // Must run before handle/drag checks so the second click of a double-click
+      // triggers editing rather than starting a body drag.
+      {
+        const now = Date.now();
+        const lt  = lastTapRef.current;
+        const dblR = isTouch ? 30 : 12;
+        if (now - lt.time < 400 && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < dblR) {
+          const dblHit = hitTest(pt, shapes, hitThresh);
+          if (dblHit && dblHit.type === 'text') {
+            setTextEdit({ id: dblHit.id, x: dblHit.x, y: dblHit.y,
+              w: dblHit.w, h: dblHit.h || 80, content: dblHit.content, editing: true });
+            commitShapes(shapes.filter(s => s.id !== dblHit.id));
+            lastTapRef.current = { time: 0, x: 0, y: 0 };
+            return;
+          }
+        }
+        lastTapRef.current = { time: now, x: e.clientX, y: e.clientY };
+      }
+
       if (selectedId) {
         const sel = shapes.find(s => s.id === selectedId);
         if (sel) {
@@ -1180,8 +1202,15 @@ function SketchPage({ page, projectId, onReload }) {
             }
           }
 
-          // ── Click on shape body → body drag ─────────────────────────
+          // ── Click on shape body → body drag (or edit if text tool) ─────
           if (hitTest(pt, [sel], hitThresh)) {
+            if (textToolWithSelection) {
+              // Text tool + click on selected text → open for editing immediately
+              setTextEdit({ id: sel.id, x: sel.x, y: sel.y,
+                w: sel.w, h: sel.h || 80, content: sel.content || '', editing: true });
+              commitShapes(shapes.filter(s => s.id !== sel.id));
+              return;
+            }
             setDragNode({ shapeId: sel.id, nodeKey: 'body' });
             setDragStart({ svgX: pt.x, svgY: pt.y, snapshot: shapes });
             return;
@@ -1189,22 +1218,7 @@ function SketchPage({ page, projectId, onReload }) {
         }
       }
 
-      // ── Double-tap on touch: open text shape for editing ─────────────
-      if (e.pointerType === 'touch') {
-        const now = Date.now();
-        const lt  = lastTapRef.current;
-        if (now - lt.time < 350 && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < 30) {
-          const dblHit = hitTest(pt, shapes, 24 * ps);
-          if (dblHit && dblHit.type === 'text') {
-            setTextEdit({ id: dblHit.id, x: dblHit.x, y: dblHit.y,
-              w: dblHit.w, h: dblHit.h || 80, content: dblHit.content, editing: true });
-            commitShapes(shapes.filter(s => s.id !== dblHit.id));
-            lastTapRef.current = { time: 0, x: 0, y: 0 };
-            return;
-          }
-        }
-        lastTapRef.current = { time: now, x: e.clientX, y: e.clientY };
-      }
+      // (Double-tap/double-click handling is at the top of this block)
 
       // ── New selection / deselect ─────────────────────────────────────
       const hit = hitTest(pt, shapes, hitThresh);
@@ -1228,21 +1242,15 @@ function SketchPage({ page, projectId, onReload }) {
     }
 
     if (tool === 'text') {
-      // Click on an existing text shape: select it (first click) or open for
-      // editing (click when already selected). This lets the text tool also
-      // resize text boxes via the corner handles.
+      // Click on any text shape with text tool → immediately open for editing.
+      // (If a text shape is already selected, the textToolWithSelection branch above
+      // handles it; this path runs when no text shape is currently selected.)
       const hitThresh = (e.pointerType === 'touch' ? 24 : 8) * ps;
       const txtHit    = hitTest(pt, shapes, hitThresh);
       if (txtHit && txtHit.type === 'text') {
-        if (selectedId === txtHit.id) {
-          // Second click on same text → open for editing
-          setTextEdit({ id: txtHit.id, x: txtHit.x, y: txtHit.y,
-            w: txtHit.w, h: txtHit.h || 80, content: txtHit.content, editing: true });
-          commitShapes(shapes.filter(s => s.id !== txtHit.id));
-        } else {
-          setSelectedId(txtHit.id);
-          setDragNode(null);
-        }
+        setTextEdit({ id: txtHit.id, x: txtHit.x, y: txtHit.y,
+          w: txtHit.w, h: txtHit.h || 80, content: txtHit.content || '', editing: true });
+        commitShapes(shapes.filter(s => s.id !== txtHit.id));
         return;
       }
       // Click-drag on empty space draws a new text box (same flow as rect).
@@ -1362,7 +1370,42 @@ function SketchPage({ page, projectId, onReload }) {
         const startAngle = Math.atan2(dragStart.svgY - piv.y, dragStart.svgX - piv.x);
         const curAngle   = Math.atan2(rawPt.y - piv.y, rawPt.x - piv.x);
         const deltaDeg   = (curAngle - startAngle) * 180 / Math.PI;
-        const newRot     = ((dragStart.startRot + deltaDeg) % 360 + 360) % 360;
+        let   newRot     = ((dragStart.startRot + deltaDeg) % 360 + 360) % 360;
+
+        // Snap: for each key endpoint of the shape (at would-be rotation newRot),
+        // check if it falls within snap radius of an external snap point.
+        // If so, compute the exact angle that places the endpoint in the direction
+        // of that snap target and use it as the snapped rotation.
+        if (anySnapActive) {
+          const snapShape = dragStart.snapshot.find(s => s.id === dragNode.shapeId);
+          if (snapShape) {
+            const endpts = getSnapPoints(snapShape);
+            let bestDist = Infinity, bestSnapRot = null, bestSnapCand = null;
+            for (const ep of endpts) {
+              const d = Math.hypot(ep.x - piv.x, ep.y - piv.y);
+              if (d < 1e-6) continue;                          // ignore pivot itself
+              const theta0   = Math.atan2(ep.y - piv.y, ep.x - piv.x);
+              const rotRad   = newRot * Math.PI / 180;
+              const rotPt    = { x: piv.x + d * Math.cos(theta0 + rotRad),
+                                 y: piv.y + d * Math.sin(theta0 + rotRad) };
+              const cands    = collectSnapCandidates(rotPt, null, dragNode.shapeId);
+              if (cands.length && cands[0].dist < bestDist) {
+                bestDist = cands[0].dist;
+                // Angle from pivot to snap target → exact rotation to align ep with it
+                const thetaT  = Math.atan2(cands[0].pt.y - piv.y, cands[0].pt.x - piv.x);
+                bestSnapRot   = (((thetaT - theta0) * 180 / Math.PI) % 360 + 360) % 360;
+                bestSnapCand  = cands[0];
+              }
+            }
+            if (bestSnapRot !== null) {
+              newRot = bestSnapRot;
+              setSnapPoint({ x: bestSnapCand.pt.x, y: bestSnapCand.pt.y, type: bestSnapCand.type });
+            } else {
+              setSnapPoint(null);
+            }
+          }
+        }
+
         setShapes(dragStart.snapshot.map(s =>
           s.id === dragNode.shapeId ? { ...s, _rot: newRot } : s
         ));
@@ -1607,14 +1650,15 @@ function SketchPage({ page, projectId, onReload }) {
     // drawState.w/h are in world units; convert to screen pixels for storage
     // (s.w/s.h are kept as screen px so the box stays the same visual size at any zoom).
     if (drawState.type === 'text') {
-      const _psUp = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+      const _psUp    = viewBox.w / (svgSizeRef.current.w || viewBox.w);
       const bigEnough = drawState.w > 10 && drawState.h > 10;
+      // Store the CENTER as the world anchor, and w/h as screen pixels.
       setTextEdit({
         id: newId(),
-        x:  bigEnough ? drawState.x  : drawState.ox,
-        y:  bigEnough ? drawState.y  : drawState.oy,
-        w:  bigEnough ? Math.round(drawState.w / _psUp) : 180,
-        h:  bigEnough ? Math.round(drawState.h / _psUp) : 80,
+        x: bigEnough ? drawState.x + drawState.w / 2 : drawState.ox,
+        y: bigEnough ? drawState.y + drawState.h / 2 : drawState.oy,
+        w: bigEnough ? Math.round(drawState.w / _psUp) : 180,
+        h: bigEnough ? Math.round(drawState.h / _psUp) : 80,
         content: '',
         layerId: drawState.layerId || activeLayerId,
       });
@@ -1676,12 +1720,12 @@ function SketchPage({ page, projectId, onReload }) {
         if (tp.x >= s.x-thresh && tp.x <= s.x+s.w+thresh &&
             tp.y >= s.y-thresh && tp.y <= s.y+s.h+thresh) return s;
       } else if (s.type === 'text') {
-        // s.w / s.h are screen pixels — convert to world units for hit-test bounds
+        // s.x/y = world center; s.w/h = screen pixels. Convert half-extents to world units.
         const _psHT = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-        const twHT  = (s.w || 180) * _psHT;
-        const thHT  = (s.h ||  80) * _psHT;
-        if (tp.x >= s.x-thresh && tp.x <= s.x+twHT+thresh &&
-            tp.y >= s.y-thresh && tp.y <= s.y+thHT+thresh) return s;
+        const hwHT  = (s.w || 180) * _psHT / 2;
+        const hhHT  = (s.h ||  80) * _psHT / 2;
+        if (tp.x >= s.x - hwHT - thresh && tp.x <= s.x + hwHT + thresh &&
+            tp.y >= s.y - hhHT - thresh && tp.y <= s.y + hhHT + thresh) return s;
       }
     }
     return null;
@@ -2026,8 +2070,14 @@ function SketchPage({ page, projectId, onReload }) {
         case 'rect':
           add(s.x,s.y); add(s.x+s.w,s.y);
           add(s.x,s.y+s.h); add(s.x+s.w,s.y+s.h); break;
-        case 'text':
-          add(s.x,s.y); add(s.x+(s.w||160),s.y+(s.h||40)); break;
+        case 'text': {
+          // s.x/y is the world-space center; s.w/h are screen pixels.
+          // Convert to world units at current zoom for bounding box.
+          const _bps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+          const _bw  = (s.w || 180) * _bps / 2;
+          const _bh  = (s.h ||  80) * _bps / 2;
+          add(s.x - _bw, s.y - _bh); add(s.x + _bw, s.y + _bh); break;
+        }
         default: break;
       }
     }
@@ -2103,6 +2153,9 @@ function SketchPage({ page, projectId, onReload }) {
         const shPx      = s.h || 80;                // screen-pixel height
         const tw        = swPx * _tps;              // world-space width
         const th        = shPx * _tps;              // world-space height
+        // s.x / s.y is the world-space CENTER of the box; draw from top-left offset.
+        const rx        = s.x - tw / 2;
+        const ry        = s.y - th / 2;
         // maxChars is purely screen-space (screen px / screen char width) so wrap
         // stays identical regardless of zoom level.
         const charW     = 9.5 * 0.601;              // screen px per Courier New char
@@ -2110,16 +2163,17 @@ function SketchPage({ page, projectId, onReload }) {
         const lines     = wrapText(s.content || '', maxChars);
         inner = (
           <g style={sel}>
-            {/* Border box — dashed like a note field */}
-            <rect x={s.x} y={s.y} width={tw} height={th}
-              fill="rgba(255,255,248,0.55)"
-              stroke={s.stroke || STROKE} strokeWidth={0.7 * _tps}
+            {/* Border box — fully transparent bg; border only when selected */}
+            <rect x={rx} y={ry} width={tw} height={th}
+              fill="none"
+              stroke={isSelected ? (s.stroke || STROKE) : 'none'}
+              strokeWidth={0.7 * _tps}
               strokeDasharray={`${3.5*_tps},${2*_tps}`} />
             {/* Content lines — counter-scaled so font stays constant on screen */}
             {lines.map((line, i) => (
               <text key={i}
-                x={s.x + 3 * _tps}
-                y={s.y + tFontSize * 1.25 + i * tLineH}
+                x={rx + 3 * _tps}
+                y={ry + tFontSize * 1.25 + i * tLineH}
                 fontSize={tFontSize}
                 fontFamily="Courier New, monospace"
                 fill={s.stroke || STROKE}
@@ -3178,14 +3232,15 @@ function SketchPage({ page, projectId, onReload }) {
           {/* Inline text editor — absolutely positioned in SVG container.
               textEdit stores world coordinates; convert to screen pixels for CSS. */}
           {textEdit && (() => {
-            const sp  = worldToScreen(textEdit.x, textEdit.y);
-            // textEdit.w/h are already screen pixels — use directly
+            const sp  = worldToScreen(textEdit.x, textEdit.y); // screen position of center
+            // textEdit.w/h are screen pixels — use directly
             const screenW = Math.max(80,  textEdit.w || 180);
             const screenH = Math.max(40,  textEdit.h || 80);
             return (
             <div style={{
               position: 'absolute',
-              left: sp.x, top: sp.y,
+              // Offset by half-size so the overlay is centered on the world anchor
+              left: sp.x - screenW / 2, top: sp.y - screenH / 2,
               width: screenW, height: screenH,
               zIndex: 20, pointerEvents: 'all',
             }}>
