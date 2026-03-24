@@ -11,54 +11,7 @@
 const { useState, useEffect, useRef } = React;
 const { DB, PageHeaderStrip } = window._fb;
 
-// ── Error Boundary ────────────────────────────────────────────────────────────
-// Catches any render-time JS error inside the sketch page and shows a safe
-// recovery screen instead of the blank green body background.
-class SketchErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
-  }
-  componentDidCatch(error, info) {
-    console.error('[FieldBook] Sketch render error:', error, info);
-  }
-  render() {
-    if (!this.state.hasError) return this.props.children;
-    return (
-      <div style={{
-        position: 'fixed', inset: 0, background: '#0a0f23',
-        display: 'flex', flexDirection: 'column', alignItems: 'center',
-        justifyContent: 'center', gap: 16, fontFamily: 'Courier New, monospace',
-        color: 'rgba(255,255,255,0.8)', padding: 32,
-      }}>
-        <div style={{ fontSize: 32 }}>⚠</div>
-        <div style={{ fontSize: 15, color: '#FCA5A5', fontWeight: 700 }}>Sketch page encountered an error</div>
-        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', maxWidth: 380, textAlign: 'center' }}>
-          {String(this.state.error?.message || this.state.error || 'Unknown error')}
-        </div>
-        <button
-          onClick={() => this.setState({ hasError: false, error: null })}
-          style={{
-            marginTop: 8, padding: '8px 20px', borderRadius: 5, cursor: 'pointer',
-            background: 'rgba(59,130,246,0.25)', border: '1px solid rgba(59,130,246,0.6)',
-            color: '#93C5FD', fontFamily: 'Courier New, monospace', fontSize: 12,
-          }}
-        >Try to recover</button>
-        <button
-          onClick={() => { window.location.hash = '#/'; }}
-          style={{
-            padding: '8px 20px', borderRadius: 5, cursor: 'pointer',
-            background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.18)',
-            color: 'rgba(255,255,255,0.55)', fontFamily: 'Courier New, monospace', fontSize: 12,
-          }}
-        >Return to home</button>
-      </div>
-    );
-  }
-}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SKETCH PAGE — vector drawing
@@ -4578,14 +4531,5 @@ function SketchPage({ page, projectId, onReload }) {
 // =============================================================================
 // Expose SketchPage to the app shell and signal ready.
 // =============================================================================
-// Wrap with error boundary so any render crash shows a recovery screen
-// instead of the blank green body background.
-function SketchPageWithBoundary(props) {
-  return (
-    <SketchErrorBoundary>
-      <SketchPage {...props} />
-    </SketchErrorBoundary>
-  );
-}
-window.SketchPage = SketchPageWithBoundary;
+window.SketchPage = SketchPage;
 window._resolveSketch();
