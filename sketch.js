@@ -31,6 +31,9 @@ const TOOLS = [
   { id: 'select',    label: 'Select',    icon: '↖' },
   { id: 'line',      label: 'Line',      icon: '╱' },
   { id: 'curve',     label: 'Curve',     icon: '⌒' },
+  { id: 'pencil',    label: 'Pencil',    icon: '✏' },
+  { id: 'pen',       label: 'Pen',       icon: '✒' },
+  { id: 'node',      label: 'Node',      icon: '◈' },
   { id: 'circle',    label: 'Circle',    icon: '○' },
   { id: 'rect',      label: 'Rect',      icon: '□' },
   { id: 'text',      label: 'Text',      icon: 'T' },
@@ -149,6 +152,188 @@ function arcPath(x1, y1, x2, y2, px, py) {
   const cross = (px - x1) * (y2 - y1) - (py - y1) * (x2 - x1);
   const sweep  = cross > 0 ? 1 : 0;
   return `M ${x1} ${y1} A ${R.toFixed(3)} ${R.toFixed(3)} 0 ${largeArc} ${sweep} ${x2} ${y2}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── PATH SHAPE UTILITIES  (Pencil / Pen / Node tools) ────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Convert a path shape's nodes array into an SVG path `d` string.
+// Each node: { x, y, type:'sharp'|'smooth'|'cusp', cp1x, cp1y, cp2x, cp2y }
+// cp1 = incoming handle (toward previous node), cp2 = outgoing handle (toward next).
+function pathToSVGD(nodes, closed) {
+  if (!nodes || nodes.length < 2) return '';
+  const n = nodes.length;
+  let d = `M ${nodes[0].x.toFixed(2)} ${nodes[0].y.toFixed(2)}`;
+  for (let i = 1; i < n; i++) {
+    const prev = nodes[i - 1];
+    const curr = nodes[i];
+    const c1x = prev.cp2x !== undefined && prev.cp2x !== null ? prev.cp2x : prev.x;
+    const c1y = prev.cp2y !== undefined && prev.cp2y !== null ? prev.cp2y : prev.y;
+    const c2x = curr.cp1x !== undefined && curr.cp1x !== null ? curr.cp1x : curr.x;
+    const c2y = curr.cp1y !== undefined && curr.cp1y !== null ? curr.cp1y : curr.y;
+    const isLine = (Math.abs(c1x - prev.x) < 0.01 && Math.abs(c1y - prev.y) < 0.01 &&
+                    Math.abs(c2x - curr.x) < 0.01 && Math.abs(c2y - curr.y) < 0.01);
+    if (isLine) {
+      d += ` L ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
+    } else {
+      d += ` C ${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
+    }
+  }
+  if (closed && n >= 2) {
+    const last = nodes[n - 1];
+    const first = nodes[0];
+    const c1x = last.cp2x !== undefined && last.cp2x !== null ? last.cp2x : last.x;
+    const c1y = last.cp2y !== undefined && last.cp2y !== null ? last.cp2y : last.y;
+    const c2x = first.cp1x !== undefined && first.cp1x !== null ? first.cp1x : first.x;
+    const c2y = first.cp1y !== undefined && first.cp1y !== null ? first.cp1y : first.y;
+    const isLine = (Math.abs(c1x - last.x) < 0.01 && Math.abs(c1y - last.y) < 0.01 &&
+                    Math.abs(c2x - first.x) < 0.01 && Math.abs(c2y - first.y) < 0.01);
+    if (!isLine) {
+      d += ` C ${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${first.x.toFixed(2)} ${first.y.toFixed(2)}`;
+    }
+    d += ' Z';
+  }
+  return d;
+}
+
+// Ramer-Douglas-Peucker polyline simplification.
+// Returns indices of points to keep from pts array.
+function rdpSimplify(pts, epsilon) {
+  if (pts.length <= 2) return pts.map((_, i) => i);
+  function rdp(start, end, eps, result) {
+    let maxDist = 0, maxIdx = start;
+    const dx = pts[end].x - pts[start].x;
+    const dy = pts[end].y - pts[start].y;
+    const len = Math.hypot(dx, dy);
+    for (let i = start + 1; i < end; i++) {
+      let dist;
+      if (len < 1e-10) {
+        dist = Math.hypot(pts[i].x - pts[start].x, pts[i].y - pts[start].y);
+      } else {
+        dist = Math.abs(dy * pts[i].x - dx * pts[i].y + pts[end].x * pts[start].y - pts[end].y * pts[start].x) / len;
+      }
+      if (dist > maxDist) { maxDist = dist; maxIdx = i; }
+    }
+    if (maxDist > eps) {
+      rdp(start, maxIdx, eps, result);
+      result.push(maxIdx);
+      rdp(maxIdx, end, eps, result);
+    }
+  }
+  const result = [0];
+  rdp(0, pts.length - 1, epsilon, result);
+  result.push(pts.length - 1);
+  result.sort((a, b) => a - b);
+  return [...new Set(result)];
+}
+
+// Fit cubic Bezier curves through a reduced set of points using Catmull-Rom
+// to Bezier conversion. Returns a nodes array suitable for a path shape.
+// smoothness: 0–1 (higher = more aggressive simplification / smoother curves).
+function fitCurveToPoints(pts, smoothness) {
+  if (!pts || pts.length < 2) return [];
+  // RDP simplification: epsilon scales with smoothness
+  const eps = Math.max(0.5, smoothness * 20);
+  const keepIdx = rdpSimplify(pts, eps);
+  const reduced = keepIdx.map(i => pts[i]);
+  if (reduced.length < 2) return [];
+
+  // Catmull-Rom tension (lower = tighter, higher = looser)
+  const tension = 0.5;
+  const nodes = [];
+  const n = reduced.length;
+
+  for (let i = 0; i < n; i++) {
+    const p0 = reduced[Math.max(0, i - 1)];
+    const p1 = reduced[i];
+    const p2 = reduced[Math.min(n - 1, i + 1)];
+    const p3 = reduced[Math.min(n - 1, i + 2)];
+
+    // Catmull-Rom tangent at p1 → outgoing handle (cp2)
+    const cp2x = p1.x + (p2.x - p0.x) * tension / 3;
+    const cp2y = p1.y + (p2.y - p0.y) * tension / 3;
+    // Catmull-Rom tangent at p2 → incoming handle (cp1) for next node
+    const cp1x = p2.x - (p3.x - p1.x) * tension / 3;
+    const cp1y = p2.y - (p3.y - p1.y) * tension / 3;
+
+    if (i === 0) {
+      nodes.push({ x: p1.x, y: p1.y, type: 'smooth',
+        cp1x: p1.x, cp1y: p1.y, cp2x, cp2y });
+    } else {
+      // Update previous node's cp2 to be the incoming handle for this segment
+      const prev = nodes[nodes.length - 1];
+      // cp1 for current node (incoming from previous)
+      const inCp1x = p1.x - (p2.x - p0.x) * tension / 3;
+      const inCp1y = p1.y - (p2.y - p0.y) * tension / 3;
+      nodes.push({ x: p1.x, y: p1.y, type: i === n - 1 ? 'smooth' : 'smooth',
+        cp1x: inCp1x, cp1y: inCp1y, cp2x, cp2y });
+    }
+  }
+  // Fix first node's cp1 to equal its position (no incoming handle at start)
+  if (nodes.length > 0) {
+    nodes[0].cp1x = nodes[0].x;
+    nodes[0].cp1y = nodes[0].y;
+  }
+  // Fix last node's cp2 to equal its position (no outgoing handle at end)
+  if (nodes.length > 0) {
+    const last = nodes[nodes.length - 1];
+    last.cp2x = last.x;
+    last.cp2y = last.y;
+  }
+  return nodes;
+}
+
+// Compute Catmull-Rom smooth handles for a Smart-mode Pen path.
+// Mutates nodes in-place to set cp1x/cp1y/cp2x/cp2y.
+function applySmartHandles(nodes) {
+  const n = nodes.length;
+  if (n < 2) return;
+  const tension = 0.5;
+  for (let i = 0; i < n; i++) {
+    const p0 = nodes[Math.max(0, i - 1)];
+    const p1 = nodes[i];
+    const p2 = nodes[Math.min(n - 1, i + 1)];
+    const p3 = nodes[Math.min(n - 1, i + 2)];
+    nodes[i].cp2x = p1.x + (p2.x - p0.x) * tension / 3;
+    nodes[i].cp2y = p1.y + (p2.y - p0.y) * tension / 3;
+    nodes[i].cp1x = p1.x - (p2.x - p0.x) * tension / 3;
+    nodes[i].cp1y = p1.y - (p2.y - p0.y) * tension / 3;
+  }
+  // Clamp endpoints
+  nodes[0].cp1x = nodes[0].x; nodes[0].cp1y = nodes[0].y;
+  nodes[n - 1].cp2x = nodes[n - 1].x; nodes[n - 1].cp2y = nodes[n - 1].y;
+}
+
+// Find the parameter t ∈ [0,1] on a cubic Bezier closest to point pt.
+// Returns { t, x, y } of the nearest point on the curve.
+function nearestOnCubic(p0, p1, p2, p3, pt, steps = 20) {
+  let bestT = 0, bestDist = Infinity;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const mt = 1 - t;
+    const x = mt*mt*mt*p0.x + 3*mt*mt*t*p1.x + 3*mt*t*t*p2.x + t*t*t*p3.x;
+    const y = mt*mt*mt*p0.y + 3*mt*mt*t*p1.y + 3*mt*t*t*p2.y + t*t*t*p3.y;
+    const d = Math.hypot(x - pt.x, y - pt.y);
+    if (d < bestDist) { bestDist = d; bestT = t; }
+  }
+  // Newton refinement
+  for (let iter = 0; iter < 4; iter++) {
+    const t = bestT, mt = 1 - t;
+    const x = mt*mt*mt*p0.x + 3*mt*mt*t*p1.x + 3*mt*t*t*p2.x + t*t*t*p3.x;
+    const y = mt*mt*mt*p0.y + 3*mt*mt*t*p1.y + 3*mt*t*t*p2.y + t*t*t*p3.y;
+    const dx = -3*mt*mt*p0.x + 3*mt*mt*p1.x - 6*mt*t*p1.x + 6*mt*t*p2.x - 3*t*t*p2.x + 3*t*t*p3.x;
+    const dy = -3*mt*mt*p0.y + 3*mt*mt*p1.y - 6*mt*t*p1.y + 6*mt*t*p2.y - 3*t*t*p2.y + 3*t*t*p3.y;
+    const denom = dx*dx + dy*dy;
+    if (denom < 1e-10) break;
+    bestT = Math.max(0, Math.min(1, t - ((x - pt.x)*dx + (y - pt.y)*dy) / denom));
+  }
+  const t = bestT, mt = 1 - t;
+  return {
+    t: bestT,
+    x: mt*mt*mt*p0.x + 3*mt*mt*t*p1.x + 3*mt*t*t*p2.x + t*t*t*p3.x,
+    y: mt*mt*mt*p0.y + 3*mt*mt*t*p1.y + 3*mt*t*t*p2.y + t*t*t*p3.y,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -698,6 +883,38 @@ function SketchPage({ page, projectId, onReload }) {
   const [headerOpen,       setHeaderOpen]       = useState(false);
   const [notesOpen,        setNotesOpen]        = useState(false);
 
+  // ── Pencil tool state ──────────────────────────────────────────────────────────────────────────────
+  // stabilizerMode: 'rope' | 'window'
+  const [stabilizerMode,  setStabilizerMode]  = useState('rope');
+  const [ropeLength,      setRopeLength]      = useState(20);   // screen px
+  const [windowSize,      setWindowSize]      = useState(8);    // samples
+  const [pencilSmoothness,setPencilSmoothness]= useState(0.4);  // 0–1
+  const [sculptMode,      setSculptMode]      = useState(false);
+  // Pencil raw/smoothed points during active stroke (refs to avoid re-render on every point)
+  const pencilRawRef      = useRef([]);    // raw pointer positions
+  const pencilSmoothedRef = useRef([]);    // stabilizer output
+  const pencilTipRef      = useRef(null);  // current rope-stabilizer tip {x,y}
+  const [pencilPreview,   setPencilPreview] = useState(null); // [{x,y}] for live polyline
+
+  // ── Pen tool state ────────────────────────────────────────────────────────────────────────────────
+  // penMode: 'bezier' | 'smart'
+  const [penMode,         setPenMode]         = useState('bezier');
+  // penNodes: placed nodes for in-progress pen path
+  const [penNodes,        setPenNodes]        = useState([]);
+  // penDragHandle: {x,y} of the handle being dragged out from last placed node
+  const penDragRef        = useRef(null);  // { startX, startY } of drag
+  const [penHandleDrag,   setPenHandleDrag]   = useState(null); // {cp2x,cp2y} live
+  // penCursor: current mouse position for rubber band preview
+  const [penCursor,       setPenCursor]       = useState(null);
+
+  // ── Node tool state ──────────────────────────────────────────────────────────────────────────────
+  // nodeSelectedId: which path shape is being edited with the Node tool
+  const [nodeSelectedId,  setNodeSelectedId]  = useState(null);
+  // nodeSelectedIdx: index of the selected node within the path (for type conversion)
+  const [nodeSelectedIdx, setNodeSelectedIdx] = useState(null);
+  // nodeDrag: active node/handle drag state for Node tool
+  const nodeDragRef       = useRef(null); // { shapeId, type:'node'|'cp1'|'cp2'|'seg', nodeIdx, segIdx, startX, startY, snapshot }
+
   const svgRef      = useRef(null);
   const svgWrapRef  = useRef(null);
   const textareaRef = useRef(null);
@@ -881,7 +1098,62 @@ function SketchPage({ page, projectId, onReload }) {
     setSelectedId(null);
     setDrawState(null);
     setSnapPoint(null);
+    // Reset new tool state on page change
+    setPenNodes([]);
+    setPenHandleDrag(null);
+    setPenCursor(null);
+    setNodeSelectedId(null);
+    setNodeSelectedIdx(null);
+    setPencilPreview(null);
   }, [page.id]);
+
+  // Keyboard shortcuts for new tools
+  useEffect(() => {
+    function handleKeyDown(e) {
+      // Don't intercept when typing in an input
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      // Escape: cancel in-progress pen path or pencil stroke
+      if (e.key === 'Escape') {
+        if (penNodes.length > 0) {
+          setPenNodes([]);
+          setPenHandleDrag(null);
+          setPenCursor(null);
+        }
+        if (drawState && drawState.type === 'pencil_stroke') {
+          pencilRawRef.current = [];
+          pencilSmoothedRef.current = [];
+          pencilTipRef.current = null;
+          setPencilPreview(null);
+          setDrawState(null);
+        }
+      }
+
+      // Delete / Backspace: remove selected node in Node tool
+      if ((e.key === 'Delete' || e.key === 'Backspace') && tool === 'node' && nodeSelectedId !== null && nodeSelectedIdx !== null) {
+        e.preventDefault();
+        setShapes(prev => prev.map(s => {
+          if (s.id !== nodeSelectedId || !s.nodes) return s;
+          const newNodes = s.nodes.filter((_, i) => i !== nodeSelectedIdx);
+          if (newNodes.length < 2) {
+            // Path too short — remove it entirely
+            return null;
+          }
+          return { ...s, nodes: newNodes };
+        }).filter(Boolean));
+        setNodeSelectedIdx(null);
+        commitShapes(shapes.filter(s => {
+          if (s.id !== nodeSelectedId || !s.nodes) return true;
+          return s.nodes.length - 1 >= 2;
+        }).map(s => {
+          if (s.id !== nodeSelectedId || !s.nodes) return s;
+          return { ...s, nodes: s.nodes.filter((_, i) => i !== nodeSelectedIdx) };
+        }));
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [tool, penNodes, drawState, nodeSelectedId, nodeSelectedIdx, shapes]);
 
   // ── Coordinate conversion ──────────────────────────────────────────────────
   // screenToWorld: converts a pointer/mouse event's position from CSS screen
@@ -1356,6 +1628,131 @@ function SketchPage({ page, projectId, onReload }) {
       const sp = anySnapActive ? resolveSnap(pt) : pt;
       setDrawState({ type: 'rect', ox: sp.x, oy: sp.y, x: sp.x, y: sp.y, w: 0, h: 0, layerId: activeLayerId });
     }
+
+    // ── Pencil Tool ──────────────────────────────────────────────────────────────────────────────
+    if (tool === 'pencil') {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const sp = anySnapActive ? resolveSnap(pt) : pt;
+      pencilRawRef.current = [sp];
+      pencilSmoothedRef.current = [sp];
+      pencilTipRef.current = { ...sp };
+      setPencilPreview([sp]);
+      setDrawState({ type: 'pencil_stroke', layerId: activeLayerId });
+    }
+
+    // ── Pen Tool ─────────────────────────────────────────────────────────────────────────────────
+    if (tool === 'pen') {
+      const sp = anySnapActive ? resolveSnap(pt) : pt;
+      // Check if clicking on the first node to close the path
+      if (penNodes.length >= 2) {
+        const firstNode = penNodes[0];
+        const closeDist = 12 * ps;
+        if (Math.hypot(sp.x - firstNode.x, sp.y - firstNode.y) < closeDist) {
+          // Close the path
+          const newNode = { x: firstNode.x, y: firstNode.y, type: 'smooth',
+            cp1x: firstNode.x, cp1y: firstNode.y,
+            cp2x: firstNode.x, cp2y: firstNode.y };
+          const allNodes = [...penNodes, newNode];
+          if (penMode === 'smart') applySmartHandles(allNodes);
+          const pathId = newId();
+          commitShapes([...shapes, {
+            id: pathId, type: 'path', closed: true,
+            nodes: allNodes,
+            stroke: STROKE, strokeWidth: STROKE_W,
+            layerId: activeLayerId,
+          }]);
+          setPenNodes([]);
+          setPenHandleDrag(null);
+          setPenCursor(null);
+          setSelectedId(pathId);
+          setPrevTool(tool);
+          return;
+        }
+      }
+      // Place a new node — start drag to pull out handle
+      const newNode = { x: sp.x, y: sp.y, type: 'sharp',
+        cp1x: sp.x, cp1y: sp.y, cp2x: sp.x, cp2y: sp.y };
+      penDragRef.current = { startX: sp.x, startY: sp.y };
+      setPenHandleDrag(null);
+      setPenNodes(prev => [...prev, newNode]);
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+
+    // ── Node Tool ─────────────────────────────────────────────────────────────────────────────────
+    if (tool === 'node') {
+      const nodeHitR = 12 * ps; // hit radius in world units
+      const cpHitR   = 10 * ps;
+
+      // Check if clicking on a node or handle of the currently selected path
+      const pathShape = nodeSelectedId ? shapes.find(s => s.id === nodeSelectedId) : null;
+      if (pathShape && pathShape.nodes) {
+        // Check control handles first (they're smaller targets)
+        for (let i = 0; i < pathShape.nodes.length; i++) {
+          const node = pathShape.nodes[i];
+          if (node.type !== 'sharp') {
+            // cp1 handle
+            if (Math.hypot(pt.x - node.cp1x, pt.y - node.cp1y) < cpHitR) {
+              nodeDragRef.current = { shapeId: pathShape.id, type: 'cp1', nodeIdx: i,
+                startX: pt.x, startY: pt.y, snapshot: shapes };
+              setNodeSelectedIdx(i);
+              e.currentTarget.setPointerCapture(e.pointerId);
+              return;
+            }
+            // cp2 handle
+            if (Math.hypot(pt.x - node.cp2x, pt.y - node.cp2y) < cpHitR) {
+              nodeDragRef.current = { shapeId: pathShape.id, type: 'cp2', nodeIdx: i,
+                startX: pt.x, startY: pt.y, snapshot: shapes };
+              setNodeSelectedIdx(i);
+              e.currentTarget.setPointerCapture(e.pointerId);
+              return;
+            }
+          }
+        }
+        // Check on-curve nodes
+        for (let i = 0; i < pathShape.nodes.length; i++) {
+          const node = pathShape.nodes[i];
+          if (Math.hypot(pt.x - node.x, pt.y - node.y) < nodeHitR) {
+            nodeDragRef.current = { shapeId: pathShape.id, type: 'node', nodeIdx: i,
+              startX: pt.x, startY: pt.y, snapshot: shapes };
+            setNodeSelectedIdx(i);
+            e.currentTarget.setPointerCapture(e.pointerId);
+            return;
+          }
+        }
+        // Check segment click (bow curve or insert node)
+        for (let i = 0; i < pathShape.nodes.length - 1; i++) {
+          const n0 = pathShape.nodes[i];
+          const n1 = pathShape.nodes[i + 1];
+          const nearest = nearestOnCubic(
+            { x: n0.x, y: n0.y },
+            { x: n0.cp2x, y: n0.cp2y },
+            { x: n1.cp1x, y: n1.cp1y },
+            { x: n1.x, y: n1.y },
+            pt
+          );
+          if (Math.hypot(nearest.x - pt.x, nearest.y - pt.y) < nodeHitR) {
+            nodeDragRef.current = { shapeId: pathShape.id, type: 'seg', nodeIdx: i,
+              segT: nearest.t, startX: pt.x, startY: pt.y, snapshot: shapes };
+            e.currentTarget.setPointerCapture(e.pointerId);
+            return;
+          }
+        }
+      }
+
+      // Click on a path shape to select it for node editing
+      const hitThreshN = (e.pointerType === 'touch' ? 24 : 8) * ps;
+      const hit = hitTest(pt, shapes.filter(s => s.type === 'path'), hitThreshN);
+      if (hit) {
+        setNodeSelectedId(hit.id);
+        setNodeSelectedIdx(null);
+        nodeDragRef.current = null;
+      } else {
+        // Click on empty space — deselect
+        setNodeSelectedId(null);
+        setNodeSelectedIdx(null);
+        nodeDragRef.current = null;
+      }
+    }
   }
 
   function onPointerMove(e) {
@@ -1638,6 +2035,127 @@ function SketchPage({ page, projectId, onReload }) {
         x: Math.min(d.ox, pt.x), y: Math.min(d.oy, pt.y),
         w: Math.abs(pt.x - d.ox), h: Math.abs(pt.y - d.oy),
       }));
+    } else if (drawState.type === 'pencil_stroke') {
+      // Collect coalesced events for high-frequency input
+      const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+      for (const ev of events) {
+        const rawEvPt = screenToWorld(ev);
+        pencilRawRef.current.push(rawEvPt);
+      }
+      // Apply stabilizer
+      const raw = pencilRawRef.current;
+      const last = raw[raw.length - 1];
+      let smoothed;
+      if (stabilizerMode === 'rope') {
+        // Rope stabilizer: tip follows pointer with a lag of ropeLength screen px
+        const ropeLenWorld = ropeLength * ps;
+        const tip = pencilTipRef.current || { ...last };
+        const dist = Math.hypot(last.x - tip.x, last.y - tip.y);
+        if (dist > ropeLenWorld) {
+          const frac = (dist - ropeLenWorld) / dist;
+          tip.x += (last.x - tip.x) * frac;
+          tip.y += (last.y - tip.y) * frac;
+        }
+        pencilTipRef.current = { ...tip };
+        smoothed = { ...tip };
+      } else {
+        // Window stabilizer: moving average of last windowSize raw points
+        const win = raw.slice(-windowSize);
+        smoothed = {
+          x: win.reduce((s, p) => s + p.x, 0) / win.length,
+          y: win.reduce((s, p) => s + p.y, 0) / win.length,
+        };
+      }
+      pencilSmoothedRef.current.push(smoothed);
+      setPencilPreview([...pencilSmoothedRef.current]);
+    }
+
+    // Pen tool: update handle drag preview and rubber-band cursor
+    if (tool === 'pen') {
+      const sp = anySnapActive ? resolveSnap(rawPt) : rawPt;
+      setPenCursor(sp);
+      // If dragging out a handle from the last placed node
+      if (penDragRef.current && penNodes.length > 0) {
+        const lastNode = penNodes[penNodes.length - 1];
+        const dx = sp.x - penDragRef.current.startX;
+        const dy = sp.y - penDragRef.current.startY;
+        const dragDist = Math.hypot(dx, dy);
+        if (dragDist > 2 * ps) {
+          // Bezier mode: mirror handles (smooth node)
+          const cp2x = sp.x, cp2y = sp.y;
+          const cp1x = 2 * lastNode.x - cp2x;
+          const cp1y = 2 * lastNode.y - cp2y;
+          setPenHandleDrag({ cp1x, cp1y, cp2x, cp2y });
+          setPenNodes(prev => {
+            const next = [...prev];
+            next[next.length - 1] = { ...lastNode, type: 'smooth', cp1x, cp1y, cp2x, cp2y };
+            return next;
+          });
+        }
+      }
+    }
+
+    // Node tool: handle active drag
+    if (tool === 'node' && nodeDragRef.current) {
+      const drag = nodeDragRef.current;
+      const sp = anySnapActive ? resolveSnap(rawPt) : rawPt;
+      setShapes(prev => prev.map(s => {
+        if (s.id !== drag.shapeId || !s.nodes) return s;
+        const nodes = s.nodes.map((n, i) => ({ ...n }));
+        if (drag.type === 'node') {
+          const node = nodes[drag.nodeIdx];
+          const dx = sp.x - node.x;
+          const dy = sp.y - node.y;
+          // Move node and its handles together
+          node.x    = sp.x;
+          node.y    = sp.y;
+          node.cp1x = node.cp1x + dx;
+          node.cp1y = node.cp1y + dy;
+          node.cp2x = node.cp2x + dx;
+          node.cp2y = node.cp2y + dy;
+        } else if (drag.type === 'cp1') {
+          const node = nodes[drag.nodeIdx];
+          node.cp1x = sp.x;
+          node.cp1y = sp.y;
+          if (node.type === 'smooth') {
+            // Mirror cp2 around the node
+            const len = Math.hypot(node.cp2x - node.x, node.cp2y - node.y);
+            const dx = node.x - sp.x, dy = node.y - sp.y;
+            const d = Math.hypot(dx, dy) || 1;
+            node.cp2x = node.x + (dx / d) * len;
+            node.cp2y = node.y + (dy / d) * len;
+          }
+        } else if (drag.type === 'cp2') {
+          const node = nodes[drag.nodeIdx];
+          node.cp2x = sp.x;
+          node.cp2y = sp.y;
+          if (node.type === 'smooth') {
+            // Mirror cp1 around the node
+            const len = Math.hypot(node.cp1x - node.x, node.cp1y - node.y);
+            const dx = node.x - sp.x, dy = node.y - sp.y;
+            const d = Math.hypot(dx, dy) || 1;
+            node.cp1x = node.x + (dx / d) * len;
+            node.cp1y = node.y + (dy / d) * len;
+          }
+        } else if (drag.type === 'seg') {
+          // Bow the segment: move the nearest point on the curve by dragging
+          const n0 = nodes[drag.nodeIdx];
+          const n1 = nodes[drag.nodeIdx + 1];
+          if (n1) {
+            const dx = sp.x - drag.startX;
+            const dy = sp.y - drag.startY;
+            const t = drag.segT;
+            // Weight the handle movement by t (closer to n0 → move n0's cp2 more)
+            n0.cp2x += dx * (1 - t) * 2;
+            n0.cp2y += dy * (1 - t) * 2;
+            n1.cp1x += dx * t * 2;
+            n1.cp1y += dy * t * 2;
+            drag.startX = sp.x;
+            drag.startY = sp.y;
+          }
+        }
+        return { ...s, nodes };
+      }));
     }
   }
 
@@ -1707,10 +2225,40 @@ function SketchPage({ page, projectId, onReload }) {
       setSnapPoint(null);
     }
 
+    // Pencil stroke commits on pointer up
+    if (drawState && drawState.type === 'pencil_stroke') {
+      const pts = pencilSmoothedRef.current;
+      if (pts.length >= 2) {
+        const nodes = fitCurveToPoints(pts, pencilSmoothness);
+        if (nodes.length >= 2) {
+          const pathId = newId();
+          commitShapes([...shapes, {
+            id: pathId, type: 'path', closed: false,
+            nodes,
+            stroke: STROKE, strokeWidth: STROKE_W,
+            layerId: drawState.layerId || activeLayerId,
+          }]);
+          setSelectedId(pathId);
+          setPrevTool(tool);
+        }
+      }
+      pencilRawRef.current = [];
+      pencilSmoothedRef.current = [];
+      pencilTipRef.current = null;
+      setPencilPreview(null);
+      setDrawState(null);
+    }
+
+    // Node tool: commit drag on pointer up
+    if (tool === 'node' && nodeDragRef.current) {
+      commitShapes(shapes);
+      nodeDragRef.current = null;
+    }
+
     // Text bbox drawn — open the textarea at the drawn dimensions.
     // drawState.w/h are in world units; convert to screen pixels for storage
     // (s.w/s.h are kept as screen px so the box stays the same visual size at any zoom).
-    if (drawState.type === 'text') {
+    if (drawState && drawState.type === 'text') {
       const _psUp    = viewBox.w / (svgSizeRef.current.w || viewBox.w);
       const bigEnough = drawState.w > 10 && drawState.h > 10;
       // Store the CENTER as the world anchor, and w/h as screen pixels.
@@ -1787,6 +2335,32 @@ function SketchPage({ page, projectId, onReload }) {
         const hhHT  = (s.h ||  80) * _psHT / 2;
         if (tp.x >= s.x - hwHT - thresh && tp.x <= s.x + hwHT + thresh &&
             tp.y >= s.y - hhHT - thresh && tp.y <= s.y + hhHT + thresh) return s;
+      } else if (s.type === 'path' && s.nodes && s.nodes.length >= 2) {
+        // Hit-test each cubic Bezier segment of the path
+        const nodes = s.nodes;
+        for (let i = 0; i < nodes.length - 1; i++) {
+          const n0 = nodes[i], n1 = nodes[i + 1];
+          const nearest = nearestOnCubic(
+            { x: n0.x, y: n0.y },
+            { x: n0.cp2x !== undefined ? n0.cp2x : n0.x, y: n0.cp2y !== undefined ? n0.cp2y : n0.y },
+            { x: n1.cp1x !== undefined ? n1.cp1x : n1.x, y: n1.cp1y !== undefined ? n1.cp1y : n1.y },
+            { x: n1.x, y: n1.y },
+            tp
+          );
+          if (Math.hypot(nearest.x - tp.x, nearest.y - tp.y) < thresh) return s;
+        }
+        // Closing segment for closed paths
+        if (s.closed && nodes.length >= 2) {
+          const n0 = nodes[nodes.length - 1], n1 = nodes[0];
+          const nearest = nearestOnCubic(
+            { x: n0.x, y: n0.y },
+            { x: n0.cp2x !== undefined ? n0.cp2x : n0.x, y: n0.cp2y !== undefined ? n0.cp2y : n0.y },
+            { x: n1.cp1x !== undefined ? n1.cp1x : n1.x, y: n1.cp1y !== undefined ? n1.cp1y : n1.y },
+            { x: n1.x, y: n1.y },
+            tp
+          );
+          if (Math.hypot(nearest.x - tp.x, nearest.y - tp.y) < thresh) return s;
+        }
       }
     }
     return null;
@@ -1821,6 +2395,15 @@ function SketchPage({ page, projectId, onReload }) {
         {x:shape.x+shape.w, y:shape.y+shape.h},
       ]; break;
       case 'text': raw = [{x:shape.x,y:shape.y}]; break;
+      case 'path':
+        // Snap to first and last node of the path
+        if (shape.nodes && shape.nodes.length > 0) {
+          raw = [
+            { x: shape.nodes[0].x, y: shape.nodes[0].y },
+            { x: shape.nodes[shape.nodes.length - 1].x, y: shape.nodes[shape.nodes.length - 1].y },
+          ];
+        }
+        break;
     }
     if (!rot) return raw;
     return raw.map(p => rotatePoint(p.x, p.y, piv.x, piv.y, rot));
@@ -2100,6 +2683,72 @@ function SketchPage({ page, projectId, onReload }) {
     if (hit && hit.type === 'text') {
       setTextEdit({ id: hit.id, x: hit.x, y: hit.y, w: hit.w, h: hit.h || 80, content: hit.content, editing: true });
       commitShapes(shapes.filter(s => s.id !== hit.id));
+      return;
+    }
+
+    // Pen tool: double-click commits the open path (without closing it)
+    if (tool === 'pen' && penNodes.length >= 2) {
+      const nodes = [...penNodes];
+      if (penMode === 'smart') applySmartHandles(nodes);
+      const pathId = newId();
+      commitShapes([...shapes, {
+        id: pathId, type: 'path', closed: false,
+        nodes,
+        stroke: STROKE, strokeWidth: STROKE_W,
+        layerId: activeLayerId,
+      }]);
+      setPenNodes([]);
+      setPenHandleDrag(null);
+      setPenCursor(null);
+      setSelectedId(pathId);
+      setPrevTool(tool);
+      return;
+    }
+
+    // Node tool: double-click on a path segment inserts a node
+    if (tool === 'node' && nodeSelectedId) {
+      const pathShape = shapes.find(s => s.id === nodeSelectedId);
+      if (pathShape && pathShape.nodes) {
+        const nodes = pathShape.nodes;
+        for (let i = 0; i < nodes.length - 1; i++) {
+          const n0 = nodes[i], n1 = nodes[i + 1];
+          const nearest = nearestOnCubic(
+            { x: n0.x, y: n0.y },
+            { x: n0.cp2x !== undefined ? n0.cp2x : n0.x, y: n0.cp2y !== undefined ? n0.cp2y : n0.y },
+            { x: n1.cp1x !== undefined ? n1.cp1x : n1.x, y: n1.cp1y !== undefined ? n1.cp1y : n1.y },
+            { x: n1.x, y: n1.y },
+            pt
+          );
+          if (Math.hypot(nearest.x - pt.x, nearest.y - pt.y) < 12 * ps) {
+            // Insert a new smooth node at the nearest point
+            const t = nearest.t;
+            const newNode = {
+              x: nearest.x, y: nearest.y, type: 'smooth',
+              cp1x: nearest.x, cp1y: nearest.y,
+              cp2x: nearest.x, cp2y: nearest.y,
+            };
+            const newNodes = [
+              ...nodes.slice(0, i + 1),
+              newNode,
+              ...nodes.slice(i + 1),
+            ];
+            // Re-apply smooth handles to the affected region
+            applySmartHandles(newNodes);
+            commitShapes(shapes.map(s =>
+              s.id === nodeSelectedId ? { ...s, nodes: newNodes } : s
+            ));
+            setNodeSelectedIdx(i + 1);
+            return;
+          }
+        }
+      }
+    }
+
+    // Node tool: double-click on a path shape to enter node editing
+    if (tool === 'select' && hit && hit.type === 'path') {
+      setTool('node');
+      setNodeSelectedId(hit.id);
+      setNodeSelectedIdx(null);
     }
   }
 
@@ -2245,6 +2894,21 @@ function SketchPage({ page, projectId, onReload }) {
               </text>
             ))}
           </g>
+        );
+        break;
+      }
+      case 'path': {
+        if (!s.nodes || s.nodes.length < 2) return null;
+        const d = pathToSVGD(s.nodes, s.closed);
+        inner = (
+          <path
+            d={d}
+            stroke={s.stroke || STROKE}
+            strokeWidth={(s.strokeWidth || STROKE_W) * ps}
+            fill={s.fill || 'none'}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         );
         break;
       }
@@ -2630,6 +3294,17 @@ function SketchPage({ page, projectId, onReload }) {
           stroke="#3B82F6" strokeWidth={1.5*ps} fill="rgba(59,130,246,0.06)"
           strokeDasharray={`${4*ps},${2*ps}`} />;
       }
+      case 'pencil_stroke': {
+        // Live freehand stroke preview as a polyline through stabilized points
+        if (!pencilPreview || pencilPreview.length < 2) return null;
+        const pts = pencilPreview.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+        return (
+          <polyline points={pts}
+            stroke={STROKE} strokeWidth={STROKE_W * ps}
+            fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.8}
+          />
+        );
+      }
       default: return null;
     }
   }
@@ -2637,6 +3312,7 @@ function SketchPage({ page, projectId, onReload }) {
   const selectedShape = shapes.find(s => s.id === selectedId);
   const cursorMap = {
     select: 'default', line: 'crosshair', curve: 'crosshair',
+    pencil: 'crosshair', pen: 'crosshair', node: 'default',
     circle: 'crosshair', rect: 'crosshair', text: 'text', eraser: 'pointer',
   };
 
@@ -2916,12 +3592,151 @@ function SketchPage({ page, projectId, onReload }) {
             <span style={{ letterSpacing: '0.03em' }}>Snap</span>
             <span style={{ fontSize: 8, opacity: 0.5, marginLeft: 1 }}>▾</span>
           </button>
-
           {/* Separator */}
           <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
 
-          {/* ── View menu button ──────────────────────────────────────── */}
-          <button
+          {/* ── Pencil tool context controls ────────────────────────────────── */}
+          {tool === 'pencil' && (
+            <>
+              {/* Stabilizer mode toggle */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+                {[{ id: 'rope', label: 'Rope', title: 'Rope stabilizer: lag-based smoothing' },
+                  { id: 'window', label: 'Window', title: 'Window stabilizer: moving average' }].map(m => (
+                  <button key={m.id}
+                    onClick={() => setStabilizerMode(m.id)}
+                    title={m.title}
+                    style={{
+                      height: 22, padding: '0 8px', borderRadius: 3, fontSize: 10,
+                      fontFamily: 'Courier New, monospace',
+                      background: stabilizerMode === m.id ? 'rgba(99,102,241,0.35)' : 'rgba(255,255,255,0.06)',
+                      border: `1px solid ${stabilizerMode === m.id ? 'rgba(99,102,241,0.7)' : 'rgba(255,255,255,0.14)'}`,
+                      color: stabilizerMode === m.id ? '#A5B4FC' : 'rgba(255,255,255,0.45)',
+                      cursor: 'pointer', outline: 'none',
+                    }}
+                  >{m.label}</button>
+                ))}
+              </div>
+              {/* Rope length / Window size control */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', fontFamily: 'Courier New, monospace' }}>
+                  {stabilizerMode === 'rope' ? 'Lag' : 'Win'}
+                </span>
+                <input type="range" min={1} max={stabilizerMode === 'rope' ? 80 : 20} step={1}
+                  value={stabilizerMode === 'rope' ? ropeLength : windowSize}
+                  onChange={e => stabilizerMode === 'rope'
+                    ? setRopeLength(Number(e.target.value))
+                    : setWindowSize(Number(e.target.value))}
+                  style={{ width: 60, cursor: 'pointer', accentColor: '#818CF8' }}
+                />
+                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', fontFamily: 'Courier New, monospace', minWidth: 18 }}>
+                  {stabilizerMode === 'rope' ? ropeLength : windowSize}
+                </span>
+              </div>
+              {/* Smoothness control */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', fontFamily: 'Courier New, monospace' }}>Smooth</span>
+                <input type="range" min={0} max={100} step={5}
+                  value={Math.round(pencilSmoothness * 100)}
+                  onChange={e => setPencilSmoothness(Number(e.target.value) / 100)}
+                  style={{ width: 60, cursor: 'pointer', accentColor: '#818CF8' }}
+                />
+                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', fontFamily: 'Courier New, monospace', minWidth: 22 }}>
+                  {Math.round(pencilSmoothness * 100)}%
+                </span>
+              </div>
+            </>
+          )}
+
+          {/* ── Pen tool context controls ───────────────────────────────────── */}
+          {tool === 'pen' && (
+            <>
+              {[{ id: 'bezier', label: 'Bézier', title: 'Click to place sharp node; click+drag to pull smooth handles' },
+                { id: 'smart', label: 'Smart', title: 'Click to place nodes; handles auto-calculated for smooth curves' }].map(m => (
+                <button key={m.id}
+                  onClick={() => setPenMode(m.id)}
+                  title={m.title}
+                  style={{
+                    height: 22, padding: '0 8px', borderRadius: 3, fontSize: 10,
+                    fontFamily: 'Courier New, monospace',
+                    background: penMode === m.id ? 'rgba(59,130,246,0.35)' : 'rgba(255,255,255,0.06)',
+                    border: `1px solid ${penMode === m.id ? 'rgba(59,130,246,0.7)' : 'rgba(255,255,255,0.14)'}`,
+                    color: penMode === m.id ? '#93C5FD' : 'rgba(255,255,255,0.45)',
+                    cursor: 'pointer', outline: 'none', flexShrink: 0,
+                  }}
+                >{m.label}</button>
+              ))}
+              {penNodes.length > 0 && (
+                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+                  {penNodes.length} node{penNodes.length !== 1 ? 's' : ''} — dbl-click or click start to finish
+                </span>
+              )}
+            </>
+          )}
+
+          {/* ── Node tool context controls ─────────────────────────────────── */}
+          {tool === 'node' && nodeSelectedId && nodeSelectedIdx !== null && (() => {
+            const pathShape = shapes.find(s => s.id === nodeSelectedId);
+            const node = pathShape && pathShape.nodes && pathShape.nodes[nodeSelectedIdx];
+            if (!node) return null;
+            return (
+              <>
+                <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
+                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>Node:</span>
+                {[{ id: 'sharp', label: 'Sharp', title: 'Sharp corner node — handles are independent' },
+                  { id: 'smooth', label: 'Smooth', title: 'Smooth node — handles mirror each other' },
+                  { id: 'cusp', label: 'Cusp', title: 'Cusp node — handles are independent but shown' }].map(t => (
+                  <button key={t.id}
+                    onClick={() => {
+                      setShapes(prev => prev.map(s => {
+                        if (s.id !== nodeSelectedId || !s.nodes) return s;
+                        const nodes = s.nodes.map((n, i) => i === nodeSelectedIdx ? { ...n, type: t.id } : n);
+                        return { ...s, nodes };
+                      }));
+                      commitShapes(shapes.map(s => {
+                        if (s.id !== nodeSelectedId || !s.nodes) return s;
+                        const nodes = s.nodes.map((n, i) => i === nodeSelectedIdx ? { ...n, type: t.id } : n);
+                        return { ...s, nodes };
+                      }));
+                    }}
+                    title={t.title}
+                    style={{
+                      height: 22, padding: '0 7px', borderRadius: 3, fontSize: 10,
+                      fontFamily: 'Courier New, monospace',
+                      background: node.type === t.id ? 'rgba(99,102,241,0.35)' : 'rgba(255,255,255,0.06)',
+                      border: `1px solid ${node.type === t.id ? 'rgba(99,102,241,0.7)' : 'rgba(255,255,255,0.14)'}`,
+                      color: node.type === t.id ? '#A5B4FC' : 'rgba(255,255,255,0.45)',
+                      cursor: 'pointer', outline: 'none', flexShrink: 0,
+                    }}
+                  >{t.label}</button>
+                ))}
+                <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
+                {/* Delete selected node */}
+                <button
+                  onClick={() => {
+                    if (!pathShape || !pathShape.nodes) return;
+                    const newNodes = pathShape.nodes.filter((_, i) => i !== nodeSelectedIdx);
+                    if (newNodes.length < 2) {
+                      commitShapes(shapes.filter(s => s.id !== nodeSelectedId));
+                      setNodeSelectedId(null);
+                    } else {
+                      commitShapes(shapes.map(s => s.id === nodeSelectedId ? { ...s, nodes: newNodes } : s));
+                    }
+                    setNodeSelectedIdx(null);
+                  }}
+                  title="Delete selected node"
+                  style={{
+                    height: 22, padding: '0 7px', borderRadius: 3, fontSize: 10,
+                    fontFamily: 'Courier New, monospace',
+                    background: 'rgba(239,68,68,0.15)',
+                    border: '1px solid rgba(239,68,68,0.4)',
+                    color: '#FCA5A5', cursor: 'pointer', outline: 'none', flexShrink: 0,
+                  }}
+                >Del Node</button>
+              </>
+            );
+          })()}
+
+          {/* ── View menu button ────────────────────────────────────────── */}          <button
             onClick={e => {
               const btnRect = e.currentTarget.getBoundingClientRect();
               const barRect = toolbarRef.current ? toolbarRef.current.getBoundingClientRect() : { left: 0 };
@@ -3142,6 +3957,123 @@ function SketchPage({ page, projectId, onReload }) {
 
             {/* Preview shape while drawing */}
             {renderPreview()}
+
+            {/* Pen tool: in-progress path + rubber band + handle lines */}
+            {tool === 'pen' && penNodes.length > 0 && (() => {
+              const _ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+              const allNodes = penHandleDrag
+                ? penNodes.map((n, i) => i === penNodes.length - 1
+                    ? { ...n, ...penHandleDrag } : n)
+                : penNodes;
+              // Committed segments so far
+              const committedD = allNodes.length >= 2 ? pathToSVGD(allNodes, false) : null;
+              // Rubber band: last node to cursor
+              const lastN = allNodes[allNodes.length - 1];
+              const rubberBandD = penCursor && lastN ? (() => {
+                const cp1x = lastN.cp2x || lastN.x;
+                const cp1y = lastN.cp2y || lastN.y;
+                return `M ${lastN.x.toFixed(2)} ${lastN.y.toFixed(2)} C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)} ${penCursor.x.toFixed(2)} ${penCursor.y.toFixed(2)} ${penCursor.x.toFixed(2)} ${penCursor.y.toFixed(2)}`;
+              })() : null;
+              return (
+                <g style={{ pointerEvents: 'none' }}>
+                  {/* Committed path segments */}
+                  {committedD && (
+                    <path d={committedD} stroke={STROKE} strokeWidth={STROKE_W * _ps}
+                      fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.85} />
+                  )}
+                  {/* Rubber band to cursor */}
+                  {rubberBandD && (
+                    <path d={rubberBandD} stroke={STROKE} strokeWidth={STROKE_W * _ps}
+                      fill="none" strokeLinecap="round" strokeLinejoin="round"
+                      strokeDasharray={`${5*_ps},${3*_ps}`} opacity={0.5} />
+                  )}
+                  {/* Handle lines and control points */}
+                  {allNodes.map((n, i) => {
+                    const hasHandles = n.type === 'smooth' || n.type === 'cusp';
+                    return (
+                      <g key={i}>
+                        {/* Node dot */}
+                        <circle cx={n.x} cy={n.y} r={4 * _ps}
+                          fill="rgba(59,130,246,0.9)" stroke="white" strokeWidth={_ps} />
+                        {/* Handle lines */}
+                        {hasHandles && n.cp2x !== n.x && (
+                          <>
+                            <line x1={n.x} y1={n.y} x2={n.cp2x} y2={n.cp2y}
+                              stroke="rgba(59,130,246,0.5)" strokeWidth={_ps} />
+                            <circle cx={n.cp2x} cy={n.cp2y} r={3 * _ps}
+                              fill="rgba(59,130,246,0.7)" stroke="white" strokeWidth={_ps} />
+                          </>
+                        )}
+                        {hasHandles && n.cp1x !== n.x && i > 0 && (
+                          <>
+                            <line x1={n.x} y1={n.y} x2={n.cp1x} y2={n.cp1y}
+                              stroke="rgba(59,130,246,0.5)" strokeWidth={_ps} />
+                            <circle cx={n.cp1x} cy={n.cp1y} r={3 * _ps}
+                              fill="rgba(59,130,246,0.7)" stroke="white" strokeWidth={_ps} />
+                          </>
+                        )}
+                      </g>
+                    );
+                  })}
+                  {/* First node close indicator */}
+                  {penNodes.length >= 2 && penCursor && (() => {
+                    const fn = penNodes[0];
+                    const closeDist = 12 * _ps;
+                    const near = Math.hypot(penCursor.x - fn.x, penCursor.y - fn.y) < closeDist;
+                    return near ? (
+                      <circle cx={fn.x} cy={fn.y} r={7 * _ps}
+                        fill="none" stroke="#22C55E" strokeWidth={1.5 * _ps} opacity={0.9} />
+                    ) : null;
+                  })()}
+                </g>
+              );
+            })()}
+
+            {/* Node tool: node handles for the selected path */}
+            {tool === 'node' && nodeSelectedId && (() => {
+              const pathShape = shapes.find(s => s.id === nodeSelectedId);
+              if (!pathShape || !pathShape.nodes) return null;
+              const _ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+              return (
+                <g style={{ pointerEvents: 'none' }}>
+                  {pathShape.nodes.map((n, i) => {
+                    const isSelected = i === nodeSelectedIdx;
+                    const hasHandles = n.type !== 'sharp';
+                    return (
+                      <g key={i}>
+                        {/* cp1 handle line + dot */}
+                        {hasHandles && (Math.abs(n.cp1x - n.x) > 0.5 || Math.abs(n.cp1y - n.y) > 0.5) && (
+                          <>
+                            <line x1={n.x} y1={n.y} x2={n.cp1x} y2={n.cp1y}
+                              stroke="rgba(99,102,241,0.6)" strokeWidth={_ps} />
+                            <circle cx={n.cp1x} cy={n.cp1y} r={3.5 * _ps}
+                              fill="rgba(99,102,241,0.8)" stroke="white" strokeWidth={_ps} />
+                          </>
+                        )}
+                        {/* cp2 handle line + dot */}
+                        {hasHandles && (Math.abs(n.cp2x - n.x) > 0.5 || Math.abs(n.cp2y - n.y) > 0.5) && (
+                          <>
+                            <line x1={n.x} y1={n.y} x2={n.cp2x} y2={n.cp2y}
+                              stroke="rgba(99,102,241,0.6)" strokeWidth={_ps} />
+                            <circle cx={n.cp2x} cy={n.cp2y} r={3.5 * _ps}
+                              fill="rgba(99,102,241,0.8)" stroke="white" strokeWidth={_ps} />
+                          </>
+                        )}
+                        {/* On-curve node */}
+                        <rect
+                          x={n.x - 4 * _ps} y={n.y - 4 * _ps}
+                          width={8 * _ps} height={8 * _ps}
+                          fill={isSelected ? '#3B82F6' : 'white'}
+                          stroke={isSelected ? 'white' : '#3B82F6'}
+                          strokeWidth={1.5 * _ps}
+                          style={{ pointerEvents: 'all', cursor: 'move' }}
+                        />
+                      </g>
+                    );
+                  })}
+                </g>
+              );
+            })()}
 
             {/* Snap indicator — per-type visual, counter-scaled so it stays
                 constant visual size in screen pixels regardless of zoom.
