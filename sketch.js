@@ -237,7 +237,11 @@ function fitCurveToPoints(pts, smoothness) {
   const eps = Math.max(0.5, smoothness * 20);
   const keepIdx = rdpSimplify(pts, eps);
   const reduced = keepIdx.map(i => pts[i]);
-  if (reduced.length < 2) return [];
+  // Ensure at least 2 distinct points survive simplification
+  if (reduced.length < 2) return pts.length >= 2 ? [
+    { x: pts[0].x, y: pts[0].y, type: 'sharp', cp1x: pts[0].x, cp1y: pts[0].y, cp2x: pts[0].x, cp2y: pts[0].y },
+    { x: pts[pts.length-1].x, y: pts[pts.length-1].y, type: 'sharp', cp1x: pts[pts.length-1].x, cp1y: pts[pts.length-1].y, cp2x: pts[pts.length-1].x, cp2y: pts[pts.length-1].y },
+  ] : [];
 
   // Catmull-Rom tension (lower = tighter, higher = looser)
   const tension = 0.5;
@@ -253,34 +257,26 @@ function fitCurveToPoints(pts, smoothness) {
     // Catmull-Rom tangent at p1 → outgoing handle (cp2)
     const cp2x = p1.x + (p2.x - p0.x) * tension / 3;
     const cp2y = p1.y + (p2.y - p0.y) * tension / 3;
-    // Catmull-Rom tangent at p2 → incoming handle (cp1) for next node
-    const cp1x = p2.x - (p3.x - p1.x) * tension / 3;
-    const cp1y = p2.y - (p3.y - p1.y) * tension / 3;
+    // Catmull-Rom tangent at p1 → incoming handle (cp1)
+    const inCp1x = p1.x - (p2.x - p0.x) * tension / 3;
+    const inCp1y = p1.y - (p2.y - p0.y) * tension / 3;
 
-    if (i === 0) {
-      nodes.push({ x: p1.x, y: p1.y, type: 'smooth',
-        cp1x: p1.x, cp1y: p1.y, cp2x, cp2y });
-    } else {
-      // Update previous node's cp2 to be the incoming handle for this segment
-      const prev = nodes[nodes.length - 1];
-      // cp1 for current node (incoming from previous)
-      const inCp1x = p1.x - (p2.x - p0.x) * tension / 3;
-      const inCp1y = p1.y - (p2.y - p0.y) * tension / 3;
-      nodes.push({ x: p1.x, y: p1.y, type: i === n - 1 ? 'smooth' : 'smooth',
-        cp1x: inCp1x, cp1y: inCp1y, cp2x, cp2y });
-    }
+    const node = {
+      x: p1.x, y: p1.y, type: 'smooth',
+      cp1x: isFinite(inCp1x) ? inCp1x : p1.x,
+      cp1y: isFinite(inCp1y) ? inCp1y : p1.y,
+      cp2x: isFinite(cp2x)   ? cp2x   : p1.x,
+      cp2y: isFinite(cp2y)   ? cp2y   : p1.y,
+    };
+    nodes.push(node);
   }
   // Fix first node's cp1 to equal its position (no incoming handle at start)
-  if (nodes.length > 0) {
-    nodes[0].cp1x = nodes[0].x;
-    nodes[0].cp1y = nodes[0].y;
-  }
+  nodes[0].cp1x = nodes[0].x;
+  nodes[0].cp1y = nodes[0].y;
   // Fix last node's cp2 to equal its position (no outgoing handle at end)
-  if (nodes.length > 0) {
-    const last = nodes[nodes.length - 1];
-    last.cp2x = last.x;
-    last.cp2y = last.y;
-  }
+  const last = nodes[nodes.length - 1];
+  last.cp2x = last.x;
+  last.cp2y = last.y;
   return nodes;
 }
 
@@ -294,11 +290,14 @@ function applySmartHandles(nodes) {
     const p0 = nodes[Math.max(0, i - 1)];
     const p1 = nodes[i];
     const p2 = nodes[Math.min(n - 1, i + 1)];
-    const p3 = nodes[Math.min(n - 1, i + 2)];
-    nodes[i].cp2x = p1.x + (p2.x - p0.x) * tension / 3;
-    nodes[i].cp2y = p1.y + (p2.y - p0.y) * tension / 3;
-    nodes[i].cp1x = p1.x - (p2.x - p0.x) * tension / 3;
-    nodes[i].cp1y = p1.y - (p2.y - p0.y) * tension / 3;
+    const cp2x = p1.x + (p2.x - p0.x) * tension / 3;
+    const cp2y = p1.y + (p2.y - p0.y) * tension / 3;
+    const cp1x = p1.x - (p2.x - p0.x) * tension / 3;
+    const cp1y = p1.y - (p2.y - p0.y) * tension / 3;
+    nodes[i].cp2x = isFinite(cp2x) ? cp2x : p1.x;
+    nodes[i].cp2y = isFinite(cp2y) ? cp2y : p1.y;
+    nodes[i].cp1x = isFinite(cp1x) ? cp1x : p1.x;
+    nodes[i].cp1y = isFinite(cp1y) ? cp1y : p1.y;
   }
   // Clamp endpoints
   nodes[0].cp1x = nodes[0].x; nodes[0].cp1y = nodes[0].y;
@@ -1113,6 +1112,13 @@ function SketchPage({ page, projectId, onReload }) {
       // Don't intercept when typing in an input
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
+      // Enter: commit in-progress pen path as an open path
+      if (e.key === 'Enter' && tool === 'pen' && penNodes.length >= 2) {
+        e.preventDefault();
+        commitPenPath(false);
+        return;
+      }
+
       // Escape: cancel in-progress pen path or pencil stroke
       if (e.key === 'Escape') {
         if (penNodes.length > 0) {
@@ -1132,23 +1138,15 @@ function SketchPage({ page, projectId, onReload }) {
       // Delete / Backspace: remove selected node in Node tool
       if ((e.key === 'Delete' || e.key === 'Backspace') && tool === 'node' && nodeSelectedId !== null && nodeSelectedIdx !== null) {
         e.preventDefault();
-        setShapes(prev => prev.map(s => {
+        const newShapes = shapes.map(s => {
           if (s.id !== nodeSelectedId || !s.nodes) return s;
           const newNodes = s.nodes.filter((_, i) => i !== nodeSelectedIdx);
-          if (newNodes.length < 2) {
-            // Path too short — remove it entirely
-            return null;
-          }
+          if (newNodes.length < 2) return null;
           return { ...s, nodes: newNodes };
-        }).filter(Boolean));
+        }).filter(Boolean);
+        commitShapes(newShapes);
         setNodeSelectedIdx(null);
-        commitShapes(shapes.filter(s => {
-          if (s.id !== nodeSelectedId || !s.nodes) return true;
-          return s.nodes.length - 1 >= 2;
-        }).map(s => {
-          if (s.id !== nodeSelectedId || !s.nodes) return s;
-          return { ...s, nodes: s.nodes.filter((_, i) => i !== nodeSelectedIdx) };
-        }));
+        if (!newShapes.find(s => s.id === nodeSelectedId)) setNodeSelectedId(null);
       }
     }
     window.addEventListener('keydown', handleKeyDown);
@@ -1200,6 +1198,33 @@ function SketchPage({ page, projectId, onReload }) {
   function commitShapes(next) {
     setShapes(next);
     persist(next, undefined);
+  }
+
+  // Commit the in-progress pen path. closed=true closes the path back to the
+  // first node; closed=false commits it as an open path.
+  // Safe to call even if penNodes is empty (no-op).
+  function commitPenPath(closed) {
+    if (penNodes.length < 2) {
+      // Not enough nodes — just cancel
+      setPenNodes([]);
+      setPenHandleDrag(null);
+      setPenCursor(null);
+      return;
+    }
+    const nodes = penNodes.map(n => ({ ...n }));
+    if (penMode === 'smart') applySmartHandles(nodes);
+    const pathId = newId();
+    commitShapes([...shapes, {
+      id: pathId, type: 'path', closed,
+      nodes,
+      stroke: STROKE, strokeWidth: STROKE_W,
+      layerId: activeLayerId,
+    }]);
+    setPenNodes([]);
+    setPenHandleDrag(null);
+    setPenCursor(null);
+    setSelectedId(pathId);
+    setPrevTool('pen');
   }
 
   // Functional update for the ShapeValueCard — always operates on the latest
@@ -1640,32 +1665,20 @@ function SketchPage({ page, projectId, onReload }) {
       setDrawState({ type: 'pencil_stroke', layerId: activeLayerId });
     }
 
-    // ── Pen Tool ─────────────────────────────────────────────────────────────────────────────────
+    // ── Pen Tool ─────────────────────────────────────────────────────────────────────────────────────────
     if (tool === 'pen') {
       const sp = anySnapActive ? resolveSnap(pt) : pt;
+      // Right-click while drawing: commit open path
+      if (e.button === 2 && penNodes.length >= 2) {
+        commitPenPath(false);
+        return;
+      }
       // Check if clicking on the first node to close the path
       if (penNodes.length >= 2) {
         const firstNode = penNodes[0];
-        const closeDist = 12 * ps;
+        const closeDist = 14 * ps;
         if (Math.hypot(sp.x - firstNode.x, sp.y - firstNode.y) < closeDist) {
-          // Close the path
-          const newNode = { x: firstNode.x, y: firstNode.y, type: 'smooth',
-            cp1x: firstNode.x, cp1y: firstNode.y,
-            cp2x: firstNode.x, cp2y: firstNode.y };
-          const allNodes = [...penNodes, newNode];
-          if (penMode === 'smart') applySmartHandles(allNodes);
-          const pathId = newId();
-          commitShapes([...shapes, {
-            id: pathId, type: 'path', closed: true,
-            nodes: allNodes,
-            stroke: STROKE, strokeWidth: STROKE_W,
-            layerId: activeLayerId,
-          }]);
-          setPenNodes([]);
-          setPenHandleDrag(null);
-          setPenCursor(null);
-          setSelectedId(pathId);
-          setPrevTool(tool);
+          commitPenPath(true);
           return;
         }
       }
@@ -1677,7 +1690,6 @@ function SketchPage({ page, projectId, onReload }) {
       setPenNodes(prev => [...prev, newNode]);
       e.currentTarget.setPointerCapture(e.pointerId);
     }
-
     // ── Node Tool ─────────────────────────────────────────────────────────────────────────────────
     if (tool === 'node') {
       const nodeHitR = 12 * ps; // hit radius in world units
@@ -2042,31 +2054,34 @@ function SketchPage({ page, projectId, onReload }) {
         const rawEvPt = screenToWorld(ev);
         pencilRawRef.current.push(rawEvPt);
       }
-      // Apply stabilizer
+      // Apply stabilizer — runs once per animation frame to update the smoothed trail
       const raw = pencilRawRef.current;
       const last = raw[raw.length - 1];
-      let smoothed;
       if (stabilizerMode === 'rope') {
-        // Rope stabilizer: tip follows pointer with a lag of ropeLength screen px
-        const ropeLenWorld = ropeLength * ps;
+        // Rope stabilizer: virtual rope tip lags behind the pointer.
+        // The tip moves toward the pointer only when the distance exceeds ropeLength.
+        // We always append the current tip position so the preview trail is continuous.
+        const ropeLenWorld = ropeLength * (viewBox.w / (svgSizeRef.current.w || viewBox.w));
         const tip = pencilTipRef.current || { ...last };
         const dist = Math.hypot(last.x - tip.x, last.y - tip.y);
         if (dist > ropeLenWorld) {
+          // Move tip toward pointer, stopping ropeLength behind it
           const frac = (dist - ropeLenWorld) / dist;
           tip.x += (last.x - tip.x) * frac;
           tip.y += (last.y - tip.y) * frac;
         }
-        pencilTipRef.current = { ...tip };
-        smoothed = { ...tip };
+        // Always update the ref and always push the current tip to the smoothed trail
+        pencilTipRef.current = { x: tip.x, y: tip.y };
+        pencilSmoothedRef.current.push({ x: tip.x, y: tip.y });
       } else {
         // Window stabilizer: moving average of last windowSize raw points
         const win = raw.slice(-windowSize);
-        smoothed = {
+        const smoothed = {
           x: win.reduce((s, p) => s + p.x, 0) / win.length,
           y: win.reduce((s, p) => s + p.y, 0) / win.length,
         };
+        pencilSmoothedRef.current.push(smoothed);
       }
-      pencilSmoothedRef.current.push(smoothed);
       setPencilPreview([...pencilSmoothedRef.current]);
     }
 
@@ -2688,20 +2703,7 @@ function SketchPage({ page, projectId, onReload }) {
 
     // Pen tool: double-click commits the open path (without closing it)
     if (tool === 'pen' && penNodes.length >= 2) {
-      const nodes = [...penNodes];
-      if (penMode === 'smart') applySmartHandles(nodes);
-      const pathId = newId();
-      commitShapes([...shapes, {
-        id: pathId, type: 'path', closed: false,
-        nodes,
-        stroke: STROKE, strokeWidth: STROKE_W,
-        layerId: activeLayerId,
-      }]);
-      setPenNodes([]);
-      setPenHandleDrag(null);
-      setPenCursor(null);
-      setSelectedId(pathId);
-      setPrevTool(tool);
+      commitPenPath(false);
       return;
     }
 
@@ -3666,9 +3668,34 @@ function SketchPage({ page, projectId, onReload }) {
                 >{m.label}</button>
               ))}
               {penNodes.length > 0 && (
-                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
-                  {penNodes.length} node{penNodes.length !== 1 ? 's' : ''} — dbl-click or click start to finish
-                </span>
+                <>
+                  <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
+                  <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+                    {penNodes.length} node{penNodes.length !== 1 ? 's' : ''}
+                  </span>
+                  <button
+                    onClick={() => commitPenPath(false)}
+                    title="Commit open path (Enter)"
+                    style={{
+                      height: 22, padding: '0 9px', borderRadius: 3, fontSize: 10,
+                      fontFamily: 'Courier New, monospace',
+                      background: 'rgba(34,197,94,0.25)',
+                      border: '1px solid rgba(34,197,94,0.55)',
+                      color: '#86EFAC', cursor: 'pointer', outline: 'none', flexShrink: 0,
+                    }}
+                  >✓ Done</button>
+                  <button
+                    onClick={() => { setPenNodes([]); setPenHandleDrag(null); setPenCursor(null); }}
+                    title="Cancel path (Escape)"
+                    style={{
+                      height: 22, padding: '0 8px', borderRadius: 3, fontSize: 10,
+                      fontFamily: 'Courier New, monospace',
+                      background: 'rgba(239,68,68,0.18)',
+                      border: '1px solid rgba(239,68,68,0.45)',
+                      color: '#FCA5A5', cursor: 'pointer', outline: 'none', flexShrink: 0,
+                    }}
+                  >✕ Cancel</button>
+                </>
               )}
             </>
           )}
@@ -3843,7 +3870,15 @@ function SketchPage({ page, projectId, onReload }) {
               {TOOLS.map(t => (
                 <button
                   key={t.id}
-                  onClick={() => { setTool(t.id); setSelectedId(null); setDrawState(null); setPrevTool(null); }}
+                  onClick={() => {
+                    // If a pen path is in progress, commit it as an open path before switching
+                    if (tool === 'pen' && penNodes.length >= 2) {
+                      commitPenPath(false);
+                    } else if (tool === 'pen') {
+                      setPenNodes([]); setPenHandleDrag(null); setPenCursor(null);
+                    }
+                    setTool(t.id); setSelectedId(null); setDrawState(null); setPrevTool(null);
+                  }}
                   title={t.label}
                   style={{
                     width: 52, height: 46, flexShrink: 0,
