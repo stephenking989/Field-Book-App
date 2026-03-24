@@ -1077,22 +1077,28 @@ function SketchPage({ page, projectId, onReload }) {
       case 'rect': {
         const rot = shape._rot || 0;
         if (!rot) {
-          // Unrotated: simple local-space delta — tl=(x,y) is fixed in world space.
+          // Unrotated: simple local-space ops — opposite corner stays fixed in world space.
           if (nodeKey === 'tl') return { ...shape, x: shape.x+dx, y: shape.y+dy, w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h-dy) };
           if (nodeKey === 'tr') return { ...shape,                y: shape.y+dy, w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h-dy) };
           if (nodeKey === 'bl') return { ...shape, x: shape.x+dx,                w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h+dy) };
           if (nodeKey === 'br') return { ...shape,                                w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h+dy) };
         } else {
-          // Rotated: dx/dy arrive as local-space delta (caller already un-rotates).
-          // Recover world-space drag delta and work entirely in world coords so
-          // the OPPOSITE (fixed) corner stays pinned in world space.
+          // Rotated: dx/dy = local-space delta (caller already un-rotates world delta).
+          // Strategy: work entirely in world space.
+          //   1. Convert local delta → world delta (re-rotate by +rot).
+          //   2. Compute world positions of fixed (opposite) corner and new dragged corner.
+          //   3. New world center = midpoint of those two world positions.
+          //   4. World diagonal (fixed→dragged) un-rotated → gives new local w and h.
+          //   5. New top-left = new_center − (nw/2, nh/2).
+          // Uses getShapePivot so it's correct whether or not _pivot is set.
           const rad = rot * Math.PI / 180;
           const cos = Math.cos(rad), sin = Math.sin(rad);
-          // Local → world: rotate by +rot
+          // Local → world delta
           const wdx = dx * cos - dy * sin;
           const wdy = dx * sin + dy * cos;
-          // Old pivot (center)
-          const cx = shape.x + shape.w / 2, cy = shape.y + shape.h / 2;
+          // Rotation center (may be _pivot or geometric center)
+          const pivot = getShapePivot(shape);
+          const pcx = pivot.x, pcy = pivot.y;
           // Local corner positions
           const C = {
             tl: { x: shape.x,           y: shape.y           },
@@ -1102,25 +1108,25 @@ function SketchPage({ page, projectId, onReload }) {
           };
           const opp = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' }[nodeKey];
           if (!opp) break;
-          const Lf = C[opp], Ld = C[nodeKey]; // local fixed / dragged
-          // World positions of fixed and dragged corners (rotate around old center)
-          const Wfx = cx + (Lf.x-cx)*cos - (Lf.y-cy)*sin;
-          const Wfy = cy + (Lf.x-cx)*sin + (Lf.y-cy)*cos;
-          const Wdx = cx + (Ld.x-cx)*cos - (Ld.y-cy)*sin + wdx; // new world pos of dragged
-          const Wdy = cy + (Ld.x-cx)*sin + (Ld.y-cy)*cos + wdy;
-          // New world center = midpoint of fixed and new-dragged corners
+          const Lf = C[opp], Ld = C[nodeKey];
+          // World position of fixed (opposite) corner — does not change
+          const Wfx = pcx + (Lf.x - pcx)*cos - (Lf.y - pcy)*sin;
+          const Wfy = pcy + (Lf.x - pcx)*sin + (Lf.y - pcy)*cos;
+          // World position of dragged corner after applying drag delta
+          const Wdx = pcx + (Ld.x - pcx)*cos - (Ld.y - pcy)*sin + wdx;
+          const Wdy = pcy + (Ld.x - pcx)*sin + (Ld.y - pcy)*cos + wdy;
+          // New world center = midpoint
           const Ncx = (Wfx + Wdx) / 2, Ncy = (Wfy + Wdy) / 2;
-          // Un-rotate both world corners around new center by -rot → new local positions
-          const Lfnx = Ncx + (Wfx-Ncx)*cos + (Wfy-Ncy)*sin;
-          const Lfny = Ncy - (Wfx-Ncx)*sin + (Wfy-Ncy)*cos;
-          const Ldnx = Ncx + (Wdx-Ncx)*cos + (Wdy-Ncy)*sin;
-          const Ldny = Ncy - (Wdx-Ncx)*sin + (Wdy-Ncy)*cos;
-          // New rect: min/max of the two corners; enforce minimum size
-          const nx = Math.min(Lfnx, Ldnx);
-          const ny = Math.min(Lfny, Ldny);
-          const nw = Math.max(10, Math.abs(Ldnx - Lfnx));
-          const nh = Math.max(10, Math.abs(Ldny - Lfny));
-          return { ...shape, x: nx, y: ny, w: nw, h: nh };
+          // World diagonal vector from fixed corner to dragged corner, un-rotated to local space.
+          // R(−rot)(dx,dy) = (dx·cos + dy·sin, −dx·sin + dy·cos)
+          const diagWx = Wdx - Wfx, diagWy = Wdy - Wfy;
+          const diagLx = diagWx * cos + diagWy * sin;
+          const diagLy = -diagWx * sin + diagWy * cos;
+          // New dimensions are the absolute components of the local diagonal
+          const nw = Math.max(10, Math.abs(diagLx));
+          const nh = Math.max(10, Math.abs(diagLy));
+          // New top-left: new world center is also the new local center (rotation is about center)
+          return { ...shape, x: Ncx - nw / 2, y: Ncy - nh / 2, w: nw, h: nh };
         }
         break;
       }
@@ -1431,7 +1437,7 @@ function SketchPage({ page, projectId, onReload }) {
               const rotRad   = newRot * Math.PI / 180;
               const rotPt    = { x: piv.x + d * Math.cos(theta0 + rotRad),
                                  y: piv.y + d * Math.sin(theta0 + rotRad) };
-              const cands    = collectSnapCandidates(rotPt, null, dragNode.shapeId);
+              const cands    = collectSnapCandidates(rotPt, null, null);
               if (cands.length && cands[0].dist < bestDist) {
                 bestDist = cands[0].dist;
                 // Angle from pivot to snap target → exact rotation to align ep with it
@@ -1472,7 +1478,7 @@ function SketchPage({ page, projectId, onReload }) {
           if (pivSnap) {
             const basePiv = getShapePivot(pivSnap);
             const wouldBe = { x: basePiv.x + dx, y: basePiv.y + dy };
-            const cands   = collectSnapCandidates(wouldBe, null, dragNode.shapeId);
+            const cands   = collectSnapCandidates(wouldBe, null, null);
             if (cands.length) {
               dx = cands[0].pt.x - basePiv.x;
               dy = cands[0].pt.y - basePiv.y;
@@ -1820,7 +1826,19 @@ function SketchPage({ page, projectId, onReload }) {
         {x:shape.x,         y:shape.y+shape.h},
         {x:shape.x+shape.w, y:shape.y+shape.h},
       ]; break;
-      case 'text': raw = [{x:shape.x,y:shape.y}]; break;
+      case 'text': {
+        // s.x/y = center; s.w/h = screen pixels — convert to world half-extents
+        const _psGS = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+        const hwGS  = (shape.w || 180) * _psGS / 2;
+        const hhGS  = (shape.h ||  80) * _psGS / 2;
+        raw = [
+          { x: shape.x - hwGS, y: shape.y - hhGS },
+          { x: shape.x + hwGS, y: shape.y - hhGS },
+          { x: shape.x - hwGS, y: shape.y + hhGS },
+          { x: shape.x + hwGS, y: shape.y + hhGS },
+        ];
+        break;
+      }
     }
     if (!rot) return raw;
     return raw.map(p => rotatePoint(p.x, p.y, piv.x, piv.y, rot));
@@ -2367,8 +2385,9 @@ function SketchPage({ page, projectId, onReload }) {
         const nx = -(s.y2-s.y1)/len, ny = (s.x2-s.x1)/len;
         // Text angle along line direction; D() normalises to ±90° so text always reads up
         const ang = Math.atan2(s.y2-s.y1, s.x2-s.x1) * 180 / Math.PI;
-        // Surveying azimuth from North, clockwise, 0–360°
-        const az  = ((Math.atan2(s.x2-s.x1, -(s.y2-s.y1)) * 180/Math.PI) + 360) % 360;
+        // Surveying azimuth from North, clockwise, 0–360°.
+        // Add shape rotation so the label reflects the actual bearing on screen.
+        const az  = ((Math.atan2(s.x2-s.x1, -(s.y2-s.y1)) * 180/Math.PI) + rot + 360) % 360;
         return <>
           {/* Length — left-perp side (top for L→R, bottom for R→L) */}
           {D(mx + nx*OFF, my + ny*OFF, ang, fmtPxAsReal(len, scaleDenom, units))}
