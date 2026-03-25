@@ -831,8 +831,8 @@ function SketchPage({ page, projectId, onReload }) {
       if (!Array.isArray(s.nodes) || s.nodes.length < 2) return false;
       return s.nodes.every(n =>
         isFinite(n.x) && isFinite(n.y) &&
-        isFinite(n.cp1x) && isFinite(n.cp1y) &&
-        isFinite(n.cp2x) && isFinite(n.cp2y)
+        isFinite(n.cp1x ?? n.x) && isFinite(n.cp1y ?? n.y) &&
+        isFinite(n.cp2x ?? n.x) && isFinite(n.cp2y ?? n.y)
       );
     });
   }
@@ -2872,6 +2872,7 @@ function SketchPage({ page, projectId, onReload }) {
     const rot = s._rot || 0;
     const piv = getShapePivot(s);
     const transform = rot ? `rotate(${rot},${piv.x},${piv.y})` : undefined;
+    const ps  = viewBox.w / (svgSizeRef.current.w || viewBox.w);
 
     let inner = null;
     switch (s.type) {
