@@ -55,6 +55,15 @@ function getShapePivot(shape) {
     case 'circle': return { x: shape.cx,                        y: shape.cy                       };
     case 'rect':   return { x: shape.x + shape.w/2,             y: shape.y + shape.h/2            };
     case 'text':   return { x: shape.x,                          y: shape.y                        }; // s.x/y is center
+    case 'path': {
+      if (!shape.nodes || shape.nodes.length === 0) return { x: 0, y: 0 };
+      const xs = shape.nodes.map(n => n.x);
+      const ys = shape.nodes.map(n => n.y);
+      return {
+        x: (Math.min(...xs) + Math.max(...xs)) / 2,
+        y: (Math.min(...ys) + Math.max(...ys)) / 2,
+      };
+    }
     default:       return { x: 0, y: 0 };
   }
 }
@@ -1332,6 +1341,18 @@ function SketchPage({ page, projectId, onReload }) {
         case 'circle': return { ...shape, cx:shape.cx+dx, cy:shape.cy+dy, ...(piv && {_pivot:piv}) };
         case 'rect':   return { ...shape, x:shape.x+dx, y:shape.y+dy, ...(piv && {_pivot:piv}) };
         case 'text':   return { ...shape, x:shape.x+dx, y:shape.y+dy, ...(piv && {_pivot:piv}) };
+        case 'path': {
+          return {
+            ...shape,
+            nodes: shape.nodes.map(n => ({
+              ...n,
+              x: n.x + dx, y: n.y + dy,
+              cp1x: n.cp1x + dx, cp1y: n.cp1y + dy,
+              cp2x: n.cp2x + dx, cp2y: n.cp2y + dy,
+            })),
+            ...(piv && { _pivot: piv }),
+          };
+        }
         default: return shape;
       }
     }
@@ -1841,6 +1862,7 @@ function SketchPage({ page, projectId, onReload }) {
     }
 
     const rawPt = screenToWorld(e);
+    const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
 
     // ── Node / handle drag ────────────────────────────────────────────────────
     if (dragNode && dragStart) {
@@ -2042,79 +2064,6 @@ function SketchPage({ page, projectId, onReload }) {
       setSnapPoint(null);
     }
 
-    if (!drawState) return;
-
-    if (drawState.type === 'line') {
-      setDrawState(d => ({ ...d, x2: pt.x, y2: pt.y }));
-    } else if (drawState.type === 'curve') {
-      if (drawState.phase === 1) {
-        // EC tracks snapped mouse (phase 1: choosing second endpoint).
-        // Guard inside callback — stale closure may still read phase 1 on a
-        // fast follow-up move after click 2 transitions us to phase 2.
-        setDrawState(d => d?.phase === 1 ? { ...d, x2: pt.x, y2: pt.y } : d);
-      } else if (drawState.phase === 2) {
-        // PI tracks the perpendicular bisector of BC-EC — constraining lateral drift.
-        // All BC/EC coords come from fresh `d` inside the callback so rapid moves
-        // after the phase 1→2 transition always use the locked EC position.
-        const _rawX = rawPt.x, _rawY = rawPt.y;
-        setDrawState(d => {
-          if (!d || d.phase !== 2) return d;
-          const chord = Math.hypot(d.x2-d.x1, d.y2-d.y1) || 1;
-          const mx = (d.x1+d.x2)/2, my = (d.y1+d.y2)/2;
-          const perpX = -(d.y2-d.y1)/chord, perpY = (d.x2-d.x1)/chord;
-          const t = (_rawX - mx) * perpX + (_rawY - my) * perpY;
-          const minT = chord * 0.05;
-          const ct = t >= 0 ? Math.max(minT, t) : Math.min(-minT, t);
-          return { ...d, px: mx + perpX * ct, py: my + perpY * ct };
-        });
-      }
-    } else if (drawState.type === 'circle') {
-      const r = Math.hypot(pt.x - drawState.cx, pt.y - drawState.cy);
-      setDrawState(d => ({ ...d, r }));
-    } else if (drawState.type === 'rect' || drawState.type === 'text') {
-      setDrawState(d => ({
-        ...d,
-        x: Math.min(d.ox, pt.x), y: Math.min(d.oy, pt.y),
-        w: Math.abs(pt.x - d.ox), h: Math.abs(pt.y - d.oy),
-      }));
-    } else if (drawState.type === 'pencil_stroke') {
-      // Collect coalesced events for high-frequency input
-      const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
-      for (const ev of events) {
-        const rawEvPt = screenToWorld(ev);
-        pencilRawRef.current.push(rawEvPt);
-      }
-      // Apply stabilizer — runs once per animation frame to update the smoothed trail
-      const raw = pencilRawRef.current;
-      const last = raw[raw.length - 1];
-      if (stabilizerMode === 'rope') {
-        // Rope stabilizer: virtual rope tip lags behind the pointer.
-        // The tip moves toward the pointer only when the distance exceeds ropeLength.
-        // We always append the current tip position so the preview trail is continuous.
-        const ropeLenWorld = ropeLength * (viewBox.w / (svgSizeRef.current.w || viewBox.w));
-        const tip = pencilTipRef.current || { ...last };
-        const dist = Math.hypot(last.x - tip.x, last.y - tip.y);
-        if (dist > ropeLenWorld) {
-          // Move tip toward pointer, stopping ropeLength behind it
-          const frac = (dist - ropeLenWorld) / dist;
-          tip.x += (last.x - tip.x) * frac;
-          tip.y += (last.y - tip.y) * frac;
-        }
-        // Always update the ref and always push the current tip to the smoothed trail
-        pencilTipRef.current = { x: tip.x, y: tip.y };
-        pencilSmoothedRef.current.push({ x: tip.x, y: tip.y });
-      } else {
-        // Window stabilizer: moving average of last windowSize raw points
-        const win = raw.slice(-windowSize);
-        const smoothed = {
-          x: win.reduce((s, p) => s + p.x, 0) / win.length,
-          y: win.reduce((s, p) => s + p.y, 0) / win.length,
-        };
-        pencilSmoothedRef.current.push(smoothed);
-      }
-      setPencilPreview([...pencilSmoothedRef.current]);
-    }
-
     // Pen tool: update handle drag preview and rubber-band cursor
     if (tool === 'pen') {
       const sp = anySnapActive ? resolveSnap(rawPt) : rawPt;
@@ -2202,6 +2151,79 @@ function SketchPage({ page, projectId, onReload }) {
         return { ...s, nodes };
       }));
     }
+
+    if (!drawState) return;
+
+    if (drawState.type === 'line') {
+      setDrawState(d => ({ ...d, x2: pt.x, y2: pt.y }));
+    } else if (drawState.type === 'curve') {
+      if (drawState.phase === 1) {
+        // EC tracks snapped mouse (phase 1: choosing second endpoint).
+        // Guard inside callback — stale closure may still read phase 1 on a
+        // fast follow-up move after click 2 transitions us to phase 2.
+        setDrawState(d => d?.phase === 1 ? { ...d, x2: pt.x, y2: pt.y } : d);
+      } else if (drawState.phase === 2) {
+        // PI tracks the perpendicular bisector of BC-EC — constraining lateral drift.
+        // All BC/EC coords come from fresh `d` inside the callback so rapid moves
+        // after the phase 1→2 transition always use the locked EC position.
+        const _rawX = rawPt.x, _rawY = rawPt.y;
+        setDrawState(d => {
+          if (!d || d.phase !== 2) return d;
+          const chord = Math.hypot(d.x2-d.x1, d.y2-d.y1) || 1;
+          const mx = (d.x1+d.x2)/2, my = (d.y1+d.y2)/2;
+          const perpX = -(d.y2-d.y1)/chord, perpY = (d.x2-d.x1)/chord;
+          const t = (_rawX - mx) * perpX + (_rawY - my) * perpY;
+          const minT = chord * 0.05;
+          const ct = t >= 0 ? Math.max(minT, t) : Math.min(-minT, t);
+          return { ...d, px: mx + perpX * ct, py: my + perpY * ct };
+        });
+      }
+    } else if (drawState.type === 'circle') {
+      const r = Math.hypot(pt.x - drawState.cx, pt.y - drawState.cy);
+      setDrawState(d => ({ ...d, r }));
+    } else if (drawState.type === 'rect' || drawState.type === 'text') {
+      setDrawState(d => ({
+        ...d,
+        x: Math.min(d.ox, pt.x), y: Math.min(d.oy, pt.y),
+        w: Math.abs(pt.x - d.ox), h: Math.abs(pt.y - d.oy),
+      }));
+    } else if (drawState.type === 'pencil_stroke') {
+      // Collect coalesced events for high-frequency input
+      const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+      for (const ev of events) {
+        const rawEvPt = screenToWorld(ev);
+        pencilRawRef.current.push(rawEvPt);
+      }
+      // Apply stabilizer — runs once per animation frame to update the smoothed trail
+      const raw = pencilRawRef.current;
+      const last = raw[raw.length - 1];
+      if (stabilizerMode === 'rope') {
+        // Rope stabilizer: virtual rope tip lags behind the pointer.
+        // The tip moves toward the pointer only when the distance exceeds ropeLength.
+        // We always append the current tip position so the preview trail is continuous.
+        const ropeLenWorld = ropeLength * (viewBox.w / (svgSizeRef.current.w || viewBox.w));
+        const tip = pencilTipRef.current || { ...last };
+        const dist = Math.hypot(last.x - tip.x, last.y - tip.y);
+        if (dist > ropeLenWorld) {
+          // Move tip toward pointer, stopping ropeLength behind it
+          const frac = (dist - ropeLenWorld) / dist;
+          tip.x += (last.x - tip.x) * frac;
+          tip.y += (last.y - tip.y) * frac;
+        }
+        // Always update the ref and always push the current tip to the smoothed trail
+        pencilTipRef.current = { x: tip.x, y: tip.y };
+        pencilSmoothedRef.current.push({ x: tip.x, y: tip.y });
+      } else {
+        // Window stabilizer: moving average of last windowSize raw points
+        const win = raw.slice(-windowSize);
+        const smoothed = {
+          x: win.reduce((s, p) => s + p.x, 0) / win.length,
+          y: win.reduce((s, p) => s + p.y, 0) / win.length,
+        };
+        pencilSmoothedRef.current.push(smoothed);
+      }
+      setPencilPreview([...pencilSmoothedRef.current]);
+    }
   }
 
   function onPointerUp(e) {
@@ -2221,6 +2243,13 @@ function SketchPage({ page, projectId, onReload }) {
       commitShapes(shapes);
       setDragNode(null);
       setDragStart(null);
+      return;
+    }
+
+    // Node tool: commit drag on pointer up
+    if (tool === 'node' && nodeDragRef.current) {
+      commitShapes(shapes);
+      nodeDragRef.current = null;
       return;
     }
 
@@ -2303,12 +2332,6 @@ function SketchPage({ page, projectId, onReload }) {
       pencilTipRef.current = null;
       setPencilPreview(null);
       setDrawState(null);
-    }
-
-    // Node tool: commit drag on pointer up
-    if (tool === 'node' && nodeDragRef.current) {
-      commitShapes(shapes);
-      nodeDragRef.current = null;
     }
 
     // Text bbox drawn — open the textarea at the drawn dimensions.
