@@ -1124,7 +1124,7 @@ function SketchPage({ page, projectId, onReload }) {
     setSnapPoint(null);
     // Reset new tool state on page change
     setPenNodes([]);
-    setPenHandleDrag(null);
+    setPenPhase('point');
     setPenCursor(null);
     setNodeSelectedId(null);
     setNodeSelectedIdx(null);
@@ -1148,7 +1148,7 @@ function SketchPage({ page, projectId, onReload }) {
       if (e.key === 'Escape') {
         if (penNodes.length > 0) {
           setPenNodes([]);
-          setPenHandleDrag(null);
+          setPenPhase('point');
           setPenCursor(null);
         }
         if (drawState && drawState.type === 'pencil_stroke') {
@@ -3761,7 +3761,7 @@ function SketchPage({ page, projectId, onReload }) {
                     }}
                   >✓ Done</button>
                   <button
-                    onClick={() => { setPenNodes([]); setPenHandleDrag(null); setPenCursor(null); }}
+                    onClick={() => { setPenNodes([]); setPenPhase('point'); setPenCursor(null); }}
                     title="Cancel path (Escape)"
                     style={{
                       height: 22, padding: '0 8px', borderRadius: 3, fontSize: 10,
