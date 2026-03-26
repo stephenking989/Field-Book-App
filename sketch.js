@@ -925,9 +925,9 @@ function SketchPage({ page, projectId, onReload }) {
   const [penMode,         setPenMode]         = useState('bezier');
   // penNodes: placed nodes for in-progress pen path
   const [penNodes,        setPenNodes]        = useState([]);
-  // penDragHandle: {x,y} of the handle being dragged out from last placed node
-  const penDragRef        = useRef(null);  // { startX, startY } of drag
-  const [penHandleDrag,   setPenHandleDrag]   = useState(null); // {cp2x,cp2y} live
+  // penPhase: 'point' = next click places a node + rubber-band shows;
+  //           'handle' = next click locks the bezier handle, cursor controls it live
+  const [penPhase,        setPenPhase]        = useState('point');
   // penCursor: current mouse position for rubber band preview
   const [penCursor,       setPenCursor]       = useState(null);
 
@@ -1232,8 +1232,8 @@ function SketchPage({ page, projectId, onReload }) {
     if (penNodes.length < 2) {
       // Not enough nodes — just cancel
       setPenNodes([]);
-      setPenHandleDrag(null);
       setPenCursor(null);
+      setPenPhase('point');
       return;
     }
     const nodes = penNodes.map(n => ({
@@ -1247,8 +1247,8 @@ function SketchPage({ page, projectId, onReload }) {
     // Reject any node with a non-finite position — can't render or save safely
     if (!nodes.every(n => isFinite(n.x) && isFinite(n.y))) {
       setPenNodes([]);
-      setPenHandleDrag(null);
       setPenCursor(null);
+      setPenPhase('point');
       return;
     }
     if (penMode === 'smart') applySmartHandles(nodes);
@@ -1260,8 +1260,8 @@ function SketchPage({ page, projectId, onReload }) {
       layerId: activeLayerId,
     }]);
     setPenNodes([]);
-    setPenHandleDrag(null);
     setPenCursor(null);
+    setPenPhase('point');
     setSelectedId(pathId);
     setPrevTool('pen');
   }
@@ -1719,12 +1719,21 @@ function SketchPage({ page, projectId, onReload }) {
     // ── Pen Tool ─────────────────────────────────────────────────────────────────────────────────────────
     if (tool === 'pen') {
       const sp = anySnapActive ? resolveSnap(pt) : pt;
-      // Right-click while drawing: commit open path
+      // Right-click while drawing: commit open path (any phase)
       if (e.button === 2 && penNodes.length >= 2) {
         commitPenPath(false);
         return;
       }
-      // Check if clicking on the first node to close the path
+
+      if (penPhase === 'handle') {
+        // Handle click: lock the current handle (already baked into penNodes by onPointerMove)
+        // and switch back to point phase so next click places the next node.
+        setPenPhase('point');
+        return;
+      }
+
+      // penPhase === 'point': place a new node
+      // Check if clicking near first node to close the path
       if (penNodes.length >= 2) {
         const firstNode = penNodes[0];
         const closeDist = 14 * ps;
@@ -1733,13 +1742,11 @@ function SketchPage({ page, projectId, onReload }) {
           return;
         }
       }
-      // Place a new node — start drag to pull out handle
       const newNode = { x: sp.x, y: sp.y, type: 'sharp',
         cp1x: sp.x, cp1y: sp.y, cp2x: sp.x, cp2y: sp.y };
-      penDragRef.current = { startX: sp.x, startY: sp.y };
-      setPenHandleDrag(null);
       setPenNodes(prev => [...prev, newNode]);
-      e.currentTarget.setPointerCapture(e.pointerId);
+      // After the first node there's a segment to shape → enter handle phase
+      if (penNodes.length >= 1) setPenPhase('handle');
     }
     // ── Node Tool ─────────────────────────────────────────────────────────────────────────────────
     if (tool === 'node') {
@@ -2064,28 +2071,22 @@ function SketchPage({ page, projectId, onReload }) {
       setSnapPoint(null);
     }
 
-    // Pen tool: update handle drag preview and rubber-band cursor
+    // Pen tool: update rubber-band cursor; in handle phase drive bezier live
     if (tool === 'pen') {
       const sp = anySnapActive ? resolveSnap(rawPt) : rawPt;
       setPenCursor(sp);
-      // If dragging out a handle from the last placed node
-      if (penDragRef.current && penNodes.length > 0) {
-        const lastNode = penNodes[penNodes.length - 1];
-        const dx = sp.x - penDragRef.current.startX;
-        const dy = sp.y - penDragRef.current.startY;
-        const dragDist = Math.hypot(dx, dy);
-        if (dragDist > 2 * ps) {
-          // Bezier mode: mirror handles (smooth node)
-          const cp2x = sp.x, cp2y = sp.y;
-          const cp1x = 2 * lastNode.x - cp2x;
-          const cp1y = 2 * lastNode.y - cp2y;
-          setPenHandleDrag({ cp1x, cp1y, cp2x, cp2y });
-          setPenNodes(prev => {
-            const next = [...prev];
-            next[next.length - 1] = { ...lastNode, type: 'smooth', cp1x, cp1y, cp2x, cp2y };
-            return next;
-          });
-        }
+      if (penPhase === 'handle' && penNodes.length > 0) {
+        // Cursor IS the outgoing handle of the last node; incoming handle is mirrored
+        const cp2x = sp.x, cp2y = sp.y;
+        setPenNodes(prev => {
+          if (prev.length === 0) return prev;
+          const next = [...prev];
+          const n = next[next.length - 1];
+          const cp1x = 2 * n.x - cp2x;
+          const cp1y = 2 * n.y - cp2y;
+          next[next.length - 1] = { ...n, type: 'smooth', cp1x, cp1y, cp2x, cp2y };
+          return next;
+        });
       }
     }
 
@@ -3950,7 +3951,7 @@ function SketchPage({ page, projectId, onReload }) {
                     if (tool === 'pen' && penNodes.length >= 2) {
                       commitPenPath(false);
                     } else if (tool === 'pen') {
-                      setPenNodes([]); setPenHandleDrag(null); setPenCursor(null);
+                      setPenNodes([]); setPenCursor(null); setPenPhase('point');
                     }
                     setTool(t.id); setSelectedId(null); setDrawState(null); setPrevTool(null);
                   }}
@@ -4071,17 +4072,15 @@ function SketchPage({ page, projectId, onReload }) {
             {/* Pen tool: in-progress path + rubber band + handle lines */}
             {tool === 'pen' && penNodes.length > 0 && (() => {
               const _ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-              const allNodes = penHandleDrag
-                ? penNodes.map((n, i) => i === penNodes.length - 1
-                    ? { ...n, ...penHandleDrag } : n)
-                : penNodes;
+              const allNodes = penNodes;
               // Committed segments so far
               const committedD = allNodes.length >= 2 ? pathToSVGD(allNodes, false) : null;
-              // Rubber band: last node to cursor
+              // Rubber band: last node → cursor, only in 'point' phase (in 'handle' phase
+              // the cursor IS the handle so don't draw a line to it as a point preview)
               const lastN = allNodes[allNodes.length - 1];
-              const rubberBandD = penCursor && lastN ? (() => {
-                const cp1x = lastN.cp2x || lastN.x;
-                const cp1y = lastN.cp2y || lastN.y;
+              const rubberBandD = penCursor && lastN && penPhase === 'point' ? (() => {
+                const cp1x = lastN.cp2x !== undefined ? lastN.cp2x : lastN.x;
+                const cp1y = lastN.cp2y !== undefined ? lastN.cp2y : lastN.y;
                 return `M ${lastN.x.toFixed(2)} ${lastN.y.toFixed(2)} C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)} ${penCursor.x.toFixed(2)} ${penCursor.y.toFixed(2)} ${penCursor.x.toFixed(2)} ${penCursor.y.toFixed(2)}`;
               })() : null;
               return (
