@@ -910,6 +910,9 @@ function SketchPage({ page, projectId, onReload }) {
   // When true, each committed shape shows an inline measurement label (length,
   // radius, arc length, width×height).  Also shown live while drawing.
   const [showDims,      setShowDims]      = useState(true);
+  // When true (default), new shapes are committed with dims visible.
+  // When false, new shapes are committed with _hideDims:true so dims are hidden by default.
+  const [dimsOnDraw,    setDimsOnDraw]    = useState(true);
   const [showValueCard, setShowValueCard] = useState(true);
 
   // ── Dropdown menus ─────────────────────────────────────────────────────────
@@ -1364,6 +1367,7 @@ function SketchPage({ page, projectId, onReload }) {
       nodes,
       stroke: STROKE, strokeWidth: STROKE_W,
       layerId: activeLayerId,
+      ...(dimsOnDraw ? {} : { _hideDims: true }),
     }]);
     setPenNodes([]);
     setPenCursor(null);
@@ -1811,7 +1815,8 @@ function SketchPage({ page, projectId, onReload }) {
           x2: drawState.x2, y2: drawState.y2,
           px: drawState.px,  py: drawState.py,
           stroke: STROKE, strokeWidth: STROKE_W,
-          layerId: drawState.layerId || activeLayerId }]);
+          layerId: drawState.layerId || activeLayerId,
+          ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_crvId]);
         setPrevTool(tool);
         setDrawState(null);
@@ -2467,7 +2472,8 @@ function SketchPage({ page, projectId, onReload }) {
         commitShapes([...shapes, { id: _lineId, type: 'line',
           x1: drawState.x1, y1: drawState.y1, x2: drawState.x2, y2: drawState.y2,
           stroke: STROKE, strokeWidth: STROKE_W,
-          layerId: drawState.layerId || activeLayerId }]);
+          layerId: drawState.layerId || activeLayerId,
+          ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_lineId]);
         setPrevTool(tool);
       }
@@ -2481,7 +2487,8 @@ function SketchPage({ page, projectId, onReload }) {
         commitShapes([...shapes, { id: _rctId, type: 'rect',
           x: drawState.x, y: drawState.y, w: drawState.w, h: drawState.h,
           stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
-          layerId: drawState.layerId || activeLayerId }]);
+          layerId: drawState.layerId || activeLayerId,
+          ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_rctId]);
         setPrevTool(tool);
       }
@@ -2495,7 +2502,8 @@ function SketchPage({ page, projectId, onReload }) {
         commitShapes([...shapes, { id: _cirId, type: 'circle',
           cx: drawState.cx, cy: drawState.cy, r: drawState.r,
           stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
-          layerId: drawState.layerId || activeLayerId }]);
+          layerId: drawState.layerId || activeLayerId,
+          ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_cirId]);
         setPrevTool(tool);
       }
@@ -2526,6 +2534,7 @@ function SketchPage({ page, projectId, onReload }) {
             nodes,
             stroke: STROKE, strokeWidth: STROKE_W,
             layerId: drawState.layerId || activeLayerId,
+            ...(dimsOnDraw ? {} : { _hideDims: true }),
           }]);
           setSelectedIds([pathId]);
           setPrevTool(tool);
@@ -3682,10 +3691,11 @@ function SketchPage({ page, projectId, onReload }) {
             fontFamily: 'Courier New, monospace',
           }}>
             {[
-              { label: 'Grid',      icon: '⊞', state: showGrid,      set: () => setShowGrid(v => !v),      activeCol: '#6EE7B7', activeBg: 'rgba(52,211,153,0.15)' },
-              { label: 'Dims',      icon: '◫', state: showDims,      set: () => setShowDims(v => !v),      activeCol: '#90CDF4', activeBg: 'rgba(99,179,237,0.18)' },
-              { label: 'Card',      icon: '▤', state: showValueCard, set: () => setShowValueCard(v => !v), activeCol: '#C4B5FD', activeBg: 'rgba(167,139,250,0.18)' },
-              { label: 'Scale Bar', icon: '⊟', state: showScaleBar,  set: () => setShowScaleBar(v => !v),  activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
+              { label: 'Grid',         icon: '⊞', state: showGrid,      set: () => setShowGrid(v => !v),      activeCol: '#6EE7B7', activeBg: 'rgba(52,211,153,0.15)' },
+              { label: 'Dims',         icon: '◫', state: showDims,      set: () => setShowDims(v => !v),      activeCol: '#90CDF4', activeBg: 'rgba(99,179,237,0.18)' },
+              { label: 'Dims on Draw', icon: '✦', state: dimsOnDraw,    set: () => setDimsOnDraw(v => !v),    activeCol: '#90CDF4', activeBg: 'rgba(99,179,237,0.12)' },
+              { label: 'Card',         icon: '▤', state: showValueCard, set: () => setShowValueCard(v => !v), activeCol: '#C4B5FD', activeBg: 'rgba(167,139,250,0.18)' },
+              { label: 'Scale Bar',    icon: '⊟', state: showScaleBar,  set: () => setShowScaleBar(v => !v),  activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
             ].map(({ label, icon, state, set, activeCol, activeBg }) => (
               <button key={label}
                 onClick={set}
