@@ -4859,7 +4859,10 @@ function SketchPage({ page, projectId, onReload }) {
 }
 
 // =============================================================================
-// Expose SketchPage to the app shell and signal ready.
+// Expose SketchPage and geometry utilities to the app shell.
 // =============================================================================
+// arcPath, pathToSVGD, and computeArcFromPI are used by the project PDF export
+// in index.html to render sketch pages without re-implementing the geometry.
+window._fbSketchUtils = { computeArcFromPI, arcPath, pathToSVGD };
 window.SketchPage = SketchPage;
 window._resolveSketch();
