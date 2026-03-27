@@ -4863,6 +4863,11 @@ function SketchPage({ page, projectId, onReload }) {
 // =============================================================================
 // arcPath, pathToSVGD, and computeArcFromPI are used by the project PDF export
 // in index.html to render sketch pages without re-implementing the geometry.
-window._fbSketchUtils = { computeArcFromPI, arcPath, pathToSVGD };
+window._fbSketchUtils = {
+  computeArcFromPI, arcPath, pathToSVGD,
+  pxToReal, realToPx, formatReal, fmtPxAsReal,
+  niceScaleBarValue, normAng, toDMS,
+  PIXELS_PER_METER,
+};
 window.SketchPage = SketchPage;
 window._resolveSketch();

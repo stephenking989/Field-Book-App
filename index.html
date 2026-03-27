@@ -1016,24 +1016,168 @@
   }
 
   // Build an SVG string from stored sketch page data.
-  // Uses window._fbSketchUtils (exposed by sketch.js) for arc/path geometry.
-  function buildSketchSVG(shapes, layers, viewBox) {
+  // Uses window._fbSketchUtils (exposed by sketch.js) for arc/path geometry,
+  // dimension formatting, scale bar, and north arrow.
+  function buildSketchSVG(shapes, layers, viewBox, scaleDenom, units) {
     const utils = window._fbSketchUtils;
     if (!utils) return null;
-    const { arcPath: _arc, pathToSVGD: _pathD } = utils;
+    const { arcPath: _arc, pathToSVGD: _pathD, computeArcFromPI: _cArc,
+            fmtPxAsReal: _fmt, normAng: _norm, toDMS: _toDMS,
+            niceScaleBarValue: _nice, realToPx: _rtp, formatReal: _fmtR } = utils;
+
     const vb = viewBox || { x: 0, y: 0, w: 800, h: 600 };
+    const sd = scaleDenom || 1;
+    const un = units || 'm';
+    const outW = 1200;
+    const outH = Math.round(outW * vb.h / vb.w);
+    // ps: viewBox units per output pixel — used to scale all overlay elements
+    const ps = vb.w / outW;
+
     const visLayers = new Set((layers || []).filter(l => l.visible !== false).map(l => l.id));
     const defaultLayerId = (layers && layers[0]) ? layers[0].id : null;
 
-    let svgBody = '';
+    // ── SVG text element with white halo (matches screen rendering) ──────────
+    function _dimSVG(lx, ly, angle, text) {
+      const a = angle || 0;
+      const rot = a ? ` transform="rotate(${a.toFixed(2)},${lx.toFixed(2)},${ly.toFixed(2)})"` : '';
+      const esc = t => t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      return `<text x="${lx.toFixed(2)}" y="${ly.toFixed(2)}"${rot} font-size="${(9.5*ps).toFixed(2)}" font-family="Courier New,monospace" text-anchor="middle" dominant-baseline="middle" fill="#1C3829" stroke="rgba(255,255,255,0.90)" stroke-width="${(2.5*ps).toFixed(2)}" paint-order="stroke fill" style="pointer-events:none;user-select:none;">${esc(text)}</text>`;
+    }
+
+    // ── Rotate a point around a pivot ────────────────────────────────────────
+    function _rotPt(x, y, cx, cy, deg) {
+      const r = deg * Math.PI / 180;
+      const c = Math.cos(r), s = Math.sin(r);
+      return { x: cx + (x-cx)*c - (y-cy)*s, y: cy + (x-cx)*s + (y-cy)*c };
+    }
+
+    // ── Dimension labels for a single shape (SVG string) ─────────────────────
+    function _dimsSVG(s) {
+      if (s._hideDims) return '';
+      const rot = s._rot || 0;
+      const OFF = 13 * ps;
+
+      // Pivot for rotation
+      let piv;
+      if (s._pivot) { piv = s._pivot; }
+      else switch (s.type) {
+        case 'line':   piv = { x:(s.x1+s.x2)/2, y:(s.y1+s.y2)/2 }; break;
+        case 'circle': piv = { x:s.cx, y:s.cy };                     break;
+        case 'rect':   piv = { x:s.x+s.w/2, y:s.y+s.h/2 };          break;
+        default:       piv = { x:s.x||0, y:s.y||0 };
+      }
+
+      // Rotate anchor then emit text at that world position
+      function D(rawX, rawY, ang, txt) {
+        const { x: lx, y: ly } = rot ? _rotPt(rawX, rawY, piv.x, piv.y, rot) : { x:rawX, y:rawY };
+        return _dimSVG(lx, ly, _norm(ang + rot), txt);
+      }
+
+      // NTS label override
+      if (s.ntsLabel) {
+        let nx = 0, ny = 0;
+        switch (s.type) {
+          case 'line':   nx=(s.x1+s.x2)/2; ny=(s.y1+s.y2)/2; break;
+          case 'circle': nx=s.cx;           ny=s.cy;           break;
+          case 'rect':   nx=s.x+s.w/2;     ny=s.y+s.h/2;     break;
+          default:       return '';
+        }
+        return _dimSVG(nx, ny, 0, s.ntsLabel + ' *');
+      }
+
+      switch (s.type) {
+        case 'line': {
+          const len = Math.hypot(s.x2-s.x1, s.y2-s.y1);
+          if (len < 5*ps) return '';
+          const mx=(s.x1+s.x2)/2, my=(s.y1+s.y2)/2;
+          const nx=-(s.y2-s.y1)/len, ny=(s.x2-s.x1)/len;
+          const ang = Math.atan2(s.y2-s.y1, s.x2-s.x1)*180/Math.PI;
+          const az  = ((Math.atan2(s.x2-s.x1, -(s.y2-s.y1))*180/Math.PI) + rot + 360) % 360;
+          return D(mx+nx*OFF, my+ny*OFF, ang, _fmt(len, sd, un))
+               + D(mx-nx*OFF, my-ny*OFF, ang, _toDMS(az));
+        }
+        case 'curve': {
+          const px = s.px !== undefined ? s.px : (s.x1+s.x2)/2;
+          const py = s.py !== undefined ? s.py : (s.y1+s.y2)/2;
+          const cp = _cArc(s.x1, s.y1, s.x2, s.y2, px, py);
+          if (!cp || cp.L < 5*ps) return '';
+          const mx=(s.x1+s.x2)/2, my=(s.y1+s.y2)/2;
+          const olen = Math.hypot(px-mx, py-my) || 1;
+          const ux=(px-mx)/olen, uy=(py-my)/olen;
+          const lx1=mx+(cp.M+OFF)*ux,       ly1=my+(cp.M+OFF)*uy;
+          const lx2=mx+(cp.M+OFF+12*ps)*ux, ly2=my+(cp.M+OFF+12*ps)*uy;
+          const r0 = rot ? _rotPt(lx1, ly1, piv.x, piv.y, rot) : { x:lx1, y:ly1 };
+          const r1 = rot ? _rotPt(lx2, ly2, piv.x, piv.y, rot) : { x:lx2, y:ly2 };
+          return _dimSVG(r0.x, r0.y, 0, `L ${_fmt(cp.L, sd, un)}`)
+               + _dimSVG(r1.x, r1.y, 0, `R ${_fmt(cp.R, sd, un)}`);
+        }
+        case 'circle':
+          if (s.r < 5*ps) return '';
+          return D(s.cx, s.cy + s.r*0.25, 0, `R=${_fmt(s.r, sd, un)}`);
+        case 'rect':
+          return D(s.x+s.w/2,     s.y+s.h+OFF, 0,   _fmt(Math.abs(s.w), sd, un))
+               + D(s.x+s.w+OFF,   s.y+s.h/2,   -90, _fmt(Math.abs(s.h), sd, un));
+        default:
+          return '';
+      }
+    }
+
+    // ── Scale bar (bottom-left) ───────────────────────────────────────────────
+    function _scaleBarSVG() {
+      const barReal = _nice(sd, vb.w, outW, un);
+      const barPxW  = _rtp(barReal, sd, un);
+      const barLabel = _fmtR(barReal, un);
+      const scaleLabel = `1 : ${sd.toLocaleString()}`;
+      const bx  = vb.x + vb.w * 0.025;
+      const by  = vb.y + vb.h * 0.956;
+      const bh  = 4 * ps;
+      const sw  = 1.5 * ps;
+      const fs  = 8.5 * ps;
+      const pad = 5 * ps;
+      const bgW = barPxW + pad * 2;
+      const bgH = bh + 20 * ps;
+      const bgX = bx - pad, bgY = by - 12 * ps;
+      return `<g>
+        <rect x="${bgX.toFixed(1)}" y="${bgY.toFixed(1)}" width="${bgW.toFixed(1)}" height="${bgH.toFixed(1)}" rx="${(3*ps).toFixed(1)}" fill="rgba(255,255,255,0.88)" stroke="#DDD6C8" stroke-width="${(0.8*ps).toFixed(1)}"/>
+        <line x1="${bx.toFixed(1)}" y1="${by.toFixed(1)}" x2="${(bx+barPxW).toFixed(1)}" y2="${by.toFixed(1)}" stroke="#1C3829" stroke-width="${(sw*2).toFixed(1)}"/>
+        <line x1="${bx.toFixed(1)}" y1="${(by-bh/2).toFixed(1)}" x2="${bx.toFixed(1)}" y2="${(by+bh/2).toFixed(1)}" stroke="#1C3829" stroke-width="${sw.toFixed(1)}"/>
+        <line x1="${(bx+barPxW).toFixed(1)}" y1="${(by-bh/2).toFixed(1)}" x2="${(bx+barPxW).toFixed(1)}" y2="${(by+bh/2).toFixed(1)}" stroke="#1C3829" stroke-width="${sw.toFixed(1)}"/>
+        <text x="${(bx+barPxW/2).toFixed(1)}" y="${(by-bh/2-2.5*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${fs.toFixed(1)}" fill="#1C3829" font-family="Courier New,monospace" font-weight="bold">${barLabel}</text>
+        <text x="${(bx+barPxW/2).toFixed(1)}" y="${(by+bh/2+7*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${(fs*0.85).toFixed(1)}" fill="#555" font-family="Helvetica,Arial,sans-serif" font-style="italic">${scaleLabel}</text>
+      </g>`;
+    }
+
+    // ── North arrow (bottom-right) ────────────────────────────────────────────
+    function _northArrowSVG() {
+      const R    = vb.h * 0.042;
+      const ax   = vb.x + vb.w * 0.955;
+      const ay   = vb.y + vb.h * 0.910;
+      const sw   = 1.2 * ps;
+      const tipY = ay - R * 0.82;
+      const baseY = ay + R * 0.62;
+      const wingX = R * 0.36;
+      const nFs   = (9.5 * ps).toFixed(1);
+      return `<g>
+        <circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="${(R+2.5*ps).toFixed(1)}" fill="white" opacity="0.92"/>
+        <circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="${(R+1.5*ps).toFixed(1)}" fill="none" stroke="#1C3829" stroke-width="${(sw*1.2).toFixed(1)}"/>
+        <polygon points="${ax.toFixed(1)},${tipY.toFixed(1)} ${(ax-wingX).toFixed(1)},${ay.toFixed(1)} ${(ax+wingX).toFixed(1)},${ay.toFixed(1)}" fill="#1C3829"/>
+        <polygon points="${ax.toFixed(1)},${baseY.toFixed(1)} ${(ax-wingX).toFixed(1)},${ay.toFixed(1)} ${(ax+wingX).toFixed(1)},${ay.toFixed(1)}" fill="white" stroke="#1C3829" stroke-width="${sw.toFixed(1)}"/>
+        <text x="${ax.toFixed(1)}" y="${(tipY-3.5*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${nFs}" fill="#1C3829" font-family="Helvetica,Arial,sans-serif" font-weight="bold">N</text>
+      </g>`;
+    }
+
+    // ── Render shapes ─────────────────────────────────────────────────────────
+    let shapesSVG = '';
+    let dimsSVG   = '';
+
     for (const s of (shapes || [])) {
       const lid = s.layerId || defaultLayerId;
       if (lid && !visLayers.has(lid)) continue;
 
-      const stroke  = s.stroke || '#1C3829';
-      const sw      = s.strokeWidth || 1.5;
-      const fill    = s.fill || 'none';
-      const base    = `stroke="${stroke}" stroke-width="${sw}" fill="${fill}" stroke-linecap="round" stroke-linejoin="round"`;
+      const stroke = s.stroke || '#1C3829';
+      const sw     = s.strokeWidth || 1.5;
+      const fill   = s.fill || 'none';
+      const base   = `stroke="${stroke}" stroke-width="${sw}" fill="${fill}" stroke-linecap="round" stroke-linejoin="round"`;
 
       let el = '';
       switch (s.type) {
@@ -1047,8 +1191,8 @@
           el = `<rect x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" ${base}/>`;
           break;
         case 'curve': {
-          const px = s.px !== undefined ? s.px : (s.x1 + s.x2) / 2;
-          const py = s.py !== undefined ? s.py : (s.y1 + s.y2) / 2;
+          const px = s.px !== undefined ? s.px : (s.x1+s.x2)/2;
+          const py = s.py !== undefined ? s.py : (s.y1+s.y2)/2;
           el = `<path d="${_arc(s.x1, s.y1, s.x2, s.y2, px, py)}" ${base}/>`;
           break;
         }
@@ -1061,7 +1205,7 @@
           const fs = s.fontSize || 16;
           const lines = (s.content || '').split('\n');
           const tspans = lines.map((ln, i) =>
-            `<tspan x="${s.x}" dy="${i === 0 ? 0 : fs * 1.3}">${ln.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</tspan>`
+            `<tspan x="${s.x}" dy="${i === 0 ? 0 : fs*1.3}">${ln.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</tspan>`
           ).join('');
           el = `<text x="${s.x}" y="${s.y}" font-size="${fs}" fill="${stroke}" font-family="Courier New,monospace">${tspans}</text>`;
           break;
@@ -1073,19 +1217,18 @@
         let px, py;
         if (s._pivot) { px = s._pivot.x; py = s._pivot.y; }
         else switch (s.type) {
-          case 'line':   px = (s.x1+s.x2)/2; py = (s.y1+s.y2)/2; break;
-          case 'circle': px = s.cx; py = s.cy; break;
-          case 'rect':   px = s.x + s.w/2; py = s.y + s.h/2; break;
-          default:       px = s.x || 0; py = s.y || 0;
+          case 'line':   px=(s.x1+s.x2)/2; py=(s.y1+s.y2)/2; break;
+          case 'circle': px=s.cx;           py=s.cy;           break;
+          case 'rect':   px=s.x+s.w/2;     py=s.y+s.h/2;     break;
+          default:       px=s.x||0;         py=s.y||0;
         }
         el = `<g transform="rotate(${s._rot},${px},${py})">${el}</g>`;
       }
-      svgBody += el;
+      shapesSVG += el;
+      dimsSVG   += _dimsSVG(s);
     }
 
-    const outW = 1200;
-    const outH = Math.round(outW * vb.h / vb.w);
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}" width="${outW}" height="${outH}" style="background:#FDFAF4;">${svgBody}</svg>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}" width="${outW}" height="${outH}" style="background:#FDFAF4;">${shapesSVG}${dimsSVG}${_scaleBarSVG()}${_northArrowSVG()}</svg>`;
   }
 
   // Draw the green page-header strip on the current jsPDF page.
@@ -1278,7 +1421,7 @@
           const drawH = H - contentY - 16;
 
           // Generate SVG and render via html2canvas
-          const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox);
+          const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units);
           if (svgStr && window.html2canvas) {
             const vb = page.viewBox || { x: 0, y: 0, w: 800, h: 600 };
             const outW = 1200, outH = Math.round(1200 * vb.h / vb.w);
