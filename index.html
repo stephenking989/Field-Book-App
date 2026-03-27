@@ -1455,8 +1455,53 @@
             pdf.text('(No drawing content)', W/2, contentY + drawH/2, { align: 'center' });
           }
 
+        } else if (page.type === 'title') {
+          // ── TITLE PAGE ──────────────────────────────────────────────────────
+          const contentY = _pdfPageHeader(pdf, page, meta, W, margin);
+          const BRD2 = _hexRgb('#DDD6C8');
+          let ty = contentY + 4;
+
+          const titleFields = [
+            ['PROJECT TITLE / LOCATION',                          page.location],
+            ['CREW & RESPONSIBILITIES',                           page.crew],
+            ['EQUIPMENT (Make, Model, S/N)',                      page.equipment],
+            ['DATUM & PROJECTION',                                page.datum],
+            ['TOTAL STATION SETTINGS (PPM, Temp, Press, Prism)', page.tsSettings],
+            ['H.I. / PRISM HEIGHT',                               page.hiPrism],
+            ['SUMMARY OF WORK',                                   page.summary],
+            ['CODE LIST / FILE NAMES / ADDITIONAL NOTES',        page.notes],
+          ];
+
+          for (const [lbl, val] of titleFields) {
+            if (!val?.trim()) continue;
+            if (ty > H - 16) break;
+            const lines = pdf.splitTextToSize(val.trim(), W - margin * 2);
+            const blockH = lines.length * 4.5 + 12;
+
+            // Label
+            pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(107, 114, 128);
+            pdf.text(lbl, margin, ty + 4);
+
+            // Value
+            pdf.setFontSize(9); pdf.setFont('helvetica', 'normal');
+            pdf.setTextColor(44, 44, 44);
+            pdf.text(lines, margin, ty + 9.5);
+
+            // Divider
+            pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.3);
+            pdf.line(margin, ty + blockH, W - margin, ty + blockH);
+            ty += blockH + 3;
+          }
+
+          if (ty === contentY + 4) {
+            // Nothing was rendered — all fields empty
+            pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
+            pdf.text('(No data entered)', W/2, contentY + 20, { align: 'center' });
+          }
+
         } else {
-          // DATA or TITLE page
+          // DATA page
           const contentY = _pdfPageHeader(pdf, page, meta, W, margin);
           const cols = page.columns || [];
           const rows = page.rows || [];
