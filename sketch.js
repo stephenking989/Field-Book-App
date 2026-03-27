@@ -830,6 +830,29 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units }) {
   );
 }
 
+// Offset every geometric coordinate of a shape by (dx, dy).
+// Used when pasting shapes so they don't land exactly on the originals.
+function offsetShape(s, dx, dy) {
+  switch (s.type) {
+    case 'line':   return { ...s, x1:s.x1+dx, y1:s.y1+dy, x2:s.x2+dx, y2:s.y2+dy };
+    case 'curve': {
+      const px = (s.px !== undefined ? s.px : (s.x1+s.x2)/2) + dx;
+      const py = (s.py !== undefined ? s.py : (s.y1+s.y2)/2) + dy;
+      return { ...s, x1:s.x1+dx, y1:s.y1+dy, x2:s.x2+dx, y2:s.y2+dy, px, py };
+    }
+    case 'circle': return { ...s, cx:s.cx+dx, cy:s.cy+dy };
+    case 'rect':   return { ...s, x:s.x+dx, y:s.y+dy };
+    case 'text':   return { ...s, x:s.x+dx, y:s.y+dy };
+    case 'path':
+      return { ...s, nodes: (s.nodes||[]).map(n => ({
+        ...n, x:n.x+dx, y:n.y+dy,
+        cp1x:(n.cp1x??n.x)+dx, cp1y:(n.cp1y??n.y)+dy,
+        cp2x:(n.cp2x??n.x)+dx, cp2y:(n.cp2y??n.y)+dy,
+      }))};
+    default: return s;
+  }
+}
+
 function SketchPage({ page, projectId, onReload }) {
   // Sanitize shapes on load: remove any path shapes with corrupted (NaN/null/undefined)
   // node coordinates that would crash pathToSVGD on render.
@@ -850,7 +873,10 @@ function SketchPage({ page, projectId, onReload }) {
   const [tool,        setTool]        = useState('select');
   const [prevTool,    setPrevTool]    = useState(null);  // saved drawing tool after shape commit
   const [ribbonOpen,  setRibbonOpen]  = useState(true);
-  const [selectedId,  setSelectedId]  = useState(null);
+  const [selectedIds,   setSelectedIds]   = useState([]);          // multi-select
+  const [shapesHistory, setShapesHistory] = useState({ past: [], future: [] }); // undo/redo
+  const [marquee,       setMarquee]       = useState(null);        // lasso { ox,oy,x,y,w,h }
+  const shapeClipRef = useRef(null);                               // shape clipboard
   const [drawState,   setDrawState]   = useState(null);  // in-progress shape
   const [dragNode,    setDragNode]    = useState(null);  // {shapeId, nodeKey}
   const [dragStart,   setDragStart]   = useState(null);  // {svgX, svgY, snapshot}
@@ -866,6 +892,11 @@ function SketchPage({ page, projectId, onReload }) {
   });
   const [snapPoint, setSnapPoint] = useState(null); // {x,y,type}|null — visual indicator
   const anySnapActive = Object.values(snapModes).some(Boolean);
+
+  // Derived from selectedIds — backward-compat single-selection alias
+  const selectedId = selectedIds[0] ?? null;
+  const canUndo    = shapesHistory.past.length > 0;
+  const canRedo    = shapesHistory.future.length > 0;
 
   // ── Scale & Units (Phase 3) ────────────────────────────────────────────────
   const [scaleDenom,    setScaleDenom]    = useState(page.scaleDenom  || 1);
@@ -1119,7 +1150,9 @@ function SketchPage({ page, projectId, onReload }) {
       ? page.layers : [{ id: 'l_1', name: 'Layer 1', visible: true }];
     setLayers(ls);
     setActiveLayerId(ls[0].id);
-    setSelectedId(null);
+    setSelectedIds([]);
+    setShapesHistory({ past: [], future: [] });
+    setMarquee(null);
     setDrawState(null);
     setSnapPoint(null);
     // Reset new tool state on page change
@@ -1131,20 +1164,76 @@ function SketchPage({ page, projectId, onReload }) {
     setPencilPreview(null);
   }, [page.id]);
 
-  // Keyboard shortcuts for new tools
+  // Keyboard shortcuts — undo/redo, delete, escape, clipboard, pen/pencil/node tools
   useEffect(() => {
     function handleKeyDown(e) {
-      // Don't intercept when typing in an input
+      // Don't intercept when typing in an input/textarea
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-      // Enter: commit in-progress pen path as an open path
+      // ── Undo: Ctrl+Z / Cmd+Z ──────────────────────────────────────────────
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+        e.preventDefault();
+        if (shapesHistory.past.length > 0) {
+          const prev = shapesHistory.past[shapesHistory.past.length - 1];
+          setShapesHistory(h => ({
+            past: h.past.slice(0, -1),
+            future: [shapes, ...h.future.slice(0, 49)],
+          }));
+          setShapes(prev);
+          persist(prev, undefined);
+          setSelectedIds([]);
+        }
+        return;
+      }
+
+      // ── Redo: Ctrl+Y / Cmd+Y / Ctrl+Shift+Z / Cmd+Shift+Z ───────────────
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+        e.preventDefault();
+        if (shapesHistory.future.length > 0) {
+          const next = shapesHistory.future[0];
+          setShapesHistory(h => ({
+            past: [...h.past.slice(-49), shapes],
+            future: h.future.slice(1),
+          }));
+          setShapes(next);
+          persist(next, undefined);
+          setSelectedIds([]);
+        }
+        return;
+      }
+
+      // ── Copy shapes: Ctrl+C / Cmd+C ───────────────────────────────────────
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        if (selectedIds.length > 0) {
+          e.preventDefault();
+          shapeClipRef.current = shapes.filter(s => selectedIds.includes(s.id));
+        }
+        return;
+      }
+
+      // ── Paste shapes: Ctrl+V / Cmd+V ──────────────────────────────────────
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        if (shapeClipRef.current && shapeClipRef.current.length > 0) {
+          e.preventDefault();
+          let t = Date.now();
+          const pasted = shapeClipRef.current.map(s => {
+            const id = 's_' + (++t) + '_' + Math.random().toString(36).slice(2, 6);
+            return offsetShape({ ...s, id }, 20, 20);
+          });
+          commitShapes([...shapes, ...pasted]);
+          setSelectedIds(pasted.map(s => s.id));
+        }
+        return;
+      }
+
+      // ── Enter: commit in-progress pen path as an open path ────────────────
       if (e.key === 'Enter' && tool === 'pen' && penNodes.length >= 2) {
         e.preventDefault();
         commitPenPath(false);
         return;
       }
 
-      // Escape: cancel in-progress pen path or pencil stroke
+      // ── Escape: cancel in-progress drawing; clear selection ───────────────
       if (e.key === 'Escape') {
         if (penNodes.length > 0) {
           setPenNodes([]);
@@ -1158,25 +1247,40 @@ function SketchPage({ page, projectId, onReload }) {
           setPencilPreview(null);
           setDrawState(null);
         }
+        setDrawState(null);
+        setSelectedIds([]);
+        setMarquee(null);
+        return;
       }
 
-      // Delete / Backspace: remove selected node in Node tool
-      if ((e.key === 'Delete' || e.key === 'Backspace') && tool === 'node' && nodeSelectedId !== null && nodeSelectedIdx !== null) {
-        e.preventDefault();
-        const newShapes = shapes.map(s => {
-          if (s.id !== nodeSelectedId || !s.nodes) return s;
-          const newNodes = s.nodes.filter((_, i) => i !== nodeSelectedIdx);
-          if (newNodes.length < 2) return null;
-          return { ...s, nodes: newNodes };
-        }).filter(Boolean);
-        commitShapes(newShapes);
-        setNodeSelectedIdx(null);
-        if (!newShapes.find(s => s.id === nodeSelectedId)) setNodeSelectedId(null);
+      // ── Delete / Backspace ────────────────────────────────────────────────
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        // Node tool: delete the selected node within a path
+        if (tool === 'node' && nodeSelectedId !== null && nodeSelectedIdx !== null) {
+          e.preventDefault();
+          const newShapes = shapes.map(s => {
+            if (s.id !== nodeSelectedId || !s.nodes) return s;
+            const newNodes = s.nodes.filter((_, i) => i !== nodeSelectedIdx);
+            if (newNodes.length < 2) return null;
+            return { ...s, nodes: newNodes };
+          }).filter(Boolean);
+          commitShapes(newShapes);
+          setNodeSelectedIdx(null);
+          if (!newShapes.find(s => s.id === nodeSelectedId)) setNodeSelectedId(null);
+          return;
+        }
+        // Select tool: delete all currently selected shapes
+        if (selectedIds.length > 0) {
+          e.preventDefault();
+          commitShapes(shapes.filter(s => !selectedIds.includes(s.id)));
+          setSelectedIds([]);
+          return;
+        }
       }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tool, penNodes, drawState, nodeSelectedId, nodeSelectedIdx, shapes]);
+  }, [tool, penNodes, drawState, nodeSelectedId, nodeSelectedIdx, shapes, shapesHistory, selectedIds]);
 
   // ── Coordinate conversion ──────────────────────────────────────────────────
   // screenToWorld: converts a pointer/mouse event's position from CSS screen
@@ -1221,6 +1325,8 @@ function SketchPage({ page, projectId, onReload }) {
   }
 
   function commitShapes(next) {
+    // Push current shapes to history before applying next
+    setShapesHistory(h => ({ past: [...h.past.slice(-49), shapes], future: [] }));
     setShapes(next);
     persist(next, undefined);
   }
@@ -1262,7 +1368,7 @@ function SketchPage({ page, projectId, onReload }) {
     setPenNodes([]);
     setPenCursor(null);
     setPenPhase('point');
-    setSelectedId(pathId);
+    setSelectedIds([pathId]);
     setPrevTool('pen');
   }
 
@@ -1619,14 +1725,28 @@ function SketchPage({ page, projectId, onReload }) {
 
       // ── New selection / deselect ─────────────────────────────────────
       const hit = hitTest(pt, shapes, hitThresh);
-      setSelectedId(hit ? hit.id : null);
       setDragNode(null);
-      if (!hit && prevTool !== null) {
-        // Clicking empty space exits post-create handle mode.
-        // Just deselect — do NOT fall through and start the next shape on the
-        // same click. The user needs a deliberate second click to begin drawing.
-        setPrevTool(null);
-        return;
+      if (hit) {
+        if (e.shiftKey) {
+          // Shift-click: toggle this shape in the selection
+          setSelectedIds(prev =>
+            prev.includes(hit.id) ? prev.filter(id => id !== hit.id) : [...prev, hit.id]
+          );
+        } else {
+          setSelectedIds([hit.id]);
+        }
+      } else {
+        // Click on empty space
+        if (!e.shiftKey) setSelectedIds([]);
+        if (prevTool !== null) {
+          // Exit post-create handle mode; don't start a marquee on the same click
+          setPrevTool(null);
+          return;
+        }
+        // Start a lasso/marquee drag (select tool only; not in post-create mode)
+        if (tool === 'select') {
+          setMarquee({ ox: pt.x, oy: pt.y, x: pt.x, y: pt.y, w: 0, h: 0 });
+        }
       }
       return;
     }
@@ -1651,7 +1771,7 @@ function SketchPage({ page, projectId, onReload }) {
         return;
       }
       // Click-drag on empty space draws a new text box (same flow as rect).
-      setSelectedId(null);
+      setSelectedIds([]);
       const sp = anySnapActive ? resolveSnap(pt) : pt;
       setDrawState({ type: 'text', ox: sp.x, oy: sp.y, x: sp.x, y: sp.y, w: 0, h: 0, layerId: activeLayerId });
       return;
@@ -1692,7 +1812,7 @@ function SketchPage({ page, projectId, onReload }) {
           px: drawState.px,  py: drawState.py,
           stroke: STROKE, strokeWidth: STROKE_W,
           layerId: drawState.layerId || activeLayerId }]);
-        setSelectedId(_crvId);
+        setSelectedIds([_crvId]);
         setPrevTool(tool);
         setDrawState(null);
         setSnapPoint(null);
@@ -1858,7 +1978,7 @@ function SketchPage({ page, projectId, onReload }) {
       if (pathHit) {
         setNodeSelectedId(pathHit.id);
         setNodeSelectedIdx(null);
-        setSelectedId(null);
+        setSelectedIds([]);
         nodeDragRef.current = null;
         return;
       }
@@ -1866,13 +1986,13 @@ function SketchPage({ page, projectId, onReload }) {
       // Click on a non-path shape — select it and use select-tool handle behaviour
       const nonPathHit = hitTest(pt, shapes.filter(s => s.type !== 'path'), hitThreshN);
       if (nonPathHit) {
-        setSelectedId(nonPathHit.id);
+        setSelectedIds([nonPathHit.id]);
         setNodeSelectedId(null);
         setNodeSelectedIdx(null);
         nodeDragRef.current = null;
       } else {
         // Click on empty space — deselect everything
-        setSelectedId(null);
+        setSelectedIds([]);
         setNodeSelectedId(null);
         setNodeSelectedIdx(null);
         nodeDragRef.current = null;
@@ -1925,6 +2045,17 @@ function SketchPage({ page, projectId, onReload }) {
 
     const rawPt = screenToWorld(e);
     const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+
+    // ── Marquee drag update ────────────────────────────────────────────────────
+    if (marquee) {
+      const { ox, oy } = marquee;
+      setMarquee({
+        ox, oy,
+        x: Math.min(ox, rawPt.x), y: Math.min(oy, rawPt.y),
+        w: Math.abs(rawPt.x - ox), h: Math.abs(rawPt.y - oy),
+      });
+      return;
+    }
 
     // ── Node / handle drag ────────────────────────────────────────────────────
     if (dragNode && dragStart) {
@@ -2294,6 +2425,23 @@ function SketchPage({ page, projectId, onReload }) {
 
     setSnapPoint(null);
 
+    // ── Marquee selection commit ───────────────────────────────────────────
+    if (marquee) {
+      const { x, y, w, h } = marquee;
+      if (w > 4 && h > 4) {
+        const ids = shapes
+          .filter(s => {
+            const layer = layers.find(l => l.id === (s.layerId || layers[0]?.id));
+            if (!layer?.visible) return false;
+            return shapeIntersectsRect(s, x, y, x + w, y + h);
+          })
+          .map(s => s.id);
+        if (ids.length > 0) setSelectedIds(ids);
+      }
+      setMarquee(null);
+      return;
+    }
+
     // Commit node drag
     if (dragNode) {
       commitShapes(shapes);
@@ -2320,7 +2468,7 @@ function SketchPage({ page, projectId, onReload }) {
           x1: drawState.x1, y1: drawState.y1, x2: drawState.x2, y2: drawState.y2,
           stroke: STROKE, strokeWidth: STROKE_W,
           layerId: drawState.layerId || activeLayerId }]);
-        setSelectedId(_lineId);
+        setSelectedIds([_lineId]);
         setPrevTool(tool);
       }
       setDrawState(null);
@@ -2334,7 +2482,7 @@ function SketchPage({ page, projectId, onReload }) {
           x: drawState.x, y: drawState.y, w: drawState.w, h: drawState.h,
           stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
           layerId: drawState.layerId || activeLayerId }]);
-        setSelectedId(_rctId);
+        setSelectedIds([_rctId]);
         setPrevTool(tool);
       }
       setDrawState(null);
@@ -2348,7 +2496,7 @@ function SketchPage({ page, projectId, onReload }) {
           cx: drawState.cx, cy: drawState.cy, r: drawState.r,
           stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
           layerId: drawState.layerId || activeLayerId }]);
-        setSelectedId(_cirId);
+        setSelectedIds([_cirId]);
         setPrevTool(tool);
       }
       setDrawState(null);
@@ -2379,7 +2527,7 @@ function SketchPage({ page, projectId, onReload }) {
             stroke: STROKE, strokeWidth: STROKE_W,
             layerId: drawState.layerId || activeLayerId,
           }]);
-          setSelectedId(pathId);
+          setSelectedIds([pathId]);
           setPrevTool(tool);
         }
       }
@@ -2507,6 +2655,37 @@ function SketchPage({ page, projectId, onReload }) {
     if (lenSq === 0) return Math.hypot(p.x-a.x, p.y-a.y);
     const t = Math.max(0, Math.min(1, ((p.x-a.x)*dx + (p.y-a.y)*dy) / lenSq));
     return Math.hypot(p.x-(a.x+t*dx), p.y-(a.y+t*dy));
+  }
+
+  // Returns true if shape's axis-aligned bounding box overlaps [rx1,rx2] × [ry1,ry2].
+  // Used for marquee/lasso selection.
+  function shapeIntersectsRect(s, rx1, ry1, rx2, ry2) {
+    const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+    let minX, maxX, minY, maxY;
+    switch (s.type) {
+      case 'line':
+        minX=Math.min(s.x1,s.x2); maxX=Math.max(s.x1,s.x2);
+        minY=Math.min(s.y1,s.y2); maxY=Math.max(s.y1,s.y2); break;
+      case 'circle':
+        minX=s.cx-s.r; maxX=s.cx+s.r; minY=s.cy-s.r; maxY=s.cy+s.r; break;
+      case 'rect':
+        minX=s.x; maxX=s.x+s.w; minY=s.y; maxY=s.y+s.h; break;
+      case 'curve': {
+        const { px: cpx, py: cpy } = getCurvePI(s);
+        minX=Math.min(s.x1,s.x2,cpx); maxX=Math.max(s.x1,s.x2,cpx);
+        minY=Math.min(s.y1,s.y2,cpy); maxY=Math.max(s.y1,s.y2,cpy); break;
+      }
+      case 'text': {
+        const hw=(s.w||180)*ps/2, hh=(s.h||80)*ps/2;
+        minX=s.x-hw; maxX=s.x+hw; minY=s.y-hh; maxY=s.y+hh; break;
+      }
+      case 'path':
+        if (!s.nodes || !s.nodes.length) return false;
+        minX=Math.min(...s.nodes.map(n=>n.x)); maxX=Math.max(...s.nodes.map(n=>n.x));
+        minY=Math.min(...s.nodes.map(n=>n.y)); maxY=Math.max(...s.nodes.map(n=>n.y)); break;
+      default: return false;
+    }
+    return minX <= rx2 && maxX >= rx1 && minY <= ry2 && maxY >= ry1;
   }
 
   // ── Snap Engine (Phase 5) ────────────────────────────────────────────────
@@ -3898,6 +4077,54 @@ function SketchPage({ page, projectId, onReload }) {
             );
           })()}
 
+          {/* ── Undo / Redo buttons ─────────────────────────────────────── */}
+          <button
+            onClick={() => {
+              if (!canUndo) return;
+              setShapesHistory(h => {
+                const prev = h.past[h.past.length - 1];
+                setShapes(prev);
+                persist(prev, undefined);
+                setSelectedIds([]);
+                return { past: h.past.slice(0, -1), future: [shapes, ...h.future] };
+              });
+            }}
+            disabled={!canUndo}
+            title="Undo (Ctrl+Z)"
+            style={{
+              height: 26, padding: '0 8px', borderRadius: 4, flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 4,
+              background: canUndo ? 'rgba(255,255,255,0.06)' : 'transparent',
+              border: `1px solid ${canUndo ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.07)'}`,
+              color: canUndo ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.2)',
+              cursor: canUndo ? 'pointer' : 'default', fontSize: 15,
+              fontFamily: 'Courier New, monospace', outline: 'none',
+            }}
+          >↶</button>
+          <button
+            onClick={() => {
+              if (!canRedo) return;
+              setShapesHistory(h => {
+                const next = h.future[0];
+                setShapes(next);
+                persist(next, undefined);
+                setSelectedIds([]);
+                return { past: [...h.past, shapes], future: h.future.slice(1) };
+              });
+            }}
+            disabled={!canRedo}
+            title="Redo (Ctrl+Y)"
+            style={{
+              height: 26, padding: '0 8px', borderRadius: 4, flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 4,
+              background: canRedo ? 'rgba(255,255,255,0.06)' : 'transparent',
+              border: `1px solid ${canRedo ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.07)'}`,
+              color: canRedo ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.2)',
+              cursor: canRedo ? 'pointer' : 'default', fontSize: 15,
+              fontFamily: 'Courier New, monospace', outline: 'none',
+            }}
+          >↷</button>
+
           {/* ── View menu button ────────────────────────────────────────── */}          <button
             onClick={e => {
               const btnRect = e.currentTarget.getBoundingClientRect();
@@ -4012,7 +4239,7 @@ function SketchPage({ page, projectId, onReload }) {
                     } else if (tool === 'pen') {
                       setPenNodes([]); setPenCursor(null); setPenPhase('point');
                     }
-                    setTool(t.id); setSelectedId(null); setDrawState(null); setPrevTool(null);
+                    setTool(t.id); setSelectedIds([]); setDrawState(null); setPrevTool(null);
                   }}
                   title={t.label}
                   style={{
@@ -4037,9 +4264,9 @@ function SketchPage({ page, projectId, onReload }) {
           )}
 
           {/* Delete selected — pinned at bottom, outside the scroll area */}
-          {ribbonOpen && selectedId && (
+          {ribbonOpen && selectedIds.length > 0 && (
             <button
-              onClick={() => { commitShapes(shapes.filter(s => s.id !== selectedId)); setSelectedId(null); }}
+              onClick={() => { commitShapes(shapes.filter(s => !selectedIds.includes(s.id))); setSelectedIds([]); }}
               title="Delete selected"
               style={{
                 flexShrink: 0, width: 52, height: 40,
@@ -4108,7 +4335,7 @@ function SketchPage({ page, projectId, onReload }) {
               <g key={layer.id}>
                 {shapes
                   .filter(s => (s.layerId || layers[0]?.id) === layer.id)
-                  .map(s => renderShape(s, s.id === selectedId))}
+                  .map(s => renderShape(s, selectedIds.includes(s.id)))}
               </g>
             ))}
 
@@ -4119,6 +4346,17 @@ function SketchPage({ page, projectId, onReload }) {
               const lbl = renderDimLabel(s);
               return lbl ? <g key={`dim-${s.id}`}>{lbl}</g> : null;
             })}
+
+            {/* Marquee selection rectangle */}
+            {marquee && marquee.w > 0 && marquee.h > 0 && (
+              <rect
+                x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h}
+                fill="rgba(59,130,246,0.08)" stroke="#3B82F6"
+                strokeWidth={viewBox.w / (svgSizeRef.current.w || viewBox.w)}
+                strokeDasharray={`${4 * viewBox.w / (svgSizeRef.current.w || viewBox.w)} ${3 * viewBox.w / (svgSizeRef.current.w || viewBox.w)}`}
+                style={{ pointerEvents: 'none' }}
+              />
+            )}
 
             {/* Node handles for selected shape.
                 Shows in select mode OR when prevTool is set (shape just created —
@@ -4544,18 +4782,18 @@ function SketchPage({ page, projectId, onReload }) {
                       {!collapsedLayers.has(layer.id) && [...layerShapes].reverse().map((s, ri) => (
                         <div
                           key={s.id}
-                          onClick={() => { setTool('select'); setSelectedId(s.id); setPrevTool(null); }}
+                          onClick={() => { setTool('select'); setSelectedIds([s.id]); setPrevTool(null); }}
                           style={{
                             display: 'flex', alignItems: 'center', gap: 4,
                             padding: '2px 6px 2px 22px',
-                            background: s.id === selectedId ? 'rgba(59,130,246,0.12)' : 'transparent',
+                            background: selectedIds.includes(s.id) ? 'rgba(59,130,246,0.12)' : 'transparent',
                             cursor: 'pointer',
                           }}
                         >
                           <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.2)', flexShrink: 0 }}>—</span>
                           <span style={{
                             fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                            color: s.id === selectedId ? '#93C5FD' : 'rgba(255,255,255,0.4)',
+                            color: selectedIds.includes(s.id) ? '#93C5FD' : 'rgba(255,255,255,0.4)',
                           }}>
                             {s.type.charAt(0).toUpperCase() + s.type.slice(1)} {layerShapes.length - ri}
                           </span>
