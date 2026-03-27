@@ -273,6 +273,24 @@
       border-top: 2px solid #2D6A4F !important;
       font-size: 12px;
     }
+    /* ── Multi-cell selection ─────────────────────────────────── */
+    .dp-cell-selected {
+      background: rgba(45,106,79,0.07) !important;
+    }
+    /* ── Drag-and-drop visual feedback ───────────────────────── */
+    th.dp-drag-over-col {
+      border-left: 2px solid #2D6A4F !important;
+      background: rgba(45,106,79,0.12) !important;
+    }
+    .dp-row-num.dp-drag-over-row {
+      border-top: 2px solid #2D6A4F !important;
+      background: rgba(45,106,79,0.10) !important;
+      color: #2D6A4F !important;
+    }
+    .dp-col-header[draggable="true"] { cursor: grab; }
+    .dp-col-header[draggable="true"]:active { cursor: grabbing; }
+    .dp-row-num[draggable="true"] { cursor: grab; }
+    .dp-row-num[draggable="true"]:active { cursor: grabbing; }
     /* ── Animations ─────────────────────────────────────────────── */
     .screen-enter { animation: slideUp 0.18s ease-out; }
     @keyframes slideUp {
@@ -461,6 +479,27 @@
       projects[idx] = { ...projects[idx], ...updates };
       DB.saveProjects(projects);
     },
+    duplicateProject(id) {
+      const projects = this.getProjects();
+      const src = projects.find(p => p.id === id);
+      if (!src) return null;
+      let n = Date.now();
+      const uid = () => ++n;
+      const newProj = {
+        ...src,
+        id: uid(),
+        name: src.name + ' (Copy)',
+        createdAt: new Date().toISOString(),
+        pages: (src.pages || []).map(pg => ({
+          ...pg,
+          id: uid(),
+          rows: (pg.rows || []).map(r => ({ ...r, id: uid() }))
+        }))
+      };
+      projects.push(newProj);
+      this.saveProjects(projects);
+      return newProj;
+    },
     reorderPages(projectId, fromIdx, toIdx) {
       const projects = DB.getProjects();
       const pi = projects.findIndex(p => p.id === projectId);
@@ -500,6 +539,38 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // FOCUS TRAP HOOK
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function useFocusTrap(ref, isActive, onEscape) {
+    const escRef = useRef(onEscape);
+    useEffect(() => { escRef.current = onEscape; });
+
+    useEffect(() => {
+      if (!isActive || !ref.current) return;
+      const el = ref.current;
+      const sel = 'a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
+      const getFocusable = () => Array.from(el.querySelectorAll(sel));
+      requestAnimationFrame(() => getFocusable()[0]?.focus());
+
+      const handler = e => {
+        if (e.key === 'Escape') { escRef.current?.(); return; }
+        if (e.key !== 'Tab') return;
+        const focusable = getFocusable();
+        if (!focusable.length) { e.preventDefault(); return; }
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (e.shiftKey) {
+          if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+        } else {
+          if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      };
+      document.addEventListener('keydown', handler);
+      return () => document.removeEventListener('keydown', handler);
+    }, [isActive]);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // ICONS
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -518,6 +589,88 @@
     ChevUp: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>,
     ChevDown: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>,
   };
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // TOAST SYSTEM
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  const ToastContext = React.createContext(null);
+
+  function ToastProvider({ children }) {
+    const [toasts, setToasts] = useState([]);
+    const add = (msg, type = 'success') => {
+      const id = Date.now();
+      setToasts(prev => [...prev, { id, msg, type }]);
+      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3500);
+    };
+    const toast = { success: msg => add(msg, 'success'), error: msg => add(msg, 'error') };
+    return (
+      <ToastContext.Provider value={toast}>
+        {children}
+        <div style={{ position:'fixed', bottom:24, left:'50%', transform:'translateX(-50%)',
+          zIndex:9999, display:'flex', flexDirection:'column', gap:8, alignItems:'center',
+          pointerEvents:'none', width:'calc(100% - 32px)', maxWidth:360 }}>
+          {toasts.map(t => (
+            <div key={t.id} style={{
+              background: t.type === 'error' ? '#7F1D1D' : '#1C3829',
+              color: t.type === 'error' ? '#FECACA' : '#FDFAF4',
+              padding:'10px 18px', borderRadius:10, fontSize:14, fontWeight:500,
+              boxShadow:'0 4px 16px rgba(0,0,0,0.35)', pointerEvents:'auto',
+              width:'100%', textAlign:'center'
+            }}>{t.msg}</div>
+          ))}
+        </div>
+      </ToastContext.Provider>
+    );
+  }
+
+  const useToast = () => React.useContext(ToastContext);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // CONTEXT MENU
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function ContextMenu({ x, y, items, onClose }) {
+    const ref = useRef(null);
+    const [pos, setPos] = useState({ x, y });
+
+    useEffect(() => {
+      if (!ref.current) return;
+      const { width, height } = ref.current.getBoundingClientRect();
+      const vw = window.innerWidth, vh = window.innerHeight;
+      setPos({ x: Math.min(x, vw - width - 8), y: Math.min(y, vh - height - 8) });
+
+      const onDown = e => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+      const onKey  = e => { if (e.key === 'Escape') onClose(); };
+      document.addEventListener('mousedown', onDown);
+      document.addEventListener('keydown', onKey);
+      return () => {
+        document.removeEventListener('mousedown', onDown);
+        document.removeEventListener('keydown', onKey);
+      };
+    }, []);
+
+    return (
+      <div ref={ref} style={{
+        position:'fixed', top:pos.y, left:pos.x, zIndex:9998,
+        background:'#1C2A20', border:'1px solid rgba(253,250,244,0.13)',
+        borderRadius:10, boxShadow:'0 8px 28px rgba(0,0,0,0.45)',
+        minWidth:168, overflow:'hidden'
+      }}>
+        {items.map((item, i) => (
+          <button key={i}
+            onClick={() => { item.action(); onClose(); }}
+            style={{ width:'100%', padding:'11px 16px', textAlign:'left',
+              background:'transparent', border:'none',
+              color: item.danger ? '#FCA5A5' : '#FDFAF4',
+              fontSize:14, cursor:'pointer', display:'flex', alignItems:'center', gap:10 }}
+            onPointerOver={e => e.currentTarget.style.background='rgba(253,250,244,0.08)'}
+            onPointerOut={e => e.currentTarget.style.background='transparent'}
+          >{item.icon && <span>{item.icon}</span>}{item.label}</button>
+        ))}
+      </div>
+    );
+  }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // SHARED COMPONENTS
@@ -562,6 +715,9 @@
     const [projects, setProjects] = useState([]);
     const [showNew, setShowNew] = useState(false);
     const [delTarget, setDelTarget] = useState(null);
+    const toast = useToast();
+    const delModalRef = useRef(null);
+    useFocusTrap(delModalRef, !!delTarget, () => setDelTarget(null));
 
     useEffect(() => { setProjects(DB.getProjects()); }, []);
 
@@ -575,6 +731,21 @@
       DB.deleteProject(delTarget);
       setProjects(DB.getProjects());
       setDelTarget(null);
+    }
+
+    function handleRename(p) {
+      const name = window.prompt('Rename project:', p.name);
+      if (name && name.trim() && name.trim() !== p.name) {
+        DB.updateProject(p.id, { name: name.trim() });
+        setProjects(DB.getProjects());
+        toast.success('Project renamed');
+      }
+    }
+
+    function handleDuplicate(p) {
+      DB.duplicateProject(p.id);
+      setProjects(DB.getProjects());
+      toast.success(`"${p.name}" duplicated`);
     }
 
     return (
@@ -596,7 +767,9 @@
                 </p>
                 {projects.map(p => (
                   <ProjectCard key={p.id} project={p}
-                    onDelete={(e) => { e.stopPropagation(); setDelTarget(p.id); }} />
+                    onDelete={(e) => { e.stopPropagation(); setDelTarget(p.id); }}
+                    onRename={handleRename}
+                    onDuplicate={handleDuplicate} />
                 ))}
               </div>
             )
@@ -607,7 +780,7 @@
 
         {delTarget && (
           <div className="modal-backdrop" onClick={() => setDelTarget(null)}>
-            <div className="modal-sheet" onClick={e => e.stopPropagation()}>
+            <div ref={delModalRef} className="modal-sheet" onClick={e => e.stopPropagation()}>
               <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
               <h2 className="text-lg font-bold text-fb-dark mb-2">Delete Project?</h2>
               <p className="text-fb-muted text-sm mb-6">All pages and data will be permanently deleted.</p>
@@ -622,35 +795,46 @@
     );
   }
 
-  function ProjectCard({ project, onDelete }) {
+  function ProjectCard({ project, onDelete, onRename, onDuplicate }) {
     const pageCount = project.pages?.length || 0;
+    const [ctxMenu, setCtxMenu] = useState(null);
     return (
-      <div onClick={() => navigate(`#/project/${project.id}`)}
-        className="bg-white rounded-2xl shadow-sm border border-fb-border overflow-hidden active:scale-[0.98] transition-transform cursor-pointer">
-        <div className="flex">
-          <div className="w-1.5 bg-fb-mid flex-shrink-0" />
-          <div className="flex-1 p-4">
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex-1 min-w-0">
-                <h3 className="font-bold text-fb-text text-base leading-tight truncate">{project.name}</h3>
-                {project.client && <p className="text-sm text-fb-muted mt-0.5 truncate">{project.client}</p>}
+      <>
+        <div onClick={() => navigate(`#/project/${project.id}`)}
+          onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
+          className="bg-white rounded-2xl shadow-sm border border-fb-border overflow-hidden active:scale-[0.98] transition-transform cursor-pointer">
+          <div className="flex">
+            <div className="w-1.5 bg-fb-mid flex-shrink-0" />
+            <div className="flex-1 p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-bold text-fb-text text-base leading-tight truncate">{project.name}</h3>
+                  {project.client && <p className="text-sm text-fb-muted mt-0.5 truncate">{project.client}</p>}
+                </div>
+                <button onClick={onDelete} className="p-1.5 text-gray-300 active:text-red-400 transition-colors flex-shrink-0">
+                  <Ico.Trash />
+                </button>
               </div>
-              <button onClick={onDelete} className="p-1.5 text-gray-300 active:text-red-400 transition-colors flex-shrink-0">
-                <Ico.Trash />
-              </button>
-            </div>
-            <div className="flex items-center gap-3 mt-2.5 flex-wrap">
-              {project.jobNumber && (
-                <span className="font-data text-xs bg-fb-pale text-fb-mid px-2 py-0.5 rounded font-semibold">
-                  #{project.jobNumber}
-                </span>
-              )}
-              <span className="text-xs text-fb-muted">{pageCount} page{pageCount !== 1 ? 's' : ''}</span>
-              <span className="text-xs text-fb-muted ml-auto font-data">{new Date(project.createdAt).toLocaleDateString('en-CA')}</span>
+              <div className="flex items-center gap-3 mt-2.5 flex-wrap">
+                {project.jobNumber && (
+                  <span className="font-data text-xs bg-fb-pale text-fb-mid px-2 py-0.5 rounded font-semibold">
+                    #{project.jobNumber}
+                  </span>
+                )}
+                <span className="text-xs text-fb-muted">{pageCount} page{pageCount !== 1 ? 's' : ''}</span>
+                <span className="text-xs text-fb-muted ml-auto font-data">{new Date(project.createdAt).toLocaleDateString('en-CA')}</span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+        {ctxMenu && (
+          <ContextMenu x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)} items={[
+            { icon: '✏️', label: 'Rename',    action: () => onRename(project)    },
+            { icon: '⧉',  label: 'Duplicate', action: () => onDuplicate(project) },
+            { icon: '🗑', label: 'Delete',    action: () => onDelete({ stopPropagation: () => {} }), danger: true },
+          ]} />
+        )}
+      </>
     );
   }
 
@@ -676,6 +860,9 @@
   function NewProjectModal({ onClose, onCreate }) {
     const [form, setForm] = useState({ name: '', jobNumber: '', client: '', surveyor: '' });
     const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const toast = useToast();
 
     function handleCreate() {
       if (!form.name.trim()) return;
@@ -686,12 +873,13 @@
         surveyor: form.surveyor.trim() || 'Surveyor',
         date: new Date().toISOString().split('T')[0],
       });
+      toast.success('Project created');
       onCreate(proj);
     }
 
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
-        <div className="modal-sheet">
+        <div ref={trapRef} className="modal-sheet">
           <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
           <h2 className="text-xl font-bold text-fb-dark mb-5">New Project</h2>
           <div className="space-y-4">
@@ -974,6 +1162,8 @@
   // ─────────────────────────────────────────────────────────────────────────────
 
   function AddPageTypeModal({ onSelect, onClose }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
     const types = [
       { id: 'data',   Icon: Ico.Table, label: 'Data Page',   desc: 'Tabular columns with custom headers — your field observations',  color: '#2D6A4F' },
       { id: 'sketch', Icon: Ico.Grid,  label: 'Sketch Page', desc: 'Fine grid paper for diagrams, site sketches, and notes',           color: '#3B82F6' },
@@ -981,7 +1171,7 @@
     ];
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
-        <div className="modal-sheet">
+        <div ref={trapRef} className="modal-sheet">
           <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
           <h2 className="text-lg font-bold text-fb-dark mb-1">Add Page</h2>
           <p className="text-fb-muted text-sm mb-5">Choose the type of page to add:</p>
@@ -1007,6 +1197,8 @@
   }
 
   function AddColumnsModal({ columns: initCols, onConfirm, onBack, onClose }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
     const defaultCols = initCols && initCols.length
       ? initCols
       : [{ id: 'col_' + Date.now(), label: '', colType: 'num', width: 80 }];
@@ -1033,7 +1225,7 @@
 
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
-        <div className="modal-sheet">
+        <div ref={trapRef} className="modal-sheet">
           <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
           <button onClick={onBack} className="flex items-center gap-1 text-fb-muted text-sm mb-4 -mt-1 active:opacity-70">
             <Ico.Back /> Back
@@ -1387,12 +1579,30 @@
     const [templateModal, setTemplateModal] = useState(false);
     const [hf, setHf]                   = useState(null);
     const [calcResults, setCalcResults] = useState({});    // { 'r_xxx_cId': displayValue }
+    const [selectionAnchor, setSelectionAnchor] = useState(null); // { rowIdx, colIdx }
+    const [dragStartCol, setDragStartCol] = useState(null);
+    const [dragOverCol,  setDragOverCol]  = useState(null);
+    const [dragStartRow, setDragStartRow] = useState(null);
+    const [dragOverRow,  setDragOverRow]  = useState(null);
     const inputRef  = useRef(null);
     const fbInputRef = useRef(null);
     const tableRef   = useRef(null);
+    const colModalRef = useRef(null);
+    const templateModalRef = useRef(null);
+    const isDraggingSelRef = useRef(false); // true while mouse-drag cell selection is active
+    useFocusTrap(colModalRef, !!colModal, () => setColModal(null));
+    useFocusTrap(templateModalRef, templateModal, () => setTemplateModal(false));
+    const toast = useToast();
 
     // Sync rows when page changes
     useEffect(() => { setRows(page.rows || []); }, [page.id]);
+
+    // Reset drag-selection flag on global pointer-up (handles releases outside cells)
+    useEffect(() => {
+      const fn = () => { isDraggingSelRef.current = false; };
+      document.addEventListener('pointerup', fn);
+      return () => document.removeEventListener('pointerup', fn);
+    }, []);
 
     // Initialise / refresh HyperFormula whenever rows or columns change
     useEffect(() => {
@@ -1436,7 +1646,7 @@
         });
         setCalcResults(results);
       } catch(e) {
-        console.warn('[DataPage] HyperFormula error:', e);
+        toast.error('Formula engine error — check cell values');
       }
     }, [rows, page.id]);
 
@@ -1486,8 +1696,26 @@
 
     function cellRef(ri, ci) { return colLetter(ci) + (ri + 1); }
 
+    function getSelectionBounds() {
+      if (!activeCell) return null;
+      const anchor = selectionAnchor || activeCell;
+      return {
+        minR: Math.min(activeCell.rowIdx, anchor.rowIdx),
+        maxR: Math.max(activeCell.rowIdx, anchor.rowIdx),
+        minC: Math.min(activeCell.colIdx, anchor.colIdx),
+        maxC: Math.max(activeCell.colIdx, anchor.colIdx),
+      };
+    }
+
+    function isInRange(ri, ci) {
+      const b = getSelectionBounds();
+      if (!b) return false;
+      return ri >= b.minR && ri <= b.maxR && ci >= b.minC && ci <= b.maxC;
+    }
+
     function activateCell(ri, ci) {
       setActiveCell({ rowIdx: ri, colIdx: ci });
+      setSelectionAnchor({ rowIdx: ri, colIdx: ci }); // always collapse on plain navigation
       const row = rows[ri];
       const col = columns[ci];
       if (!row || !col) return;
@@ -1539,37 +1767,131 @@
 
     // ── Grid-level keyboard handler (fires when a cell is selected but NOT in edit mode) ──
     function handleGridKeyDown(e) {
-      // Ignore if focus is inside an input (formula bar or inline cell editor)
       if (e.target.tagName === 'INPUT') return;
       if (!activeCell) return;
       const { rowIdx: ri, colIdx: ci } = activeCell;
 
-      // Delete / Backspace → clear the selected cell
+      // ── Ctrl+C / Cmd+C ── Copy selection as TSV (raw values so formulas paste intact)
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        e.preventDefault();
+        const b = getSelectionBounds();
+        if (!b) return;
+        const lines = [];
+        for (let r = b.minR; r <= b.maxR; r++) {
+          const row = rows[r];
+          if (!row) continue;
+          const cells = [];
+          for (let c = b.minC; c <= b.maxC; c++) {
+            const col = columns[c];
+            cells.push(col ? ((row.cells || {})[col.id] || '') : '');
+          }
+          lines.push(cells.join('\t'));
+        }
+        navigator.clipboard.writeText(lines.join('\n')).catch(() => {});
+        return;
+      }
+
+      // ── Ctrl+V / Cmd+V ── Paste TSV, auto-grow rows if needed
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        e.preventDefault();
+        navigator.clipboard.readText().then(text => {
+          if (!text) return;
+          const lines = text.trimEnd().split('\n').map(l => l.split('\t'));
+          const startR = ri, startC = ci;
+          let updatedRows = [...rows];
+          const needed = startR + lines.length - updatedRows.length;
+          if (needed > 0) {
+            for (let i = 0; i < needed; i++) {
+              const cells = {};
+              columns.forEach(c => { cells[c.id] = ''; });
+              updatedRows.push({ id: 'r_' + (Date.now() + i) + '_' + Math.random().toString(36).slice(2), cells });
+            }
+          }
+          updatedRows = updatedRows.map((row, r) => {
+            const li = r - startR;
+            if (li < 0 || li >= lines.length) return row;
+            const newCells = { ...row.cells };
+            lines[li].forEach((val, ci2) => {
+              const col = columns[startC + ci2];
+              if (col) newCells[col.id] = val;
+            });
+            return { ...row, cells: newCells };
+          });
+          persistRows(updatedRows);
+        }).catch(() => {});
+        return;
+      }
+
+      // ── Delete / Backspace ── Clear all cells in selection range
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
-        const row = rows[ri];
-        const col = columns[ci];
-        if (row && col) {
-          updateCell(row.id, col.id, '');
-          setFormulaBarVal('');
+        const b = getSelectionBounds();
+        if (!b) return;
+        const updated = rows.map((row, r) => {
+          if (r < b.minR || r > b.maxR) return row;
+          const newCells = { ...row.cells };
+          for (let c = b.minC; c <= b.maxC; c++) {
+            const col = columns[c];
+            if (col) newCells[col.id] = '';
+          }
+          return { ...row, cells: newCells };
+        });
+        persistRows(updated);
+        setFormulaBarVal('');
+        return;
+      }
+
+      // ── Enter / Shift+Enter ── Vertical navigation, collapse selection
+      if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        if (e.shiftKey) { if (ri - 1 >= 0) activateCell(ri - 1, ci); }
+        else            { if (ri + 1 < rows.length) activateCell(ri + 1, ci); }
+        return;
+      }
+
+      // ── Tab / Shift+Tab ── Horizontal navigation with row wrap, collapse selection
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (ci - 1 >= 0)      activateCell(ri, ci - 1);
+          else if (ri - 1 >= 0) activateCell(ri - 1, columns.length - 1);
+        } else {
+          if (ci + 1 < columns.length) activateCell(ri, ci + 1);
+          else if (ri + 1 < rows.length) activateCell(ri + 1, 0);
         }
         return;
       }
 
-      // Arrow key navigation (no edit mode)
-      if (e.key === 'ArrowDown')  { e.preventDefault(); if (ri + 1 < rows.length)    activateCell(ri + 1, ci); return; }
-      if (e.key === 'ArrowUp')    { e.preventDefault(); if (ri - 1 >= 0)              activateCell(ri - 1, ci); return; }
-      if (e.key === 'ArrowRight') { e.preventDefault(); if (ci + 1 < columns.length) activateCell(ri, ci + 1); return; }
-      if (e.key === 'ArrowLeft')  { e.preventDefault(); if (ci - 1 >= 0)             activateCell(ri, ci - 1); return; }
+      // ── Arrow keys ── Navigate; Shift extends selection, plain collapses it
+      if (['ArrowDown','ArrowUp','ArrowRight','ArrowLeft'].includes(e.key)) {
+        e.preventDefault();
+        let newRi = ri, newCi = ci;
+        if (e.key === 'ArrowDown'  && ri + 1 < rows.length)    newRi = ri + 1;
+        if (e.key === 'ArrowUp'    && ri - 1 >= 0)             newRi = ri - 1;
+        if (e.key === 'ArrowRight' && ci + 1 < columns.length) newCi = ci + 1;
+        if (e.key === 'ArrowLeft'  && ci - 1 >= 0)             newCi = ci - 1;
+        if (newRi === ri && newCi === ci) return;
+        if (e.shiftKey) {
+          // Extend: anchor stays, focus moves
+          if (!selectionAnchor) setSelectionAnchor({ rowIdx: ri, colIdx: ci });
+          setActiveCell({ rowIdx: newRi, colIdx: newCi });
+          const row2 = rows[newRi], col2 = columns[newCi];
+          if (row2 && col2) setFormulaBarVal((row2.cells || {})[col2.id] || '');
+          setTimeout(() => { if (tableRef.current) tableRef.current.focus(); }, 0);
+        } else {
+          activateCell(newRi, newCi);
+        }
+        return;
+      }
 
-      // Enter / F2 → enter edit mode keeping existing value
-      if (e.key === 'Enter' || e.key === 'F2') {
+      // ── F2 ── Enter edit mode keeping existing value
+      if (e.key === 'F2') {
         e.preventDefault();
         startEdit(ri, ci);
         return;
       }
 
-      // Printable character → enter edit mode, discard existing value, pre-fill with typed char
+      // ── Printable character ── Enter edit mode, pre-fill with typed char
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         const row = rows[ri];
@@ -1581,7 +1903,6 @@
         setTimeout(() => {
           if (inputRef.current) {
             inputRef.current.focus();
-            // Move cursor to end
             inputRef.current.setSelectionRange(1, 1);
           }
         }, 0);
@@ -1638,6 +1959,54 @@
       DB.updatePage(projectId, page.id, { columns: updated, rows: updatedRows });
       onReload();
     }
+
+    // ── Column drag-and-drop ─────────────────────────────────────────
+
+    function handleColDragStart(e, ci) {
+      setDragStartCol(ci);
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(ci));
+    }
+    function handleColDragOver(e, ci) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (dragOverCol !== ci) setDragOverCol(ci);
+    }
+    function handleColDrop(e, ci) {
+      e.preventDefault();
+      if (dragStartCol !== null && dragStartCol !== ci) {
+        const reordered = [...columns];
+        const [moved] = reordered.splice(dragStartCol, 1);
+        reordered.splice(ci, 0, moved);
+        persistColumns(reordered);
+      }
+      setDragStartCol(null); setDragOverCol(null);
+    }
+    function handleColDragEnd() { setDragStartCol(null); setDragOverCol(null); }
+
+    // ── Row drag-and-drop ────────────────────────────────────────────
+
+    function handleRowDragStart(e, ri) {
+      setDragStartRow(ri);
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(ri));
+    }
+    function handleRowDragOver(e, ri) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (dragOverRow !== ri) setDragOverRow(ri);
+    }
+    function handleRowDrop(e, ri) {
+      e.preventDefault();
+      if (dragStartRow !== null && dragStartRow !== ri) {
+        const reordered = [...rows];
+        const [moved] = reordered.splice(dragStartRow, 1);
+        reordered.splice(ri, 0, moved);
+        persistRows(reordered);
+      }
+      setDragStartRow(null); setDragOverRow(null);
+    }
+    function handleRowDragEnd() { setDragStartRow(null); setDragOverRow(null); }
 
     // ── Template presets ──────────────────────────────────────────────
 
@@ -1871,10 +2240,16 @@
                 <th className="dp-row-num" style={{ position: 'sticky', top: 0, left: 0, zIndex: 3 }}>#</th>
                 {columns.map((col, ci) => (
                   <th key={col.id}
-                    className={`dp-col-header${activeCell && activeCell.colIdx === ci ? ' active-col' : ''}`}
+                    draggable={true}
+                    className={`dp-col-header${activeCell && activeCell.colIdx === ci ? ' active-col' : ''}${dragOverCol === ci && dragStartCol !== ci ? ' dp-drag-over-col' : ''}`}
                     style={{ width: colWidth(col), minWidth: colWidth(col) }}
                     onClick={() => openColModal(col)}
-                    title="Tap to edit column settings">
+                    onDragStart={e => handleColDragStart(e, ci)}
+                    onDragOver={e => handleColDragOver(e, ci)}
+                    onDrop={e => handleColDrop(e, ci)}
+                    onDragEnd={handleColDragEnd}
+                    onDragLeave={() => { if (dragOverCol === ci) setDragOverCol(null); }}
+                    title="Drag to reorder · Tap to edit settings">
                     {col.label}
                     <span className={`dp-col-type-badge dp-col-type-${col.colType || 'num'}`}>
                       {typeLabels[col.colType || 'num']}
@@ -1895,17 +2270,44 @@
               )}
               {rows.map((row, ri) => (
                 <tr key={row.id}>
-                  {/* Row number */}
-                  <td className={`dp-row-num${activeCell && activeCell.rowIdx === ri ? ' active-row' : ''}`}>{ri + 1}</td>
+                  {/* Row number — draggable to reorder */}
+                  <td className={`dp-row-num${activeCell && activeCell.rowIdx === ri ? ' active-row' : ''}${dragOverRow === ri && dragStartRow !== ri ? ' dp-drag-over-row' : ''}`}
+                    draggable={true}
+                    onDragStart={e => handleRowDragStart(e, ri)}
+                    onDragOver={e => handleRowDragOver(e, ri)}
+                    onDrop={e => handleRowDrop(e, ri)}
+                    onDragEnd={handleRowDragEnd}
+                    onDragLeave={() => { if (dragOverRow === ri) setDragOverRow(null); }}
+                    title="Drag to reorder row">
+                    {ri + 1}
+                  </td>
                   {columns.map((col, ci) => {
                     const isActive = activeCell && activeCell.rowIdx === ri && activeCell.colIdx === ci;
                     const isEditing = editingCell && editingCell.rowIdx === ri && editingCell.colIdx === ci;
+                    const inSel = isInRange(ri, ci);
                     const { text, isFormula, isDMS, isError } = displayValue(row, col);
                     return (
                       <td key={col.id}
-                        className={isActive ? 'dp-cell-active' : ''}
+                        className={`${isActive ? 'dp-cell-active' : inSel ? 'dp-cell-selected' : ''}`}
                         style={{ width: colWidth(col), minWidth: colWidth(col) }}
-                        onClick={() => { activateCell(ri, ci); }}
+                        onPointerDown={e => {
+                          if (e.button !== 0) return;
+                          isDraggingSelRef.current = true;
+                          if (e.shiftKey && activeCell) {
+                            // Extend selection from current anchor to clicked cell
+                            if (!selectionAnchor) setSelectionAnchor(activeCell);
+                            setActiveCell({ rowIdx: ri, colIdx: ci });
+                            const row2 = rows[ri], col2 = columns[ci];
+                            if (row2 && col2) setFormulaBarVal((row2.cells || {})[col2.id] || '');
+                            if (tableRef.current) tableRef.current.focus();
+                          } else {
+                            activateCell(ri, ci);
+                          }
+                        }}
+                        onPointerEnter={e => {
+                          if (!isDraggingSelRef.current || !(e.buttons & 1)) return;
+                          setActiveCell({ rowIdx: ri, colIdx: ci });
+                        }}
                         onDoubleClick={() => startEdit(ri, ci)}>
                         {isEditing ? (
                           <input
@@ -1963,23 +2365,36 @@
         {/* ── Status bar ── */}
         <div className="px-4 py-2 border-t border-fb-border bg-fb-cream2/50 flex items-center gap-4 flex-shrink-0" style={{ fontSize: 11 }}>
           <span className="text-fb-muted font-data">{rows.length} rows · {columns.length} cols</span>
-          {activeCell && (
-            <span className="text-fb-mid font-data font-semibold">
-              {activeCellRef}
-              {columns[activeCell.colIdx] && (
-                <span style={{ color: typeColors[columns[activeCell.colIdx].colType || 'num'], marginLeft: 4 }}>
-                  [{typeLabels[columns[activeCell.colIdx].colType || 'num']}]
+          {activeCell && (() => {
+            const b = getSelectionBounds();
+            const isMulti = b && (b.maxR > b.minR || b.maxC > b.minC);
+            if (isMulti) {
+              const numRows = b.maxR - b.minR + 1, numCols = b.maxC - b.minC + 1;
+              return (
+                <span className="text-fb-mid font-data font-semibold">
+                  {cellRef(b.minR, b.minC)}:{cellRef(b.maxR, b.maxC)}
+                  <span style={{ color: '#9CA3AF', marginLeft: 4 }}>({numRows}×{numCols})</span>
                 </span>
-              )}
-            </span>
-          )}
-          <span className="ml-auto text-fb-muted" style={{ fontSize: 10 }}>Select · type to edit · Del to clear · ↑↓←→ navigate</span>
+              );
+            }
+            return (
+              <span className="text-fb-mid font-data font-semibold">
+                {activeCellRef}
+                {columns[activeCell.colIdx] && (
+                  <span style={{ color: typeColors[columns[activeCell.colIdx].colType || 'num'], marginLeft: 4 }}>
+                    [{typeLabels[columns[activeCell.colIdx].colType || 'num']}]
+                  </span>
+                )}
+              </span>
+            );
+          })()}
+          <span className="ml-auto text-fb-muted" style={{ fontSize: 10 }}>Shift+click/arrow to select range · Ctrl+C/V · Del clears · drag # to reorder</span>
         </div>
 
         {/* ── Column settings modal ── */}
         {colModal && (
           <div className="modal-backdrop" onClick={() => setColModal(null)}>
-            <div className="modal-sheet" onClick={e => e.stopPropagation()}>
+            <div ref={colModalRef} className="modal-sheet" onClick={e => e.stopPropagation()}>
               <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
               <h2 className="text-lg font-bold text-fb-dark mb-4">Column Settings</h2>
               <div className="space-y-4">
@@ -2038,7 +2453,7 @@
         {/* ── Template modal ── */}
         {templateModal && (
           <div className="modal-backdrop" onClick={() => setTemplateModal(false)}>
-            <div className="modal-sheet" onClick={e => e.stopPropagation()}>
+            <div ref={templateModalRef} className="modal-sheet" onClick={e => e.stopPropagation()}>
               <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
               <h2 className="text-lg font-bold text-fb-dark mb-1">Surveyor Templates</h2>
               <p className="text-fb-muted text-xs mb-4">Applying a template will replace the current columns and clear all rows.</p>
@@ -2210,11 +2625,12 @@
   function App() {
     const hash  = useRouter();
     const route = parseRoute(hash);
+    const toast = useToast();
 
     useEffect(() => {
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('./sw.js')
-          .catch(err => console.warn('[FieldBook] SW:', err));
+          .catch(err => toast.error('Service worker failed to register'));
       }
     }, []);
 
@@ -2235,12 +2651,20 @@
     );
   }
 
+  function AppWithProviders() {
+    return (
+      <ToastProvider>
+        <App />
+      </ToastProvider>
+    );
+  }
+
   // Expose shared globals for sketch.js to consume via window._fb
   window._fb = { DB, PageHeaderStrip, HCell };
 
   // Mount the app only after sketch.js has loaded and resolved _sketchPromise
   _sketchPromise.then(() => {
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    ReactDOM.createRoot(document.getElementById('root')).render(<AppWithProviders />);
   });
 </script>
 

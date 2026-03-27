@@ -1762,29 +1762,9 @@ function SketchPage({ page, projectId, onReload }) {
       // Check if clicking on a node or handle of the currently selected path
       const pathShape = nodeSelectedId ? shapes.find(s => s.id === nodeSelectedId) : null;
       if (pathShape && pathShape.nodes) {
-        // Check control handles first (they're smaller targets)
-        for (let i = 0; i < pathShape.nodes.length; i++) {
-          const node = pathShape.nodes[i];
-          if (node.type !== 'sharp') {
-            // cp1 handle
-            if (Math.hypot(pt.x - node.cp1x, pt.y - node.cp1y) < cpHitR) {
-              nodeDragRef.current = { shapeId: pathShape.id, type: 'cp1', nodeIdx: i,
-                startX: pt.x, startY: pt.y, snapshot: shapes };
-              setNodeSelectedIdx(i);
-              e.currentTarget.setPointerCapture(e.pointerId);
-              return;
-            }
-            // cp2 handle
-            if (Math.hypot(pt.x - node.cp2x, pt.y - node.cp2y) < cpHitR) {
-              nodeDragRef.current = { shapeId: pathShape.id, type: 'cp2', nodeIdx: i,
-                startX: pt.x, startY: pt.y, snapshot: shapes };
-              setNodeSelectedIdx(i);
-              e.currentTarget.setPointerCapture(e.pointerId);
-              return;
-            }
-          }
-        }
-        // Check on-curve nodes
+        // Check on-curve nodes FIRST — nodes have priority over their handles.
+        // End nodes store cp1/cp2 at the node position initially; checking handles
+        // first would always steal the click away from the node itself.
         for (let i = 0; i < pathShape.nodes.length; i++) {
           const node = pathShape.nodes[i];
           if (Math.hypot(pt.x - node.x, pt.y - node.y) < nodeHitR) {
@@ -1793,6 +1773,31 @@ function SketchPage({ page, projectId, onReload }) {
             setNodeSelectedIdx(i);
             e.currentTarget.setPointerCapture(e.pointerId);
             return;
+          }
+        }
+        // Check control handles (only for non-sharp nodes, and only when the
+        // handle has been pulled away from the node — skip co-located handles)
+        for (let i = 0; i < pathShape.nodes.length; i++) {
+          const node = pathShape.nodes[i];
+          if (node.type !== 'sharp') {
+            // cp1 handle — skip if it sits on the node (not yet pulled out)
+            const cp1Dist = Math.hypot(node.cp1x - node.x, node.cp1y - node.y);
+            if (cp1Dist > 1 && Math.hypot(pt.x - node.cp1x, pt.y - node.cp1y) < cpHitR) {
+              nodeDragRef.current = { shapeId: pathShape.id, type: 'cp1', nodeIdx: i,
+                startX: pt.x, startY: pt.y, snapshot: shapes };
+              setNodeSelectedIdx(i);
+              e.currentTarget.setPointerCapture(e.pointerId);
+              return;
+            }
+            // cp2 handle — skip if it sits on the node (not yet pulled out)
+            const cp2Dist = Math.hypot(node.cp2x - node.x, node.cp2y - node.y);
+            if (cp2Dist > 1 && Math.hypot(pt.x - node.cp2x, pt.y - node.cp2y) < cpHitR) {
+              nodeDragRef.current = { shapeId: pathShape.id, type: 'cp2', nodeIdx: i,
+                startX: pt.x, startY: pt.y, snapshot: shapes };
+              setNodeSelectedIdx(i);
+              e.currentTarget.setPointerCapture(e.pointerId);
+              return;
+            }
           }
         }
         // Check segment click (bow curve or insert node)
@@ -1815,15 +1820,59 @@ function SketchPage({ page, projectId, onReload }) {
         }
       }
 
-      // Click on a path shape to select it for node editing
       const hitThreshN = (e.pointerType === 'touch' ? 24 : 8) * ps;
-      const hit = hitTest(pt, shapes.filter(s => s.type === 'path'), hitThreshN);
-      if (hit) {
-        setNodeSelectedId(hit.id);
+
+      // If a non-path shape is already selected, check its handles and body first
+      // (same behaviour as the select tool — node tool acts as select for non-path shapes)
+      if (selectedId && !nodeSelectedId) {
+        const sel = shapes.find(s => s.id === selectedId);
+        if (sel && sel.type !== 'path') {
+          const isTouch   = e.pointerType === 'touch';
+          const nodeThresh = (isTouch ? 28 : NODE_R + 4) * ps;
+          const rot = sel._rot || 0;
+          const piv = getShapePivot(sel);
+
+          // Check shape nodes (handles)
+          const selNodes = getNodes(sel);
+          for (const n of selNodes) {
+            const np = rot ? rotatePoint(n.x, n.y, piv.x, piv.y, rot) : n;
+            if (Math.hypot(pt.x - np.x, pt.y - np.y) < nodeThresh) {
+              setDragNode({ shapeId: sel.id, nodeKey: n.key });
+              setDragStart({ svgX: pt.x, svgY: pt.y, snapshot: shapes });
+              e.currentTarget.setPointerCapture(e.pointerId);
+              return;
+            }
+          }
+
+          // Check body drag
+          if (hitTest(pt, [sel], hitThreshN)) {
+            setDragNode({ shapeId: sel.id, nodeKey: 'body' });
+            setDragStart({ svgX: pt.x, svgY: pt.y, snapshot: shapes });
+            return;
+          }
+        }
+      }
+
+      // Click on a path shape to select it for node editing
+      const pathHit = hitTest(pt, shapes.filter(s => s.type === 'path'), hitThreshN);
+      if (pathHit) {
+        setNodeSelectedId(pathHit.id);
+        setNodeSelectedIdx(null);
+        setSelectedId(null);
+        nodeDragRef.current = null;
+        return;
+      }
+
+      // Click on a non-path shape — select it and use select-tool handle behaviour
+      const nonPathHit = hitTest(pt, shapes.filter(s => s.type !== 'path'), hitThreshN);
+      if (nonPathHit) {
+        setSelectedId(nonPathHit.id);
+        setNodeSelectedId(null);
         setNodeSelectedIdx(null);
         nodeDragRef.current = null;
       } else {
-        // Click on empty space — deselect
+        // Click on empty space — deselect everything
+        setSelectedId(null);
         setNodeSelectedId(null);
         setNodeSelectedIdx(null);
         nodeDragRef.current = null;
@@ -4074,7 +4123,7 @@ function SketchPage({ page, projectId, onReload }) {
             {/* Node handles for selected shape.
                 Shows in select mode OR when prevTool is set (shape just created —
                 tool hasn't switched, but we need handles immediately). */}
-            {selectedShape && (tool === 'select' || tool === 'text' || prevTool !== null) && renderNodes(selectedShape)}
+            {selectedShape && (tool === 'select' || tool === 'text' || prevTool !== null || (tool === 'node' && selectedShape.type !== 'path')) && renderNodes(selectedShape)}
 
             {/* Preview shape while drawing */}
             {renderPreview()}
