@@ -1523,9 +1523,24 @@
     const mf   = (abs - d) * 60;
     const m    = Math.floor(mf);
     const sf   = (mf - m) * 60;
-    const s    = Math.round(sf * 10) / 10;   // 1 decimal place on seconds
-    const ss   = s < 10 ? '0' + s.toFixed(1) : s.toFixed(1);
-    return `${sign}${d}°${String(m).padStart(2,'0')}'${ss}"`;
+    let dispS = Math.round(sf), dispM = m, dispD = d;
+    if (dispS >= 60) { dispS -= 60; dispM += 1; }   // carry seconds
+    if (dispM >= 60) { dispM -= 60; dispD += 1; }   // carry minutes
+    return `${sign}${dispD}°${String(dispM).padStart(2,'0')}'${String(dispS).padStart(2,'0')}"`;
+  }
+
+  // Format decimal degrees as DD:MM:SS for clipboard export (Excel-compatible angle format).
+  function formatDMSColon(dd) {
+    if (dd === null || dd === undefined || isNaN(dd)) return '';
+    const sign = dd < 0 ? '-' : '';
+    const abs  = Math.abs(dd);
+    const d    = Math.floor(abs);
+    const mf   = (abs - d) * 60;
+    const m    = Math.floor(mf);
+    let dispS = Math.round((mf - m) * 60), dispM = m, dispD = d;
+    if (dispS >= 60) { dispS -= 60; dispM += 1; }
+    if (dispM >= 60) { dispM -= 60; dispD += 1; }
+    return `${sign}${dispD}:${String(dispM).padStart(2,'0')}:${String(dispS).padStart(2,'0')}`;
   }
 
   // Convert decimal degrees to a compact DMS string for formula storage.
@@ -1783,7 +1798,21 @@
           const cells = [];
           for (let c = b.minC; c <= b.maxC; c++) {
             const col = columns[c];
-            cells.push(col ? ((row.cells || {})[col.id] || '') : '');
+            if (!col) { cells.push(''); continue; }
+            const raw = (row.cells || {})[col.id] || '';
+            if ((col.colType || 'num') === 'dms' && raw.trim()) {
+              const key = row.id + '_' + col.id;
+              if (raw.startsWith('=')) {
+                const res = calcResults[key] || '';
+                const dd = parseDMSInput(res);
+                cells.push(dd !== null ? formatDMSColon(dd) : res);
+              } else {
+                const dd = parseDMSInput(raw);
+                cells.push(dd !== null ? formatDMSColon(dd) : raw);
+              }
+            } else {
+              cells.push(raw);
+            }
           }
           lines.push(cells.join('\t'));
         }
