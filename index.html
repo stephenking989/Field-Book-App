@@ -2854,65 +2854,73 @@
   // Registers custom surveyor functions once, before any HF instance is created.
   // Safe to call multiple times — guarded by window._fbSurveyPluginRegistered.
   // ─────────────────────────────────────────────────────────────────────────────
-  (function registerFBSurveyPlugin() {
-    if (typeof HyperFormula === 'undefined' || window._fbSurveyPluginRegistered) return;
-    try {
-      class FBSurveyPlugin extends HyperFormula.FunctionPluginType {
-        // HDIST(slope_dist, zenith_angle_deg) → horizontal distance
-        hdist(ast, state) {
-          return this.runFunction(ast.args, state, this.metadata('HDIST'),
-            (dist, zenith) => dist * Math.sin(zenith * Math.PI / 180));
-        }
-        // VDIST(slope_dist, zenith_angle_deg) → vertical distance
-        vdist(ast, state) {
-          return this.runFunction(ast.args, state, this.metadata('VDIST'),
-            (dist, zenith) => dist * Math.cos(zenith * Math.PI / 180));
-        }
-        // AZIMUTH(n1, e1, n2, e2) → azimuth in degrees [0, 360)
-        azimuth(ast, state) {
-          return this.runFunction(ast.args, state, this.metadata('AZIMUTH'),
-            (n1, e1, n2, e2) => {
-              const az = Math.atan2(e2 - e1, n2 - n1) * 180 / Math.PI;
-              return ((az % 360) + 360) % 360;
-            });
-        }
-        // DISTANCE(n1, e1, n2, e2) → Pythagorean distance
-        distance(ast, state) {
-          return this.runFunction(ast.args, state, this.metadata('DISTANCE'),
-            (n1, e1, n2, e2) => Math.sqrt((n2 - n1) ** 2 + (e2 - e1) ** 2));
-        }
-        // DEG2RAD(degrees) → radians
-        deg2rad(ast, state) {
-          return this.runFunction(ast.args, state, this.metadata('DEG2RAD'),
-            deg => deg * Math.PI / 180);
-        }
-        // RAD2DEG(radians) → degrees
-        rad2deg(ast, state) {
-          return this.runFunction(ast.args, state, this.metadata('RAD2DEG'),
-            rad => rad * 180 / Math.PI);
-        }
+  // ─────────────────────────────────────────────────────────────────────────────
+  // CUSTOM SURVEYOR FUNCTIONS
+  // Evaluated in plain JavaScript AFTER HyperFormula runs — avoiding HF's plugin
+  // API entirely (which breaks under Babel standalone's class-inheritance model).
+  //
+  // Supported formulas (entire cell must be one of these calls):
+  //   =HDIST(slope_dist, zenith_deg)       horizontal distance
+  //   =VDIST(slope_dist, zenith_deg)       vertical distance
+  //   =AZIMUTH(n1, e1, n2, e2)            bearing 0-360°
+  //   =DISTANCE(n1, e1, n2, e2)           Pythagorean distance
+  //   =DEG2RAD(degrees)                   degrees → radians
+  //   =RAD2DEG(radians)                   radians → degrees
+  //
+  // Arguments can be numeric literals or simple cell references (A1, $B$3, etc.).
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  const SURVEY_FUNCS = {
+    HDIST:    (d, z) => d * Math.sin(z * Math.PI / 180),
+    VDIST:    (d, z) => d * Math.cos(z * Math.PI / 180),
+    AZIMUTH:  (n1, e1, n2, e2) => (((Math.atan2(e2 - e1, n2 - n1) * 180 / Math.PI) % 360) + 360) % 360,
+    DISTANCE: (n1, e1, n2, e2) => Math.sqrt((n2 - n1) ** 2 + (e2 - e1) ** 2),
+    DEG2RAD:  (d) => d * Math.PI / 180,
+    RAD2DEG:  (r) => r * 180 / Math.PI,
+  };
+
+  // "A" → 0, "B" → 1, "AA" → 26, etc.
+  function colLetterToIndex(letters) {
+    let n = 0;
+    for (let i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
+    return n - 1;
+  }
+
+  // Try to evaluate a single-call surveyor formula using live HF cell values.
+  // Returns a Number on success, an error string on formula error, or null when
+  // the formula is not a recognized surveyor function (so caller can fall through).
+  function evalSurveyFormula(formula, hf) {
+    if (!formula || !formula.startsWith('=')) return null;
+    // Match:  =FUNCNAME( ... )
+    const m = formula.slice(1).trim().match(/^([A-Z][A-Z0-9_]*)\s*\((.+)\)$/i);
+    if (!m) return null;
+    const fn = SURVEY_FUNCS[m[1].toUpperCase()];
+    if (!fn) return null;
+
+    // Resolve each comma-separated argument to a number
+    const args = m[2].split(',').map(raw => {
+      const s = raw.trim();
+      // Simple cell reference: A1  $B$3  a1  etc.
+      const cellM = s.match(/^\$?([A-Z]+)\$?(\d+)$/i);
+      if (cellM && hf) {
+        const v = hf.getCellValue({ sheet: 0, row: parseInt(cellM[2], 10) - 1, col: colLetterToIndex(cellM[1].toUpperCase()) });
+        if (typeof v === 'number') return v;
+        const n = parseFloat(v);
+        return isNaN(n) ? NaN : n;
       }
+      // Numeric literal (handles negatives: -1.5)
+      const n = parseFloat(s);
+      return isNaN(n) ? NaN : n;
+    });
 
-      const N = HyperFormula.FunctionArgumentType
-        ? HyperFormula.FunctionArgumentType.NUMBER
-        : 'NUMBER';
-
-      FBSurveyPlugin.implementedFunctions = {
-        'HDIST':    { method: 'hdist',    parameters: [{ argumentType: N }, { argumentType: N }] },
-        'VDIST':    { method: 'vdist',    parameters: [{ argumentType: N }, { argumentType: N }] },
-        'AZIMUTH':  { method: 'azimuth',  parameters: [{ argumentType: N }, { argumentType: N }, { argumentType: N }, { argumentType: N }] },
-        'DISTANCE': { method: 'distance', parameters: [{ argumentType: N }, { argumentType: N }, { argumentType: N }, { argumentType: N }] },
-        'DEG2RAD':  { method: 'deg2rad', parameters: [{ argumentType: N }] },
-        'RAD2DEG':  { method: 'rad2deg', parameters: [{ argumentType: N }] },
-      };
-
-      const tr = { HDIST:'HDIST', VDIST:'VDIST', AZIMUTH:'AZIMUTH', DISTANCE:'DISTANCE', DEG2RAD:'DEG2RAD', RAD2DEG:'RAD2DEG' };
-      HyperFormula.registerFunctionPlugin(FBSurveyPlugin, { enGB: tr, enUS: tr });
-      window._fbSurveyPluginRegistered = true;
-    } catch(e) {
-      console.warn('FB survey plugin registration failed — custom functions unavailable:', e);
+    if (args.some(isNaN)) return '#VALUE!';
+    try {
+      const result = fn(...args);
+      return isFinite(result) && !isNaN(result) ? result : '#DIV/0!';
+    } catch (_) {
+      return '#ERR';
     }
-  })();
+  }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // DMS NUMPAD
@@ -3070,12 +3078,25 @@
               try {
                 const val = instance.getCellValue({ sheet: 0, row: ri, col: ci });
                 const colType = col.colType || 'num';
+                const key = row.id + '_' + col.id;
+
                 if (typeof val === 'number') {
-                  results[row.id + '_' + col.id] = colType === 'dms' ? formatDMS(val) : String(Math.round(val * 1e8) / 1e8);
+                  // Normal HF result
+                  results[key] = colType === 'dms' ? formatDMS(val) : String(Math.round(val * 1e8) / 1e8);
+
                 } else if (val instanceof Error || (val && val.type)) {
-                  results[row.id + '_' + col.id] = '#ERR';
+                  // HF errored — could be our custom surveyor function → try JS evaluator
+                  const custom = evalSurveyFormula(raw, instance);
+                  if (custom !== null) {
+                    results[key] = typeof custom === 'number'
+                      ? (colType === 'dms' ? formatDMS(custom) : String(Math.round(custom * 1e8) / 1e8))
+                      : String(custom);          // propagate '#VALUE!' / '#DIV/0!' / '#ERR' strings
+                  } else {
+                    results[key] = '#ERR';
+                  }
+
                 } else {
-                  results[row.id + '_' + col.id] = String(val ?? '');
+                  results[key] = String(val ?? '');
                 }
               } catch(e) {
                 results[row.id + '_' + col.id] = '#ERR';
