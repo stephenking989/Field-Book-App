@@ -431,6 +431,26 @@
       color: rgba(255,255,255,0.28); font-size: 11px;
       padding: 3px; cursor: pointer; font-family: sans-serif;
     }
+    /* ── Fill handle (drag-down to fill/copy) ───────────────────────── */
+    .dp-fill-handle {
+      position: absolute;
+      bottom: -1px; right: -1px;
+      width: 8px; height: 8px;
+      background: #2D6A4F;
+      border: 1.5px solid white;
+      border-radius: 1px;
+      cursor: crosshair;
+      z-index: 10;
+      touch-action: none;
+      user-select: none;
+    }
+    /* Preview highlight for cells that will be filled during a handle drag */
+    .dp-cell-fill-preview {
+      background: rgba(82,183,136,0.13) !important;
+      outline: 1px dashed #52B788 !important;
+      outline-offset: -1px !important;
+    }
+
     /* ── Formula reference chips ─────────────────────────────────── */
     .dp-ref-chips {
       display: flex; flex-wrap: wrap; gap: 4px;
@@ -2923,6 +2943,25 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // FORMULA FILL — relative/absolute reference shifting for drag-fill
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Shift all *relative* row numbers in a formula string by `offset` rows.
+  // Rules match Excel:
+  //   A1   → relative col + relative row  → shift row
+  //   $A1  → absolute col + relative row  → shift row
+  //   A$1  → relative col + absolute row  → keep row
+  //   $A$1 → absolute col + absolute row  → keep row
+  function shiftFormulaDown(formula, offset) {
+    if (!formula.startsWith('=') || offset === 0) return formula;
+    return formula.replace(/(\$?)([A-Z]+)(\$?)(\d+)/g, (match, dc, col, dr, row) => {
+      if (dr === '$') return match;   // absolute row — leave untouched
+      const newRow = parseInt(row, 10) + offset;
+      return newRow < 1 ? match : dc + col + dr + newRow;
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // DMS NUMPAD
   // Full-screen bottom panel for rapid DMS entry on mobile — suppresses the
   // native OS keyboard when a DMS column cell is being edited.
@@ -3032,6 +3071,7 @@
     const [dragStartRow, setDragStartRow] = useState(null);
     const [dragOverRow,  setDragOverRow]  = useState(null);
     const [headerOpen, setHeaderOpen]       = useState(true);
+    const [fillDragRow, setFillDragRow]     = useState(null); // row index the fill handle is dragged to
     const inputRef        = useRef(null);
     const fbInputRef      = useRef(null);
     const tableRef        = useRef(null);
@@ -3040,6 +3080,7 @@
     const templateModalRef = useRef(null);
     const isDraggingSelRef = useRef(false); // true while mouse-drag cell selection is active
     const fbFocusedRef     = useRef(false); // true while formula bar input has focus
+    const fillDragRef      = useRef({ active: false, startRow: -1, startCol: -1 });
     useFocusTrap(colModalRef, !!colModal, () => setColModal(null));
     useFocusTrap(templateModalRef, templateModal, () => setTemplateModal(false));
     const toast = useToast();
@@ -3167,24 +3208,46 @@
       return pre + String(parseInt(num, 10) + 1).padStart(num.length, '0') + suf;
     }
 
-    // ── Fill active column down with auto-incremented values ──────────
+    // Apply autoIncrement n times (for filling row at offset n from the source)
+    function autoIncrementN(str, n) {
+      let val = str;
+      for (let i = 0; i < n; i++) val = autoIncrement(val);
+      return val;
+    }
+
+    // ── Core fill engine used by both toolbar button and drag handle ──────
+    // Fills rows [startRowIdx+1 … endRowIdx] in column colIdx.
+    // Formulas: relative refs shift per-row; absolute refs stay fixed.
+    // Plain values: trailing number auto-increments.
+    function performFillDown(startRowIdx, colIdx, endRowIdx) {
+      const col = columns[colIdx];
+      const startRow = rows[startRowIdx];
+      if (!col || !startRow) return;
+      const startVal = (startRow.cells || {})[col.id] || '';
+      if (!startVal.trim()) { toast.error('Starting cell is empty'); return; }
+      const isFormula = startVal.startsWith('=');
+      const count = endRowIdx - startRowIdx;
+      const updated = rows.map((r, idx) => {
+        if (idx <= startRowIdx || idx > endRowIdx) return r;
+        const offset = idx - startRowIdx;
+        const newVal = isFormula
+          ? shiftFormulaDown(startVal, offset)
+          : autoIncrementN(startVal, offset);
+        return { ...r, cells: { ...r.cells, [col.id]: newVal } };
+      });
+      persistRows(updated);
+      // Highlight the filled range so the user sees what was filled
+      setSelectionAnchor({ rowIdx: startRowIdx, colIdx });
+      setActiveCell({ rowIdx: endRowIdx, colIdx });
+      toast.success(`Filled ${count} cell${count !== 1 ? 's' : ''}`);
+    }
+
+    // ── Toolbar "Fill ↓" — fills from active cell to last row ────────────
     function fillDown() {
       if (!activeCell) { toast.error('Select a starting cell first'); return; }
       const { rowIdx: ri, colIdx: ci } = activeCell;
-      const col = columns[ci];
-      const startRow = rows[ri];
-      if (!startRow || !col) return;
-      const startVal = (startRow.cells || {})[col.id] || '';
-      if (!startVal.trim()) { toast.error('Starting cell is empty'); return; }
       if (ri >= rows.length - 1) { toast.error('No rows below to fill'); return; }
-      const updated = rows.map((r, idx) => {
-        if (idx <= ri) return r;
-        let val = startVal;
-        for (let i = 0; i < idx - ri; i++) val = autoIncrement(val);
-        return { ...r, cells: { ...r.cells, [col.id]: val } };
-      });
-      persistRows(updated);
-      toast.success(`Filled ${rows.length - ri - 1} cell${rows.length - ri - 1 !== 1 ? 's' : ''} down`);
+      performFillDown(ri, ci, rows.length - 1);
     }
 
     // ── Cycle cell-reference type at cursor position (F4 behaviour) ───
@@ -3986,7 +4049,7 @@
                 </tr>
               )}
               {rows.map((row, ri) => (
-                <tr key={row.id}>
+                <tr key={row.id} data-row-idx={ri}>
                   {/* Row number — draggable to reorder */}
                   <td className={`dp-row-num${activeCell && activeCell.rowIdx === ri ? ' active-row' : ''}${dragOverRow === ri && dragStartRow !== ri ? ' dp-drag-over-row' : ''}`}
                     draggable={true}
@@ -4005,11 +4068,17 @@
                     const { text, isFormula, isDMS, isError } = displayValue(row, col);
                     const myCellRef = cellRef(ri, ci);
                     const refColor = refColorMap[myCellRef] || null;
+                    // Fill preview: cells in the active column between active row and drag target
+                    const isFillPreview = fillDragRow !== null &&
+                      activeCell && ci === activeCell.colIdx &&
+                      ri > activeCell.rowIdx && ri <= fillDragRow;
                     return (
                       <td key={col.id}
-                        className={`${isActive ? 'dp-cell-active' : inSel ? 'dp-cell-selected' : ''}`}
+                        className={`${isActive ? 'dp-cell-active' : isFillPreview ? 'dp-cell-fill-preview' : inSel ? 'dp-cell-selected' : ''}`}
                         style={{
                           width: colWidth(col), minWidth: colWidth(col),
+                          // Always relative when active (needed to anchor the fill handle)
+                          ...(isActive ? { position: 'relative' } : {}),
                           // Colour-coded border when this cell is referenced by the formula being edited
                           ...(refColor ? { outline: `2px solid ${refColor}`, outlineOffset: '-1px', zIndex: 1, position: 'relative' } : {}),
                         }}
@@ -4073,6 +4142,43 @@
                             onDoubleClick={() => startEdit(ri, ci)}>
                             {text}
                           </span>
+                        )}
+                        {/* ── Fill handle — only on active non-editing cell ── */}
+                        {isActive && !isEditing && (
+                          <div
+                            className="dp-fill-handle"
+                            title="Drag down to fill · formulas shift relative refs automatically"
+                            onPointerDown={e => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              fillDragRef.current = { active: true, startRow: ri, startCol: ci };
+                              setFillDragRow(ri);
+                              e.currentTarget.setPointerCapture(e.pointerId);
+                            }}
+                            onPointerMove={e => {
+                              if (!fillDragRef.current.active) return;
+                              // elementFromPoint works regardless of pointer capture
+                              const el = document.elementFromPoint(e.clientX, e.clientY);
+                              const tr = el?.closest('tr[data-row-idx]');
+                              if (tr) {
+                                const idx = parseInt(tr.getAttribute('data-row-idx'), 10);
+                                if (!isNaN(idx)) {
+                                  setFillDragRow(Math.max(idx, fillDragRef.current.startRow));
+                                }
+                              }
+                            }}
+                            onPointerUp={e => {
+                              if (!fillDragRef.current.active) return;
+                              e.currentTarget.releasePointerCapture(e.pointerId);
+                              const { startRow, startCol } = fillDragRef.current;
+                              fillDragRef.current = { active: false, startRow: -1, startCol: -1 };
+                              const endRow = fillDragRow;
+                              setFillDragRow(null);
+                              if (endRow !== null && endRow > startRow) {
+                                performFillDown(startRow, startCol, endRow);
+                              }
+                            }}
+                          />
                         )}
                       </td>
                     );
