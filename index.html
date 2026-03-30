@@ -2755,6 +2755,7 @@
   //   d/m/s words:    45d34m23s  or  45d 34m 23s  (also handles voice "45 degrees 34 minutes")
   //   Space-sep:      45 34 23   or  45 34         (D M S or D M)
   //   Dash-sep:       45-34-23   or  45-34         (D-M-S, common in voice transcription)
+  //   Colon-sep:      45:34:23   or  45:34         (D:M:S — Excel clipboard round-trip format)
   //   DD.MMSS:        45.3423  → 45°34'23"         (exactly 4 decimal digits, valid MM < 60 and SS < 60)
   //   Plain decimal:  45.5722  → 45.5722°          (fallback when not valid DD.MMSS)
   //   Unicode quotes: handles ' " ′ ″ ' ' " " variants from voice/paste
@@ -2803,6 +2804,17 @@
     const dm = abs.match(dashRe);
     if (dm) {
       const d = parseInt(dm[1], 10), m = parseInt(dm[2], 10), sec = dm[3] ? parseFloat(dm[3]) : 0;
+      if (m >= 60 || sec >= 60) return null;
+      return sign * (d + m / 60 + sec / 3600);
+    }
+
+    // ── Colon-separated: "45:34:23" or "45:34" ────────────────────────
+    // This is the format produced by formatDMSColon() for the Excel clipboard export,
+    // so values copied out of the app paste back in cleanly (round-trip).
+    const colonRe = /^(\d+):(\d+)(?::(\d+(?:\.\d+)?))?$/;
+    const coM = abs.match(colonRe);
+    if (coM) {
+      const d = parseInt(coM[1], 10), m = parseInt(coM[2], 10), sec = coM[3] ? parseFloat(coM[3]) : 0;
       if (m >= 60 || sec >= 60) return null;
       return sign * (d + m / 60 + sec / 3600);
     }
