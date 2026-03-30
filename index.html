@@ -358,6 +358,89 @@
       padding: 1px 0;
     }
 
+    /* ── DMS Numpad ──────────────────────────────────────────────── */
+    .dp-numpad {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      background: #1C3829;
+      border-top: 2px solid #2D6A4F;
+      padding: 8px 8px max(20px, env(safe-area-inset-bottom));
+      z-index: 9980;
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.42);
+    }
+    .dp-numpad-preview {
+      font-family: 'Courier New', monospace;
+      font-size: 18px;
+      color: #D8F3DC;
+      text-align: right;
+      padding: 3px 12px;
+      margin-bottom: 6px;
+      background: rgba(0,0,0,0.28);
+      border-radius: 7px;
+      min-height: 34px;
+      line-height: 34px;
+      letter-spacing: 0.04em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .dp-numpad-preview.empty { color: rgba(216,243,220,0.3); }
+    .dp-numpad-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 5px;
+      margin-bottom: 5px;
+    }
+    .dp-numpad-btn {
+      height: 54px;
+      border: none;
+      border-radius: 10px;
+      font-family: 'Courier New', monospace;
+      font-weight: 700;
+      color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      user-select: none;
+    }
+    .dp-numpad-btn:active { opacity: 0.65; }
+    .dp-numpad-btn.digit   { background: rgba(255,255,255,0.10); font-size: 20px; }
+    .dp-numpad-btn.sym     { background: #2D6A4F; font-size: 17px; }
+    .dp-numpad-btn.special { background: rgba(255,255,255,0.06); font-size: 15px; }
+    .dp-numpad-btn.del     { background: rgba(127,29,29,0.7); font-size: 18px; }
+    .dp-numpad-btn.confirm { background: #52B788; font-size: 17px; }
+    .dp-numpad-space {
+      width: 100%; height: 46px;
+      border: none; border-radius: 10px;
+      background: rgba(255,255,255,0.07);
+      color: rgba(255,255,255,0.55);
+      font-size: 13px; letter-spacing: 0.12em;
+      cursor: pointer; font-family: 'Courier New', monospace;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation; user-select: none;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 4px;
+    }
+    .dp-numpad-space:active { opacity: 0.6; }
+    .dp-numpad-dismiss {
+      display: block; width: 100%;
+      background: transparent; border: none;
+      color: rgba(255,255,255,0.28); font-size: 11px;
+      padding: 3px; cursor: pointer; font-family: sans-serif;
+    }
+    /* ── Formula reference chips ─────────────────────────────────── */
+    .dp-ref-chips {
+      display: flex; flex-wrap: wrap; gap: 4px;
+      padding: 3px 8px 3px;
+      background: #EDE8DF;
+      border-bottom: 1px solid #DDD6C8;
+      flex-shrink: 0;
+      min-height: 24px; align-items: center;
+    }
+
     /* ── Layout shell ─────────────────────────────────────────── */
     .notebook-binding-bar { display: none; }
     .notebook-frame {
@@ -2647,34 +2730,80 @@
   //   "45 34"           → 45°34'00"
   //   "45"              → 45°00'00"
   //   "45.5"            → treated as decimal degrees (no spaces)
-  //   "45°34'23""       → classical DMS notation
-  //   "-45 34 23"       → negative (south / west bearings)
+  // Supported input formats (all accept a leading "-" for south/west):
+  //   Classical:      45°34'23"  or  45°34'23.5"  (° ' " with optional spaces)
+  //   d/m/s words:    45d34m23s  or  45d 34m 23s  (also handles voice "45 degrees 34 minutes")
+  //   Space-sep:      45 34 23   or  45 34         (D M S or D M)
+  //   Dash-sep:       45-34-23   or  45-34         (D-M-S, common in voice transcription)
+  //   DD.MMSS:        45.3423  → 45°34'23"         (exactly 4 decimal digits, valid MM < 60 and SS < 60)
+  //   Plain decimal:  45.5722  → 45.5722°          (fallback when not valid DD.MMSS)
+  //   Unicode quotes: handles ' " ′ ″ ' ' " " variants from voice/paste
   // Returns decimal degrees (number) or null if unparseable.
   function parseDMSInput(raw) {
     if (!raw || !raw.trim()) return null;
     const s = raw.trim();
-    // Already a plain decimal number (no spaces, no degree symbol)
-    if (/^-?\d+(\.\d+)?$/.test(s)) return parseFloat(s);
-    // Space-separated: "D M S" or "D M" or just "D"
-    const spaceMatch = s.match(/^(-?)(\d+)\s+(\d+)(?:\s+(\d+(?:\.\d+)?))?$/);
-    if (spaceMatch) {
-      const sign = spaceMatch[1] === '-' ? -1 : 1;
-      const d = parseInt(spaceMatch[2], 10);
-      const m = parseInt(spaceMatch[3], 10);
-      const sec = spaceMatch[4] ? parseFloat(spaceMatch[4]) : 0;
+
+    // Strip sign, work with absolute value, reapply at end
+    const neg = s.charAt(0) === '-';
+    const abs = neg ? s.slice(1).trimStart() : s;
+    const sign = neg ? -1 : 1;
+
+    // ── Classical notation: 45°34'23" / 45d34m23s / 45d 34m 23s ──────
+    // Degree sep: °  d  (case-insensitive d)
+    // Minute sep: '  ′  '  '  m
+    // Second sep: "  ″  "  "  s  (optional at end)
+    const classicRe = /^(\d+)\s*[°dD]\s*(\d+)\s*['''′m]\s*(\d+(?:\.\d+)?)\s*["""″sS]?$/;
+    const cm = abs.match(classicRe);
+    if (cm) {
+      const d = parseInt(cm[1], 10), m = parseInt(cm[2], 10), sec = parseFloat(cm[3]);
       if (m >= 60 || sec >= 60) return null;
       return sign * (d + m / 60 + sec / 3600);
     }
-    // Classical notation: 45°34'23" or 45d34m23s etc.
-    const classicMatch = s.match(/^(-?)(\d+)[°d]\s*(\d+)['\'m]\s*(\d+(?:\.\d+)?)["\"s]?$/);
-    if (classicMatch) {
-      const sign = classicMatch[1] === '-' ? -1 : 1;
-      const d = parseInt(classicMatch[2], 10);
-      const m = parseInt(classicMatch[3], 10);
-      const sec = parseFloat(classicMatch[4]);
+
+    // ── Voice variant: "45 degrees 34 minutes 23 seconds" ─────────────
+    const wordsRe = /^(\d+)\s+degrees?\s+(\d+)\s+minutes?\s+(\d+(?:\.\d+)?)\s+seconds?$/i;
+    const wm = abs.match(wordsRe);
+    if (wm) {
+      const d = parseInt(wm[1], 10), m = parseInt(wm[2], 10), sec = parseFloat(wm[3]);
       if (m >= 60 || sec >= 60) return null;
       return sign * (d + m / 60 + sec / 3600);
     }
+
+    // ── Space-separated: "45 34 23" or "45 34" ────────────────────────
+    const spaceRe = /^(\d+)\s+(\d+)(?:\s+(\d+(?:\.\d+)?))?$/;
+    const sm = abs.match(spaceRe);
+    if (sm) {
+      const d = parseInt(sm[1], 10), m = parseInt(sm[2], 10), sec = sm[3] ? parseFloat(sm[3]) : 0;
+      if (m >= 60 || sec >= 60) return null;
+      return sign * (d + m / 60 + sec / 3600);
+    }
+
+    // ── Dash-separated: "45-34-23" or "45-34" ─────────────────────────
+    const dashRe = /^(\d+)-(\d+)(?:-(\d+(?:\.\d+)?))?$/;
+    const dm = abs.match(dashRe);
+    if (dm) {
+      const d = parseInt(dm[1], 10), m = parseInt(dm[2], 10), sec = dm[3] ? parseFloat(dm[3]) : 0;
+      if (m >= 60 || sec >= 60) return null;
+      return sign * (d + m / 60 + sec / 3600);
+    }
+
+    // ── DD.MMSS shorthand: exactly 4 decimal digits, MM < 60, SS < 60 ─
+    // e.g. 45.3423 → 45°34'23"   127.1505 → 127°15'05"
+    // Ambiguous with decimal degrees, but in a DMS column this is the intended interpretation.
+    const shortRe = /^(\d+)\.(\d{4})$/;
+    const shm = abs.match(shortRe);
+    if (shm) {
+      const d  = parseInt(shm[1], 10);
+      const mm = parseInt(shm[2].slice(0, 2), 10);
+      const ss = parseInt(shm[2].slice(2), 10);
+      if (mm < 60 && ss < 60) return sign * (d + mm / 60 + ss / 3600);
+      // Falls through to plain decimal if MM or SS are out of range
+    }
+
+    // ── Plain decimal degrees (final fallback) ─────────────────────────
+    const plain = parseFloat(abs);
+    if (!isNaN(plain)) return sign * plain;
+
     return null;
   }
 
@@ -2721,6 +2850,137 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // HYPERFORMULA SURVEY PLUGIN
+  // Registers custom surveyor functions once, before any HF instance is created.
+  // Safe to call multiple times — guarded by window._fbSurveyPluginRegistered.
+  // ─────────────────────────────────────────────────────────────────────────────
+  (function registerFBSurveyPlugin() {
+    if (typeof HyperFormula === 'undefined' || window._fbSurveyPluginRegistered) return;
+    try {
+      class FBSurveyPlugin extends HyperFormula.FunctionPluginType {
+        // HDIST(slope_dist, zenith_angle_deg) → horizontal distance
+        hdist(ast, state) {
+          return this.runFunction(ast.args, state, this.metadata('HDIST'),
+            (dist, zenith) => dist * Math.sin(zenith * Math.PI / 180));
+        }
+        // VDIST(slope_dist, zenith_angle_deg) → vertical distance
+        vdist(ast, state) {
+          return this.runFunction(ast.args, state, this.metadata('VDIST'),
+            (dist, zenith) => dist * Math.cos(zenith * Math.PI / 180));
+        }
+        // AZIMUTH(n1, e1, n2, e2) → azimuth in degrees [0, 360)
+        azimuth(ast, state) {
+          return this.runFunction(ast.args, state, this.metadata('AZIMUTH'),
+            (n1, e1, n2, e2) => {
+              const az = Math.atan2(e2 - e1, n2 - n1) * 180 / Math.PI;
+              return ((az % 360) + 360) % 360;
+            });
+        }
+        // DISTANCE(n1, e1, n2, e2) → Pythagorean distance
+        distance(ast, state) {
+          return this.runFunction(ast.args, state, this.metadata('DISTANCE'),
+            (n1, e1, n2, e2) => Math.sqrt((n2 - n1) ** 2 + (e2 - e1) ** 2));
+        }
+        // DEG2RAD(degrees) → radians
+        deg2rad(ast, state) {
+          return this.runFunction(ast.args, state, this.metadata('DEG2RAD'),
+            deg => deg * Math.PI / 180);
+        }
+        // RAD2DEG(radians) → degrees
+        rad2deg(ast, state) {
+          return this.runFunction(ast.args, state, this.metadata('RAD2DEG'),
+            rad => rad * 180 / Math.PI);
+        }
+      }
+
+      const N = HyperFormula.FunctionArgumentType
+        ? HyperFormula.FunctionArgumentType.NUMBER
+        : 'NUMBER';
+
+      FBSurveyPlugin.implementedFunctions = {
+        'HDIST':    { method: 'hdist',    parameters: [{ argumentType: N }, { argumentType: N }] },
+        'VDIST':    { method: 'vdist',    parameters: [{ argumentType: N }, { argumentType: N }] },
+        'AZIMUTH':  { method: 'azimuth',  parameters: [{ argumentType: N }, { argumentType: N }, { argumentType: N }, { argumentType: N }] },
+        'DISTANCE': { method: 'distance', parameters: [{ argumentType: N }, { argumentType: N }, { argumentType: N }, { argumentType: N }] },
+        'DEG2RAD':  { method: 'deg2rad', parameters: [{ argumentType: N }] },
+        'RAD2DEG':  { method: 'rad2deg', parameters: [{ argumentType: N }] },
+      };
+
+      const tr = { HDIST:'HDIST', VDIST:'VDIST', AZIMUTH:'AZIMUTH', DISTANCE:'DISTANCE', DEG2RAD:'DEG2RAD', RAD2DEG:'RAD2DEG' };
+      HyperFormula.registerFunctionPlugin(FBSurveyPlugin, { enGB: tr, enUS: tr });
+      window._fbSurveyPluginRegistered = true;
+    } catch(e) {
+      console.warn('FB survey plugin registration failed — custom functions unavailable:', e);
+    }
+  })();
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // DMS NUMPAD
+  // Full-screen bottom panel for rapid DMS entry on mobile — suppresses the
+  // native OS keyboard when a DMS column cell is being edited.
+  // ─────────────────────────────────────────────────────────────────────────────
+  function DmsNumpad({ value, onChange, onCommit, onDismiss }) {
+    // Top row: digits + DMS symbols. Bottom: wide space bar.
+    const rows = [
+      [
+        { label: '7', cls: 'digit' }, { label: '8', cls: 'digit' },
+        { label: '9', cls: 'digit' }, { label: '°', cls: 'sym' },
+      ],
+      [
+        { label: '4', cls: 'digit' }, { label: '5', cls: 'digit' },
+        { label: '6', cls: 'digit' }, { label: "'", cls: 'sym' },
+      ],
+      [
+        { label: '1', cls: 'digit' }, { label: '2', cls: 'digit' },
+        { label: '3', cls: 'digit' }, { label: '"', cls: 'sym' },
+      ],
+      [
+        { label: '±', cls: 'special' }, { label: '0', cls: 'digit' },
+        { label: '⌫', cls: 'del' },    { label: '✓', cls: 'confirm' },
+      ],
+    ];
+
+    function tap(key) {
+      if (key === '⌫') { onChange(value.slice(0, -1)); return; }
+      if (key === '✓') { onCommit(); return; }
+      if (key === '±') {
+        onChange(value.startsWith('-') ? value.slice(1) : '-' + value);
+        return;
+      }
+      onChange(value + key);
+    }
+
+    const isEmpty = !value || !value.trim();
+
+    return (
+      <div className="dp-numpad">
+        {/* Value preview */}
+        <div className={`dp-numpad-preview${isEmpty ? ' empty' : ''}`}>
+          {isEmpty ? '0' : value}
+        </div>
+        {/* Main key grid */}
+        <div className="dp-numpad-grid">
+          {rows.flat().map((k, i) => (
+            <button key={i} className={`dp-numpad-btn ${k.cls}`}
+              onPointerDown={e => { e.preventDefault(); tap(k.label); }}>
+              {k.label}
+            </button>
+          ))}
+        </div>
+        {/* Wide space bar */}
+        <button className="dp-numpad-space"
+          onPointerDown={e => { e.preventDefault(); onChange(value + ' '); }}>
+          SPACE
+        </button>
+        <button className="dp-numpad-dismiss"
+          onPointerDown={e => { e.preventDefault(); onDismiss(); }}>
+          dismiss keyboard
+        </button>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // HYPERFORMULA ENGINE  — one instance per DataPage mount
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2763,13 +3023,15 @@
     const [dragOverCol,  setDragOverCol]  = useState(null);
     const [dragStartRow, setDragStartRow] = useState(null);
     const [dragOverRow,  setDragOverRow]  = useState(null);
-    const inputRef  = useRef(null);
-    const fbInputRef = useRef(null);
-    const tableRef   = useRef(null);
+    const [headerOpen, setHeaderOpen]       = useState(true);
+    const inputRef        = useRef(null);
+    const fbInputRef      = useRef(null);
+    const tableRef        = useRef(null);
     const pdfContainerRef = useRef(null);
-    const colModalRef = useRef(null);
+    const colModalRef     = useRef(null);
     const templateModalRef = useRef(null);
     const isDraggingSelRef = useRef(false); // true while mouse-drag cell selection is active
+    const fbFocusedRef     = useRef(false); // true while formula bar input has focus
     useFocusTrap(colModalRef, !!colModal, () => setColModal(null));
     useFocusTrap(templateModalRef, templateModal, () => setTemplateModal(false));
     const toast = useToast();
@@ -2876,6 +3138,58 @@
 
     function cellRef(ri, ci) { return colLetter(ci) + (ri + 1); }
 
+    // ── Auto-increment: "BM-1" → "BM-2", "TP3" → "TP4", "100" → "101" ──
+    function autoIncrement(str) {
+      const m = str.match(/^(.*?)(\d+)(\D*)$/);
+      if (!m) return str;
+      const [, pre, num, suf] = m;
+      return pre + String(parseInt(num, 10) + 1).padStart(num.length, '0') + suf;
+    }
+
+    // ── Fill active column down with auto-incremented values ──────────
+    function fillDown() {
+      if (!activeCell) { toast.error('Select a starting cell first'); return; }
+      const { rowIdx: ri, colIdx: ci } = activeCell;
+      const col = columns[ci];
+      const startRow = rows[ri];
+      if (!startRow || !col) return;
+      const startVal = (startRow.cells || {})[col.id] || '';
+      if (!startVal.trim()) { toast.error('Starting cell is empty'); return; }
+      if (ri >= rows.length - 1) { toast.error('No rows below to fill'); return; }
+      const updated = rows.map((r, idx) => {
+        if (idx <= ri) return r;
+        let val = startVal;
+        for (let i = 0; i < idx - ri; i++) val = autoIncrement(val);
+        return { ...r, cells: { ...r.cells, [col.id]: val } };
+      });
+      persistRows(updated);
+      toast.success(`Filled ${rows.length - ri - 1} cell${rows.length - ri - 1 !== 1 ? 's' : ''} down`);
+    }
+
+    // ── Cycle cell-reference type at cursor position (F4 behaviour) ───
+    // A1 → $A$1 → A$1 → $A1 → A1
+    function cycleFormulaRef(formula, cursor, callback) {
+      if (!formula.startsWith('=')) return;
+      const refRe = /(\$?)([A-Z]+)(\$?)(\d+)/g;
+      let best = null, bestDist = Infinity, match;
+      while ((match = refRe.exec(formula)) !== null) {
+        const s = match.index, e2 = match.index + match[0].length;
+        const dist = Math.min(Math.abs(cursor - s), Math.abs(cursor - e2));
+        if (dist < bestDist) { bestDist = dist; best = { match, start: s, end: e2 }; }
+      }
+      if (!best) return;
+      const { match: m, start, end } = best;
+      const [, dc, col2, dr, row2] = m;
+      const hasDC = dc === '$', hasDR = dr === '$';
+      let nc, nr;
+      if (!hasDC && !hasDR)    { nc = '$'; nr = '$'; }
+      else if (hasDC && hasDR) { nc = '';  nr = '$'; }
+      else if (!hasDC && hasDR){ nc = '$'; nr = '';  }
+      else                     { nc = '';  nr = '';  }
+      const newRef = nc + col2 + nr + row2;
+      callback(formula.slice(0, start) + newRef + formula.slice(end), start + newRef.length);
+    }
+
     function getSelectionBounds() {
       if (!activeCell) return null;
       const anchor = selectionAnchor || activeCell;
@@ -2931,7 +3245,6 @@
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
         commitEdit(ri, ci, editValue);
-        // Move to next cell
         if (e.key === 'Tab') {
           const nextCi = e.shiftKey ? ci - 1 : ci + 1;
           if (nextCi >= 0 && nextCi < columns.length) { activateCell(ri, nextCi); startEdit(ri, nextCi); }
@@ -2942,6 +3255,20 @@
       } else if (e.key === 'Escape') {
         setEditingCell(null);
         setEditValue('');
+      } else if (e.key === 'F4') {
+        e.preventDefault();
+        if (!editValue.startsWith('=')) return;
+        const cursor = inputRef.current?.selectionStart ?? editValue.length;
+        cycleFormulaRef(editValue, cursor, (newVal, newCursor) => {
+          setEditValue(newVal);
+          setFormulaBarVal(newVal);
+          requestAnimationFrame(() => {
+            if (inputRef.current) {
+              inputRef.current.focus();
+              inputRef.current.setSelectionRange(newCursor, newCursor);
+            }
+          });
+        });
       }
     }
 
@@ -3106,12 +3433,35 @@
     function handleFormulaBarCommit(e) {
       if (e.key === 'Enter' && activeCell) {
         const { rowIdx: ri, colIdx: ci } = activeCell;
-        const row = rows[ri];
-        const col = columns[ci];
+        const row = rows[ri]; const col = columns[ci];
         if (row && col) {
           updateCell(row.id, col.id, formulaBarVal.trim());
           setEditingCell(null);
+          fbInputRef.current?.blur();
         }
+      } else if (e.key === 'Escape') {
+        // Revert to saved value
+        if (activeCell) {
+          const row = rows[activeCell.rowIdx]; const col = columns[activeCell.colIdx];
+          const orig = row && col ? ((row.cells || {})[col.id] || '') : '';
+          setFormulaBarVal(orig);
+          setEditValue(orig);
+        }
+        setEditingCell(null);
+        fbInputRef.current?.blur();
+      } else if (e.key === 'F4') {
+        e.preventDefault();
+        const cursor = fbInputRef.current?.selectionStart ?? formulaBarVal.length;
+        cycleFormulaRef(formulaBarVal, cursor, (newVal, newCursor) => {
+          setFormulaBarVal(newVal);
+          setEditValue(newVal);
+          requestAnimationFrame(() => {
+            if (fbInputRef.current) {
+              fbInputRef.current.focus();
+              fbInputRef.current.setSelectionRange(newCursor, newCursor);
+            }
+          });
+        });
       }
     }
 
@@ -3409,6 +3759,29 @@
       }
     }
 
+    // ── Formula reference highlighting (derived) ──────────────────────
+    const REF_COLORS = ['#e63946','#1d6fa0','#2a9d8f','#c77d1a','#8338ec','#3a86ff','#fb5607'];
+
+    const isFormulaEditing =
+      (editingCell !== null && editValue.startsWith('=')) ||
+      (activeCell !== null && formulaBarVal.startsWith('=') && fbFocusedRef.current);
+
+    const _activeFormula = isFormulaEditing
+      ? (editingCell !== null ? editValue : formulaBarVal)
+      : '';
+
+    const formulaRefs = isFormulaEditing
+      ? [...new Set((_activeFormula.match(/\$?[A-Z]+\$?\d+/g) || []).map(r => r.replace(/\$/g, '')))]
+      : [];
+
+    const refColorMap = Object.fromEntries(
+      formulaRefs.map((ref, i) => [ref, REF_COLORS[i % REF_COLORS.length]])
+    );
+
+    // ── DMS numpad visibility ─────────────────────────────────────────
+    const isDMSCell = editingCell !== null &&
+      (columns[editingCell.colIdx]?.colType || 'num') === 'dms';
+
     if (columns.length === 0) {
       return (
         <div className="page-ruled flex flex-col items-center justify-center py-16 px-6 text-center">
@@ -3424,7 +3797,31 @@
 
     return (
       <div ref={pdfContainerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
+
+        {/* ── Page header — collapsible ── */}
+        {headerOpen && <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />}
+        <button
+          onClick={() => setHeaderOpen(o => !o)}
+          style={{
+            flexShrink: 0, height: 20, display: 'flex', alignItems: 'center',
+            justifyContent: 'space-between', padding: '0 10px',
+            background: 'rgba(245,242,235,0.96)',
+            borderBottom: '1px solid rgba(180,160,110,0.25)',
+            cursor: 'pointer', outline: 'none', border: 'none', width: '100%',
+          }}>
+          <span style={{
+            fontSize: 9.5, fontFamily: 'Courier New, monospace',
+            color: 'rgba(60,50,30,0.65)', letterSpacing: '0.03em',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {page.pageNumber ? `Pg ${page.pageNumber}` : ''}
+            {page.pageNumber && page.title ? ' · ' : ''}
+            {page.title || (headerOpen ? '' : 'tap to show page info')}
+          </span>
+          <span style={{ fontSize: 9, color: 'rgba(60,50,30,0.4)', flexShrink: 0, marginLeft: 6 }}>
+            {headerOpen ? '▲' : '▼'}
+          </span>
+        </button>
 
         {/* ── Toolbar ── */}
         <div className="dp-toolbar">
@@ -3473,6 +3870,12 @@
             startEdit(ri, ci);
           }} title="Insert difference formula (row above minus 2 rows above)">Δ DIFF</button>
           <div className="dp-tb-sep" />
+          <span className="dp-tb-label">Fill:</span>
+          <button onClick={fillDown}
+            title="Auto-increment active cell value down through all rows below (BM-1 → BM-2 → BM-3…)">
+            Fill ↓
+          </button>
+          <div className="dp-tb-sep" />
           <span className="dp-tb-label">Export:</span>
           <button onClick={exportCSV} title="Export table to CSV (DMS columns export as decimal degrees)">CSV</button>
           <button onClick={exportPDF} title="Export page to PDF">PDF</button>
@@ -3493,11 +3896,32 @@
                 if (row && col) setEditValue(e.target.value);
               }
             }}
+            onFocus={() => { fbFocusedRef.current = true; }}
+            onBlur={() => { fbFocusedRef.current = false; }}
             onKeyDown={handleFormulaBarCommit}
-            placeholder="Select a cell to view or edit its value..."
+            placeholder="Select a cell to view or edit its value…  (F4 cycles $A$1 reference types)"
             spellCheck={false}
+            style={{ background: isFormulaEditing ? 'rgba(45,106,79,0.05)' : 'transparent' }}
           />
         </div>
+        {/* ── Ref chips — colour-coded cell references in current formula ── */}
+        {formulaRefs.length > 0 && (
+          <div className="dp-ref-chips">
+            {formulaRefs.map(ref => (
+              <span key={ref} style={{
+                padding: '1px 6px', borderRadius: 4, fontSize: 9.5,
+                fontFamily: 'Courier New, monospace', fontWeight: 700,
+                background: refColorMap[ref] + '22',
+                color: refColorMap[ref],
+                border: `1px solid ${refColorMap[ref]}60`,
+                lineHeight: '16px',
+              }}>{ref}</span>
+            ))}
+            <span style={{ fontSize: 9, color: '#9CA3AF', marginLeft: 2 }}>
+              tap a cell to insert ref
+            </span>
+          </div>
+        )}
 
         {/* ── Table ── */}
         <div ref={tableRef} tabIndex={0} onKeyDown={handleGridKeyDown}
@@ -3519,6 +3943,9 @@
                     onDragEnd={handleColDragEnd}
                     onDragLeave={() => { if (dragOverCol === ci) setDragOverCol(null); }}
                     title="Drag to reorder · Tap to edit settings">
+                    <span style={{ fontSize: 7.5, color: 'rgba(156,163,175,0.6)', fontFamily: 'Courier New', marginRight: 3 }}>
+                      {colLetter(ci)}
+                    </span>
                     {col.label}
                     <span className={`dp-col-type-badge dp-col-type-${col.colType || 'num'}`}>
                       {typeLabels[col.colType || 'num']}
@@ -3555,15 +3982,40 @@
                     const isEditing = editingCell && editingCell.rowIdx === ri && editingCell.colIdx === ci;
                     const inSel = isInRange(ri, ci);
                     const { text, isFormula, isDMS, isError } = displayValue(row, col);
+                    const myCellRef = cellRef(ri, ci);
+                    const refColor = refColorMap[myCellRef] || null;
                     return (
                       <td key={col.id}
                         className={`${isActive ? 'dp-cell-active' : inSel ? 'dp-cell-selected' : ''}`}
-                        style={{ width: colWidth(col), minWidth: colWidth(col) }}
+                        style={{
+                          width: colWidth(col), minWidth: colWidth(col),
+                          // Colour-coded border when this cell is referenced by the formula being edited
+                          ...(refColor ? { outline: `2px solid ${refColor}`, outlineOffset: '-1px', zIndex: 1, position: 'relative' } : {}),
+                        }}
                         onPointerDown={e => {
                           if (e.button !== 0) return;
+
+                          // ── Point-to-select: insert cell ref into formula being edited ──
+                          if (isFormulaEditing) {
+                            e.preventDefault(); // keeps focus on the edit input
+                            const ref = myCellRef;
+                            if (editingCell !== null) {
+                              const newVal = editValue + ref;
+                              setEditValue(newVal);
+                              setFormulaBarVal(newVal);
+                              requestAnimationFrame(() => inputRef.current?.focus());
+                            } else {
+                              // Editing from formula bar
+                              const newVal = formulaBarVal + ref;
+                              setFormulaBarVal(newVal);
+                              setEditValue(newVal);
+                              requestAnimationFrame(() => fbInputRef.current?.focus());
+                            }
+                            return;
+                          }
+
                           isDraggingSelRef.current = true;
                           if (e.shiftKey && activeCell) {
-                            // Extend selection from current anchor to clicked cell
                             if (!selectionAnchor) setSelectionAnchor(activeCell);
                             setActiveCell({ rowIdx: ri, colIdx: ci });
                             const row2 = rows[ri], col2 = columns[ci];
@@ -3582,6 +4034,7 @@
                           <input
                             ref={inputRef}
                             type="text"
+                            inputMode={isDMSCell ? 'none' : 'text'}
                             value={editValue}
                             onChange={e => { setEditValue(e.target.value); setFormulaBarVal(e.target.value); }}
                             onBlur={() => commitEdit(ri, ci, editValue)}
@@ -3660,6 +4113,19 @@
           <span className="ml-auto text-fb-muted" style={{ fontSize: 10 }}>Shift+click/arrow to select range · Ctrl+C/V · Del clears · drag # to reorder</span>
         </div>
 
+        {/* ── DMS Numpad — shown when editing a DMS column cell ── */}
+        {isDMSCell && (
+          <DmsNumpad
+            value={editValue}
+            onChange={newVal => { setEditValue(newVal); setFormulaBarVal(newVal); }}
+            onCommit={() => {
+              const { rowIdx: ri, colIdx: ci } = editingCell;
+              commitEdit(ri, ci, editValue);
+            }}
+            onDismiss={() => { setEditingCell(null); setEditValue(''); }}
+          />
+        )}
+
         {/* ── Column settings modal ── */}
         {colModal && (
           <div className="modal-backdrop" onClick={() => setColModal(null)}>
@@ -3673,6 +4139,7 @@
                     onChange={e => setColModalForm(f => ({ ...f, label: e.target.value }))}
                     autoFocus maxLength={20}
                     className="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 focus:border-fb-mid outline-none text-fb-text text-sm font-data"
+                    onFocus={e => e.target.select()}
                     onKeyDown={e => e.key === 'Enter' && saveColModal()}
                   />
                 </div>
