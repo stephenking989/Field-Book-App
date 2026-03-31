@@ -3408,36 +3408,8 @@
         return;
       }
 
-      // ── Ctrl+V / Cmd+V ── Paste TSV, auto-grow rows if needed
-      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
-        e.preventDefault();
-        navigator.clipboard.readText().then(text => {
-          if (!text) return;
-          const lines = text.trimEnd().split('\n').map(l => l.split('\t'));
-          const startR = ri, startC = ci;
-          let updatedRows = [...rows];
-          const needed = startR + lines.length - updatedRows.length;
-          if (needed > 0) {
-            for (let i = 0; i < needed; i++) {
-              const cells = {};
-              columns.forEach(c => { cells[c.id] = ''; });
-              updatedRows.push({ id: 'r_' + (Date.now() + i) + '_' + Math.random().toString(36).slice(2), cells });
-            }
-          }
-          updatedRows = updatedRows.map((row, r) => {
-            const li = r - startR;
-            if (li < 0 || li >= lines.length) return row;
-            const newCells = { ...row.cells };
-            lines[li].forEach((val, ci2) => {
-              const col = columns[startC + ci2];
-              if (col) newCells[col.id] = val;
-            });
-            return { ...row, cells: newCells };
-          });
-          persistRows(updatedRows);
-        }).catch(() => {});
-        return;
-      }
+      // ── Ctrl+V / Cmd+V ── Let the browser fire the native paste event, handled by handleGridPaste
+      // (Do NOT call e.preventDefault() here — that would block the paste event from firing)
 
       // ── Delete / Backspace ── Clear all cells in selection range
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -3509,6 +3481,7 @@
       }
 
       // ── Printable character ── Enter edit mode, pre-fill with typed char
+      // (Ctrl+V does NOT reach here — it is handled by handleGridPaste via the native paste event)
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         const row = rows[ri];
@@ -3524,6 +3497,40 @@
           }
         }, 0);
       }
+    }
+
+    // ── Grid paste handler — uses the native paste event so clipboard data is always available ──
+    // This is more reliable than navigator.clipboard.readText() which requires document focus
+    // and can silently fail after re-renders / async state updates.
+    function handleGridPaste(e) {
+      if (e.target.tagName === 'INPUT') return; // cell in edit mode — let browser paste into the input
+      if (!activeCell) return;
+      e.preventDefault();
+      const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+      if (!text) return;
+      const { rowIdx: ri, colIdx: ci } = activeCell;
+      const lines = text.trimEnd().split('\n').map(l => l.split('\t'));
+      const startR = ri, startC = ci;
+      let updatedRows = [...rows];
+      const needed = startR + lines.length - updatedRows.length;
+      if (needed > 0) {
+        for (let i = 0; i < needed; i++) {
+          const cells = {};
+          columns.forEach(c => { cells[c.id] = ''; });
+          updatedRows.push({ id: 'r_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2), cells });
+        }
+      }
+      updatedRows = updatedRows.map((row, r) => {
+        const li = r - startR;
+        if (li < 0 || li >= lines.length) return row;
+        const newCells = { ...row.cells };
+        lines[li].forEach((val, ci2) => {
+          const col = columns[startC + ci2];
+          if (col) newCells[col.id] = val;
+        });
+        return { ...row, cells: newCells };
+      });
+      persistRows(updatedRows);
     }
 
     function handleFormulaBarCommit(e) {
@@ -4020,7 +4027,7 @@
         )}
 
         {/* ── Table ── */}
-        <div ref={tableRef} tabIndex={0} onKeyDown={handleGridKeyDown}
+        <div ref={tableRef} tabIndex={0} onKeyDown={handleGridKeyDown} onPaste={handleGridPaste}
           style={{ flex: 1, overflowX: 'auto', overflowY: 'auto', background: '#FDFAF4', outline: 'none' }}>
           <table className="fb-table" style={{ tableLayout: 'fixed', width: 'max-content', minWidth: '100%' }}>
             <thead>
@@ -4056,534 +4063,4 @@
                 <tr>
                   <td colSpan={columns.length + 2}
                     style={{ textAlign: 'center', padding: '18px 10px', color: '#9CA3AF', fontStyle: 'italic', fontSize: 12, background: 'transparent', height: 'auto' }}>
-                    Tap + Row in the toolbar to begin
-                  </td>
-                </tr>
-              )}
-              {rows.map((row, ri) => (
-                <tr key={row.id} data-row-idx={ri}>
-                  {/* Row number — draggable to reorder */}
-                  <td className={`dp-row-num${activeCell && activeCell.rowIdx === ri ? ' active-row' : ''}${dragOverRow === ri && dragStartRow !== ri ? ' dp-drag-over-row' : ''}`}
-                    draggable={true}
-                    onDragStart={e => handleRowDragStart(e, ri)}
-                    onDragOver={e => handleRowDragOver(e, ri)}
-                    onDrop={e => handleRowDrop(e, ri)}
-                    onDragEnd={handleRowDragEnd}
-                    onDragLeave={() => { if (dragOverRow === ri) setDragOverRow(null); }}
-                    title="Drag to reorder row">
-                    {ri + 1}
-                  </td>
-                  {columns.map((col, ci) => {
-                    const isActive = activeCell && activeCell.rowIdx === ri && activeCell.colIdx === ci;
-                    const isEditing = editingCell && editingCell.rowIdx === ri && editingCell.colIdx === ci;
-                    const inSel = isInRange(ri, ci);
-                    const { text, isFormula, isDMS, isError } = displayValue(row, col);
-                    const myCellRef = cellRef(ri, ci);
-                    const refColor = refColorMap[myCellRef] || null;
-                    // Fill preview: cells in the active column between active row and drag target
-                    const isFillPreview = fillDragRow !== null &&
-                      activeCell && ci === activeCell.colIdx &&
-                      ri > activeCell.rowIdx && ri <= fillDragRow;
-                    return (
-                      <td key={col.id}
-                        className={`${isActive ? 'dp-cell-active' : isFillPreview ? 'dp-cell-fill-preview' : inSel ? 'dp-cell-selected' : ''}`}
-                        style={{
-                          width: colWidth(col), minWidth: colWidth(col),
-                          // Always relative when active (needed to anchor the fill handle)
-                          ...(isActive ? { position: 'relative' } : {}),
-                          // Colour-coded border when this cell is referenced by the formula being edited
-                          ...(refColor ? { outline: `2px solid ${refColor}`, outlineOffset: '-1px', zIndex: 1, position: 'relative' } : {}),
-                        }}
-                        onPointerDown={e => {
-                          if (e.button !== 0) return;
-
-                          // ── Point-to-select: insert cell ref into formula being edited ──
-                          if (isFormulaEditing) {
-                            e.preventDefault(); // keeps focus on the edit input
-                            const ref = myCellRef;
-                            if (editingCell !== null) {
-                              const newVal = editValue + ref;
-                              setEditValue(newVal);
-                              setFormulaBarVal(newVal);
-                              requestAnimationFrame(() => inputRef.current?.focus());
-                            } else {
-                              // Editing from formula bar
-                              const newVal = formulaBarVal + ref;
-                              setFormulaBarVal(newVal);
-                              setEditValue(newVal);
-                              requestAnimationFrame(() => fbInputRef.current?.focus());
-                            }
-                            return;
-                          }
-
-                          isDraggingSelRef.current = true;
-                          if (e.shiftKey && activeCell) {
-                            if (!selectionAnchor) setSelectionAnchor(activeCell);
-                            setActiveCell({ rowIdx: ri, colIdx: ci });
-                            const row2 = rows[ri], col2 = columns[ci];
-                            if (row2 && col2) setFormulaBarVal((row2.cells || {})[col2.id] || '');
-                            if (tableRef.current) tableRef.current.focus();
-                          } else {
-                            activateCell(ri, ci);
-                          }
-                        }}
-                        onPointerEnter={e => {
-                          if (!isDraggingSelRef.current || !(e.buttons & 1)) return;
-                          setActiveCell({ rowIdx: ri, colIdx: ci });
-                        }}
-                        onDoubleClick={() => startEdit(ri, ci)}>
-                        {isEditing ? (
-                          <input
-                            ref={inputRef}
-                            type="text"
-                            inputMode={isDMSCell ? 'none' : 'text'}
-                            value={editValue}
-                            onChange={e => { setEditValue(e.target.value); setFormulaBarVal(e.target.value); }}
-                            onBlur={() => commitEdit(ri, ci, editValue)}
-                            onKeyDown={e => handleCellKeyDown(e, ri, ci)}
-                            style={{ display: 'block', width: '100%', height: 32, padding: '0 5px',
-                              background: 'rgba(45,106,79,0.06)', border: 'none', outline: 'none',
-                              fontFamily: 'Courier New, monospace', fontSize: 13, textAlign: 'center', color: '#2C2C2C' }}
-                          />
-                        ) : (
-                          <span
-                            className={isError ? 'dp-cell-error' : isDMS ? 'dp-cell-dms' : isFormula ? 'dp-cell-formula' : ''}
-                            style={{ display: 'block', height: 32, lineHeight: '32px', padding: '0 5px',
-                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                              cursor: 'default', userSelect: 'none' }}
-                            onDoubleClick={() => startEdit(ri, ci)}>
-                            {text}
-                          </span>
-                        )}
-                        {/* ── Fill handle — only on active non-editing cell ── */}
-                        {isActive && !isEditing && (
-                          <div
-                            className="dp-fill-handle"
-                            title="Drag down to fill · formulas shift relative refs automatically"
-                            onPointerDown={e => {
-                              e.stopPropagation();
-                              e.preventDefault();
-                              fillDragRef.current = { active: true, startRow: ri, startCol: ci };
-                              setFillDragRow(ri);
-                              e.currentTarget.setPointerCapture(e.pointerId);
-                            }}
-                            onPointerMove={e => {
-                              if (!fillDragRef.current.active) return;
-                              // elementFromPoint works regardless of pointer capture
-                              const el = document.elementFromPoint(e.clientX, e.clientY);
-                              const tr = el?.closest('tr[data-row-idx]');
-                              if (tr) {
-                                const idx = parseInt(tr.getAttribute('data-row-idx'), 10);
-                                if (!isNaN(idx)) {
-                                  setFillDragRow(Math.max(idx, fillDragRef.current.startRow));
-                                }
-                              }
-                            }}
-                            onPointerUp={e => {
-                              if (!fillDragRef.current.active) return;
-                              e.currentTarget.releasePointerCapture(e.pointerId);
-                              const { startRow, startCol } = fillDragRef.current;
-                              fillDragRef.current = { active: false, startRow: -1, startCol: -1 };
-                              const endRow = fillDragRow;
-                              setFillDragRow(null);
-                              if (endRow !== null && endRow > startRow) {
-                                performFillDown(startRow, startCol, endRow);
-                              }
-                            }}
-                          />
-                        )}
-                      </td>
-                    );
-                  })}
-                  <td className="td-action">
-                    <button onClick={() => deleteRow(row.id)}
-                      className="w-8 h-8 flex items-center justify-center text-gray-300 active:text-red-400 mx-auto">
-                      <Ico.Trash />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {/* ── Column sum footer ── */}
-              {rows.length > 0 && (
-                <tr className="dp-sum-row">
-                  <td className="dp-row-num" style={{ fontWeight: 700, color: '#2D6A4F', fontSize: 9 }}>Σ</td>
-                  {columns.map(col => (
-                    <td key={col.id} style={{ width: colWidth(col), minWidth: colWidth(col) }}>
-                      <span style={{ display: 'block', height: 32, lineHeight: '32px', padding: '0 5px',
-                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                        color: (col.colType || 'num') === 'dms' ? '#1a3a8c' : '#065f46' }}>
-                        {colSum(col)}
-                      </span>
-                    </td>
-                  ))}
-                  <td></td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* ── Status bar ── */}
-        <div className="px-4 py-2 border-t border-fb-border bg-fb-cream2/50 flex items-center gap-4 flex-shrink-0" style={{ fontSize: 11 }}>
-          <span className="text-fb-muted font-data">{rows.length} rows · {columns.length} cols</span>
-          {activeCell && (() => {
-            const b = getSelectionBounds();
-            const isMulti = b && (b.maxR > b.minR || b.maxC > b.minC);
-            if (isMulti) {
-              const numRows = b.maxR - b.minR + 1, numCols = b.maxC - b.minC + 1;
-              return (
-                <span className="text-fb-mid font-data font-semibold">
-                  {cellRef(b.minR, b.minC)}:{cellRef(b.maxR, b.maxC)}
-                  <span style={{ color: '#9CA3AF', marginLeft: 4 }}>({numRows}×{numCols})</span>
-                </span>
-              );
-            }
-            return (
-              <span className="text-fb-mid font-data font-semibold">
-                {activeCellRef}
-                {columns[activeCell.colIdx] && (
-                  <span style={{ color: typeColors[columns[activeCell.colIdx].colType || 'num'], marginLeft: 4 }}>
-                    [{typeLabels[columns[activeCell.colIdx].colType || 'num']}]
-                  </span>
-                )}
-              </span>
-            );
-          })()}
-          <span className="ml-auto text-fb-muted" style={{ fontSize: 10 }}>Shift+click/arrow to select range · Ctrl+C/V · Del clears · drag # to reorder</span>
-        </div>
-
-        {/* ── DMS Numpad — shown when editing a DMS column cell ── */}
-        {isDMSCell && (
-          <DmsNumpad
-            value={editValue}
-            onChange={newVal => { setEditValue(newVal); setFormulaBarVal(newVal); }}
-            onCommit={() => {
-              const { rowIdx: ri, colIdx: ci } = editingCell;
-              commitEdit(ri, ci, editValue);
-            }}
-            onDismiss={() => { setEditingCell(null); setEditValue(''); }}
-          />
-        )}
-
-        {/* ── Column settings modal ── */}
-        {colModal && (
-          <div className="modal-backdrop" onClick={() => setColModal(null)}>
-            <div ref={colModalRef} className="modal-sheet" onClick={e => e.stopPropagation()}>
-              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
-              <h2 className="text-lg font-bold text-fb-dark mb-4">Column Settings</h2>
-              <div className="space-y-4">
-                <div>
-                  <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-1">Label</p>
-                  <input type="text" value={colModalForm.label}
-                    onChange={e => setColModalForm(f => ({ ...f, label: e.target.value }))}
-                    autoFocus maxLength={20}
-                    className="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 focus:border-fb-mid outline-none text-fb-text text-sm font-data"
-                    onFocus={e => e.target.select()}
-                    onKeyDown={e => e.key === 'Enter' && saveColModal()}
-                  />
-                </div>
-                <div>
-                  <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-2">Column Type</p>
-                  <div className="flex gap-2">
-                    {['text', 'num', 'dms'].map(t => (
-                      <button key={t}
-                        onClick={() => setColModalForm(f => ({ ...f, colType: t }))}
-                        className="flex-1 py-2 rounded-xl border-2 text-sm font-bold font-data"
-                        style={{
-                          borderColor: colModalForm.colType === t ? typeColors[t] : '#DDD6C8',
-                          color: colModalForm.colType === t ? typeColors[t] : '#9CA3AF',
-                          background: colModalForm.colType === t ? typeColors[t] + '18' : 'white',
-                        }}>
-                        {typeLabels[t]}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-xs text-fb-muted mt-2">
-                    {colModalForm.colType === 'dms' && 'Enter angles as “45 34 23” (D M S) or “45°34\'23"”. Displays as D°MM\'SS.s".'}
-                    {colModalForm.colType === 'num' && 'Decimal numbers. Formulas like =SUM(A1:A5) work in this column.'}
-                    {colModalForm.colType === 'text' && 'Free text — station IDs, descriptions, notes.'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-1">Width (px)</p>
-                  <input type="number" value={colModalForm.width}
-                    onChange={e => setColModalForm(f => ({ ...f, width: Math.max(50, Math.min(300, parseInt(e.target.value) || 80)) }))}
-                    min={50} max={300}
-                    className="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 focus:border-fb-mid outline-none text-fb-text text-sm font-data"
-                  />
-                </div>
-              </div>
-              <div className="flex gap-3 mt-5">
-                <button onClick={() => deleteCol(colModal.col.id)}
-                  className="py-3 px-4 rounded-xl border-2 border-red-200 text-red-400 font-semibold text-sm active:bg-red-50">
-                  Delete
-                </button>
-                <button onClick={() => setColModal(null)} className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold text-sm">Cancel</button>
-                <button onClick={saveColModal} className="flex-1 py-3 rounded-xl text-white font-semibold text-sm" style={{ background: '#2D6A4F' }}>Save</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── Template modal ── */}
-        {templateModal && (
-          <div className="modal-backdrop" onClick={() => setTemplateModal(false)}>
-            <div ref={templateModalRef} className="modal-sheet" onClick={e => e.stopPropagation()}>
-              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
-              <h2 className="text-lg font-bold text-fb-dark mb-1">Surveyor Templates</h2>
-              <p className="text-fb-muted text-xs mb-4">Applying a template will replace the current columns and clear all rows.</p>
-              <div className="space-y-2">
-                {TEMPLATES.map(tpl => (
-                  <button key={tpl.name}
-                    onClick={() => {
-                      if (rows.some(r => Object.values(r.cells || {}).some(v => v.trim())))
-                        if (!window.confirm('This will clear all existing data. Continue?')) return;
-                      applyTemplate(tpl);
-                    }}
-                    className="w-full flex items-start gap-3 p-3 rounded-xl border-2 border-gray-100 active:border-fb-mid text-left">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-fb-text text-sm">{tpl.name}</p>
-                      <p className="text-fb-muted text-xs mt-0.5 font-data">{tpl.desc}</p>
-                    </div>
-                    <Ico.ChevR />
-                  </button>
-                ))}
-              </div>
-              <button onClick={() => setTemplateModal(false)}
-                className="w-full mt-4 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold text-sm">
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // SKETCH PAGE — loaded from sketch.js (see that file for the full engine)
-  // SketchPage is available on window.SketchPage after sketch.js executes.
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // TITLE PAGE
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  function TitlePage({ page, projectId, onReload }) {
-    const [form, setForm] = useState({
-      title:      page.title      || '',
-      location:   page.location   || '',
-      crew:       page.crew       || '',
-      equipment:  page.equipment  || '',
-      datum:      page.datum      || '',
-      tsSettings: page.tsSettings || '',
-      hiPrism:    page.hiPrism    || '',
-      summary:    page.summary    || '',
-      notes:      page.notes      || '',
-    });
-    const [dirty, setDirty] = useState(false);
-    const timerRef = useRef(null);
-
-    useEffect(() => {
-      setForm({
-        title:      page.title      || '',
-        location:   page.location   || '',
-        crew:       page.crew       || '',
-        equipment:  page.equipment  || '',
-        datum:      page.datum      || '',
-        tsSettings: page.tsSettings || '',
-        hiPrism:    page.hiPrism    || '',
-        summary:    page.summary    || '',
-        notes:      page.notes      || '',
-      });
-    }, [page.id]);
-
-    function handleChange(key, val) {
-      const updated = { ...form, [key]: val };
-      setForm(updated);
-      setDirty(true);
-      clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        DB.updatePage(projectId, page.id, updated);
-        onReload();
-        setDirty(false);
-      }, 800);
-    }
-
-    return (
-      <div style={{ background: '#FDFAF4' }}>
-        <div className="page-header-strip px-4 py-2.5 flex items-center justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Title Page · P.{page.pageNumber}</p>
-            <input
-              type="text"
-              value={form.title}
-              onChange={e => handleChange('title', e.target.value)}
-              placeholder="Page title..."
-              maxLength={60}
-              className="w-full font-data text-sm text-fb-dark bg-transparent outline-none placeholder-gray-300 font-semibold"
-              style={{ border: 'none', borderBottom: '1px solid rgba(180,165,140,0.5)', padding: '1px 0' }}
-            />
-          </div>
-          <div className="flex-shrink-0 text-right">
-            <p className="text-xs font-data text-fb-muted">{page.date}</p>
-            {dirty && <span className="text-[10px] text-fb-muted italic">saving...</span>}
-          </div>
-        </div>
-        <div className="px-5">
-          {/* Project Title / Location */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Project Title / Location</p>
-            <textarea rows={2} value={form.location} onChange={e => handleChange('location', e.target.value)}
-              placeholder="Property address, legal description, project name..."
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
-          </div>
-          {/* Crew */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Crew &amp; Responsibilities</p>
-            <textarea rows={2} value={form.crew} onChange={e => handleChange('crew', e.target.value)}
-              placeholder="Party chief: —   Rod person: —   Note keeper: —"
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
-          </div>
-          {/* Equipment */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Equipment (Make, Model, S/N)</p>
-            <textarea rows={2} value={form.equipment} onChange={e => handleChange('equipment', e.target.value)}
-              placeholder="Total station: Trimble S7, S/N 12345   Prism: —"
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
-          </div>
-          {/* Datum */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Datum &amp; Projection</p>
-            <input type="text" value={form.datum} onChange={e => handleChange('datum', e.target.value)}
-              placeholder="NAD83(CSRS), UTM Zone 20N / CGVD2013"
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300" />
-          </div>
-          {/* TS Settings */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Total Station Settings (PPM, Temp, Press, Prism Const.)</p>
-            <input type="text" value={form.tsSettings} onChange={e => handleChange('tsSettings', e.target.value)}
-              placeholder="PPM: —   Temp: —°C   Pressure: — hPa   Prism const.: —"
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300" />
-          </div>
-          {/* HI / Prism */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">H.I. / Prism Height</p>
-            <input type="text" value={form.hiPrism} onChange={e => handleChange('hiPrism', e.target.value)}
-              placeholder="H.I.: — m     Prism HT: — m"
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300" />
-          </div>
-          {/* Summary */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Summary of Work</p>
-            <textarea rows={3} value={form.summary} onChange={e => handleChange('summary', e.target.value)}
-              placeholder="Overview of survey objectives for this session..."
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
-          </div>
-          {/* Notes */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Code List / File Names / Additional Notes</p>
-            <textarea rows={3} value={form.notes} onChange={e => handleChange('notes', e.target.value)}
-              placeholder="Feature codes, digital file names, check shots, other notes..."
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // APP ROOT
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  function App() {
-    const hash  = useRouter();
-    const route = parseRoute(hash);
-    const toast = useToast();
-    const [installPrompt, setInstallPrompt] = useState(null);
-    const [pendingFileImport, setPendingFileImport] = useState(null);
-
-    useEffect(() => {
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('./sw.js')
-          .catch(err => toast.error('Service worker failed to register'));
-      }
-      const handler = e => { e.preventDefault(); setInstallPrompt(e); };
-      window.addEventListener('beforeinstallprompt', handler);
-
-      // PWA File Handling API — handles .fieldbook files opened from the OS
-      if ('launchQueue' in window) {
-        window.launchQueue.setConsumer(async (launchParams) => {
-          if (!launchParams.files || launchParams.files.length === 0) return;
-          const fileHandle = launchParams.files[0];
-          try {
-            const file = await fileHandle.getFile();
-            const text = await file.text();
-            const data = JSON.parse(text);
-            if (data.type !== 'fieldbook_project_export') {
-              toast.error('Not a valid .fieldbook file');
-              return;
-            }
-            setPendingFileImport(data);
-          } catch {
-            toast.error('Could not open .fieldbook file');
-          }
-        });
-      }
-
-      return () => window.removeEventListener('beforeinstallprompt', handler);
-    }, []);
-
-    function handleFileImported(newProject) {
-      setPendingFileImport(null);
-      toast.success(`"${newProject.name}" imported`);
-      navigate(`#/project/${newProject.id}`);
-    }
-
-    const RINGS = 15;
-    return (
-      <div className="notebook-frame">
-        {/* Wire-O spiral binding — desktop only (hidden on mobile via CSS) */}
-        <div className="notebook-binding-bar" aria-hidden="true">
-          {Array.from({ length: RINGS }).map((_, i) => <div key={i} className="spiral-ring" />)}
-        </div>
-        {/* App content */}
-        <div className="notebook-inner">
-          {route.view === 'home'    && <HomePage installPrompt={installPrompt} onInstalled={() => setInstallPrompt(null)} />}
-          {route.view === 'project' && <ProjectView projectId={route.projectId} />}
-          {route.view === 'page'    && <PageView    projectId={route.projectId} pageId={route.pageId} />}
-        </div>
-        {/* App-level: PWA file-open import modal */}
-        {pendingFileImport && (
-          <ImportProjectModal
-            fileData={pendingFileImport}
-            onClose={() => setPendingFileImport(null)}
-            onImported={handleFileImported}
-          />
-        )}
-      </div>
-    );
-  }
-
-  function AppWithProviders() {
-    return (
-      <ToastProvider>
-        <App />
-      </ToastProvider>
-    );
-  }
-
-  // Expose shared globals for sketch.js to consume via window._fb
-  window._fb = { DB, PageHeaderStrip, HCell };
-
-  // Mount the app only after sketch.js has loaded and resolved _sketchPromise
-  _sketchPromise.then(() => {
-    ReactDOM.createRoot(document.getElementById('root')).render(<AppWithProviders />);
-  });
-</script>
-
-<!-- Sketch engine — loads async, resolves _sketchPromise when ready -->
-<script type="text/babel" src="./sketch.js"></script>
-</body>
-</html>
+           

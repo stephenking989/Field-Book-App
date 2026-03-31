@@ -40,6 +40,10 @@ const TOOLS = [
   { id: 'rect',      label: 'Rect',      icon: '□' },
   { id: 'text',      label: 'Text',      icon: 'T' },
   { id: 'eraser',    label: 'Eraser',    icon: '⌫' },
+  { id: 'dim-linear',  label: 'Dist',    icon: '↔' },
+  { id: 'dim-angle',   label: 'Angle',   icon: '∠' },
+  { id: 'dim-bearing', label: 'Bearing', icon: '↗' },
+  { id: 'dim-radius',  label: 'Radius',  icon: '⌀' },
 ];
 
 function newId() { return 's_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6); }
@@ -491,6 +495,21 @@ function applyArcRadius(s, newR) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DIMENSION TOOL HELPERS  (Phase 7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Find the intersection of two infinite lines: (x1,y1)→(x2,y2) and (x3,y3)→(x4,y4).
+// Returns { x, y } or null if the lines are parallel (determinant < 1e-10).
+function lineIntersection(x1, y1, x2, y2, x3, y3, x4, y4) {
+  const dx1 = x2-x1, dy1 = y2-y1;
+  const dx2 = x4-x3, dy2 = y4-y3;
+  const denom = dx1*dy2 - dy1*dx2;
+  if (Math.abs(denom) < 1e-10) return null;
+  const t = ((x3-x1)*dy2 - (y3-y1)*dx2) / denom;
+  return { x: x1 + t*dx1, y: y1 + t*dy1 };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SCALE & UNIT HELPERS  (Phase 3)
 // ─────────────────────────────────────────────────────────────────────────────
 // Anchor: 1000 canvas pixels = 1 metre at scale 1:1.
@@ -849,6 +868,13 @@ function offsetShape(s, dx, dy) {
         cp1x:(n.cp1x??n.x)+dx, cp1y:(n.cp1y??n.y)+dy,
         cp2x:(n.cp2x??n.x)+dx, cp2y:(n.cp2y??n.y)+dy,
       }))};
+    case 'dim-linear':
+      return { ...s, p1: { x:s.p1.x+dx, y:s.p1.y+dy }, p2: { x:s.p2.x+dx, y:s.p2.y+dy } };
+    case 'dim-bearing':
+    case 'dim-radius':
+      return { ...s, offset: { x:(s.offset?.x||0)+dx, y:(s.offset?.y||0)+dy } };
+    // dim-angle references line IDs — shifting it independently doesn't make geometric sense;
+    // just return unchanged so pasting doesn't crash.
     default: return s;
   }
 }
@@ -914,6 +940,12 @@ function SketchPage({ page, projectId, onReload }) {
   // When false, new shapes are committed with _hideDims:true so dims are hidden by default.
   const [dimsOnDraw,    setDimsOnDraw]    = useState(true);
   const [showValueCard, setShowValueCard] = useState(true);
+
+  // ── North direction (Phase 7) ──────────────────────────────────────────────
+  // northAzimuth: clockwise degrees from screen-up that true North points.
+  // Default 0 = North is straight up the screen.  Affects dim-bearing display
+  // and the ShapeValueCard bearing field (Phase 6.9 deferred until Phase 7).
+  const [northAzimuth, setNorthAzimuth]  = useState(page.northAzimuth || 0);
 
   // ── Dropdown menus ─────────────────────────────────────────────────────────
   const [openMenu, setOpenMenu] = useState(null); // null | 'view' | 'scale'
@@ -1319,11 +1351,12 @@ function SketchPage({ page, projectId, onReload }) {
     const s  = nextShapes !== undefined ? nextShapes : shapes;
     const n  = nextNotes  !== undefined ? nextNotes  : notes;
     const l  = nextLayers !== undefined ? nextLayers : layers;
-    const sd = (patch && patch.scaleDenom !== undefined) ? patch.scaleDenom : scaleDenom;
-    const u  = (patch && patch.units      !== undefined) ? patch.units      : units;
+    const sd = (patch && patch.scaleDenom  !== undefined) ? patch.scaleDenom  : scaleDenom;
+    const u  = (patch && patch.units       !== undefined) ? patch.units       : units;
+    const na = (patch && patch.northAzimuth !== undefined) ? patch.northAzimuth : northAzimuth;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      DB.updatePage(projectId, page.id, { shapes: s, notes: n, layers: l, scaleDenom: sd, units: u });
+      DB.updatePage(projectId, page.id, { shapes: s, notes: n, layers: l, scaleDenom: sd, units: u, northAzimuth: na });
     }, 600);
   }
 
@@ -1332,6 +1365,20 @@ function SketchPage({ page, projectId, onReload }) {
     setShapesHistory(h => ({ past: [...h.past.slice(-49), shapes], future: [] }));
     setShapes(next);
     persist(next, undefined);
+  }
+
+  // Returns the layer ID to use for new dimension shapes (Phase 7).
+  // If only one layer exists ("Layer 1"), auto-creates a "Dimensions" layer
+  // and returns its ID. Otherwise returns the current active layer.
+  function getDimLayerId() {
+    const existing = layers.find(l => l.name === 'Dimensions');
+    if (existing) return existing.id;
+    if (layers.length === 1) {
+      const dimLayerId = 'l_dims_' + Date.now();
+      setLayers(prev => [...prev, { id: dimLayerId, name: 'Dimensions', visible: true }]);
+      return dimLayerId;
+    }
+    return activeLayerId;
   }
 
   // Commit the in-progress pen path. closed=true closes the path back to the
@@ -1431,6 +1478,57 @@ function SketchPage({ page, projectId, onReload }) {
           { key: 'bl', x: shape.x - hw2, y: shape.y + hh2, type: 'endpoint' },
           { key: 'br', x: shape.x + hw2, y: shape.y + hh2, type: 'endpoint' },
         ];
+      }
+      case 'dim-linear': {
+        // P1 and P2 endpoint handles + offset handle at dim-line midpoint
+        const { p1, p2 } = shape;
+        const off = shape.offset || 0;
+        const len = Math.hypot(p2.x-p1.x, p2.y-p1.y);
+        if (len < 1) return [
+          { key: 'p1', x: p1.x, y: p1.y, type: 'endpoint' },
+          { key: 'p2', x: p2.x, y: p2.y, type: 'endpoint' },
+        ];
+        const perpX = -(p2.y-p1.y)/len, perpY = (p2.x-p1.x)/len;
+        const omx = (p1.x+p2.x)/2 + perpX*off;
+        const omy = (p1.y+p2.y)/2 + perpY*off;
+        return [
+          { key: 'p1',     x: p1.x, y: p1.y, type: 'endpoint' },
+          { key: 'p2',     x: p2.x, y: p2.y, type: 'endpoint' },
+          { key: 'offset', x: omx,  y: omy,   type: 'control'  },
+        ];
+      }
+      case 'dim-angle': {
+        // No geometric handles — just a body handle at the arc midpoint
+        const l1 = shapes.find(sh => sh.id === shape.line1Id && sh.type === 'line');
+        const l2 = shapes.find(sh => sh.id === shape.line2Id && sh.type === 'line');
+        if (!l1 || !l2) return [];
+        const inter = lineIntersection(l1.x1, l1.y1, l1.x2, l1.y2, l2.x1, l2.y1, l2.x2, l2.y2);
+        if (!inter) return [];
+        const _ps3 = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+        const arcR = (shape.scale || 1.0) * 40 * _ps3;
+        const mid1 = { x: (l1.x1+l1.x2)/2, y: (l1.y1+l1.y2)/2 };
+        const mid2 = { x: (l2.x1+l2.x2)/2, y: (l2.y1+l2.y2)/2 };
+        const d1 = Math.hypot(mid1.x-inter.x, mid1.y-inter.y) || 1;
+        const d2 = Math.hypot(mid2.x-inter.x, mid2.y-inter.y) || 1;
+        const a1 = Math.atan2((mid1.y-inter.y)/d1, (mid1.x-inter.x)/d1);
+        const a2 = Math.atan2((mid2.y-inter.y)/d2, (mid2.x-inter.x)/d2);
+        let dAng = ((a2-a1)+2*Math.PI) % (2*Math.PI);
+        const midAng = dAng > Math.PI ? a1 - (2*Math.PI-dAng)/2 : a1 + dAng/2;
+        return [{ key: 'body', x: inter.x + Math.cos(midAng)*arcR, y: inter.y + Math.sin(midAng)*arcR, type: 'control' }];
+      }
+      case 'dim-bearing': {
+        const ln = shapes.find(sh => sh.id === shape.lineId && sh.type === 'line');
+        if (!ln) return [];
+        const off = shape.offset || { x: 0, y: 0 };
+        return [{ key: 'body', x: (ln.x1+ln.x2)/2 + off.x, y: (ln.y1+ln.y2)/2 + off.y, type: 'control' }];
+      }
+      case 'dim-radius': {
+        const ref = shapes.find(sh => sh.id === shape.shapeId);
+        if (!ref) return [];
+        const off = shape.offset || { x: 0, y: 0 };
+        const cx = ref.type === 'circle' ? ref.cx : (ref.x1+ref.x2)/2;
+        const cy = ref.type === 'circle' ? ref.cy : (ref.y1+ref.y2)/2;
+        return [{ key: 'body', x: cx + off.x, y: cy + off.y, type: 'control' }];
       }
       default: return [];
     }
@@ -1601,6 +1699,27 @@ function SketchPage({ page, projectId, onReload }) {
         if (nodeKey === 'br') return { ...shape, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3+dx/_ps3), h: Math.max(20, th3+dy/_ps3) };
         break;
       }
+      case 'dim-linear': {
+        if (nodeKey === 'p1') return { ...shape, p1: { x: shape.p1.x+dx, y: shape.p1.y+dy } };
+        if (nodeKey === 'p2') return { ...shape, p2: { x: shape.p2.x+dx, y: shape.p2.y+dy } };
+        if (nodeKey === 'offset') {
+          // Project cursor movement onto the perpendicular of P1→P2
+          const len = Math.hypot(shape.p2.x-shape.p1.x, shape.p2.y-shape.p1.y);
+          if (len < 1) return shape;
+          const perpX = -(shape.p2.y-shape.p1.y)/len, perpY = (shape.p2.x-shape.p1.x)/len;
+          return { ...shape, offset: (shape.offset || 0) + dx*perpX + dy*perpY };
+        }
+        break;
+      }
+      case 'dim-bearing':
+        if (nodeKey === 'body') return { ...shape, offset: { x:(shape.offset?.x||0)+dx, y:(shape.offset?.y||0)+dy } };
+        break;
+      case 'dim-radius':
+        if (nodeKey === 'body') return { ...shape, offset: { x:(shape.offset?.x||0)+dx, y:(shape.offset?.y||0)+dy } };
+        break;
+      case 'dim-angle':
+        // No moveable handles — body drag handled by the 'body' key above
+        break;
     }
     return shape;
   }
@@ -1778,6 +1897,99 @@ function SketchPage({ page, projectId, onReload }) {
       setSelectedIds([]);
       const sp = anySnapActive ? resolveSnap(pt) : pt;
       setDrawState({ type: 'text', ox: sp.x, oy: sp.y, x: sp.x, y: sp.y, w: 0, h: 0, layerId: activeLayerId });
+      return;
+    }
+
+    // ── Dimensioning tools (Phase 7) ─────────────────────────────────────────
+    // dim-linear: two-click placement. Click 1 = P1, Click 2 = P2 → commit.
+    // dim-angle:  two-click. Click line 1, click line 2 → commit.
+    // dim-bearing / dim-radius: single click on the target shape → commit immediately.
+    if (tool === 'dim-linear') {
+      const sp = anySnapActive ? resolveSnap(pt) : pt;
+      if (!drawState) {
+        setDrawState({ type: 'dim-linear', phase: 1, x1: sp.x, y1: sp.y, x2: sp.x, y2: sp.y });
+      } else {
+        // Second click: commit dim-linear
+        const dimId = newId();
+        const defOff = 20 * ps; // default 20-screen-pixel offset
+        commitShapes([...shapes, {
+          id: dimId, type: 'dim-linear',
+          p1: { x: drawState.x1, y: drawState.y1 },
+          p2: { x: sp.x, y: sp.y },
+          offset: defOff,
+          stroke: STROKE, strokeWidth: STROKE_W,
+          layerId: getDimLayerId(),
+        }]);
+        setSelectedIds([dimId]);
+        setPrevTool(tool);
+        setDrawState(null);
+        setSnapPoint(null);
+      }
+      return;
+    }
+
+    if (tool === 'dim-angle') {
+      const hitThreshDA = (e.pointerType === 'touch' ? 24 : 8) * ps;
+      const hitDA = hitTest(pt, shapes.filter(sh => sh.type === 'line'), hitThreshDA);
+      if (!drawState) {
+        if (!hitDA) return; // must click on a line
+        setDrawState({ type: 'dim-angle', phase: 1, line1Id: hitDA.id });
+      } else {
+        if (!hitDA || hitDA.id === drawState.line1Id) return; // must click a different line
+        const dimId = newId();
+        commitShapes([...shapes, {
+          id: dimId, type: 'dim-angle',
+          line1Id: drawState.line1Id, line2Id: hitDA.id,
+          scale: 1.0,
+          stroke: STROKE, strokeWidth: STROKE_W,
+          layerId: getDimLayerId(),
+        }]);
+        setSelectedIds([dimId]);
+        setPrevTool(tool);
+        setDrawState(null);
+        setSnapPoint(null);
+      }
+      return;
+    }
+
+    if (tool === 'dim-bearing') {
+      const hitThreshDB = (e.pointerType === 'touch' ? 24 : 8) * ps;
+      const hitDB = hitTest(pt, shapes.filter(sh => sh.type === 'line'), hitThreshDB);
+      if (!hitDB) return;
+      const dimId = newId();
+      // Default offset: 40 screen-px above the line (perpendicular to line direction)
+      const blen = Math.hypot(hitDB.x2-hitDB.x1, hitDB.y2-hitDB.y1) || 1;
+      const bperpX = -(hitDB.y2-hitDB.y1)/blen, bperpY = (hitDB.x2-hitDB.x1)/blen;
+      commitShapes([...shapes, {
+        id: dimId, type: 'dim-bearing',
+        lineId: hitDB.id,
+        offset: { x: bperpX * 40*ps, y: bperpY * 40*ps },
+        stroke: STROKE, strokeWidth: STROKE_W,
+        layerId: getDimLayerId(),
+      }]);
+      setSelectedIds([dimId]);
+      setPrevTool(tool);
+      setSnapPoint(null);
+      return;
+    }
+
+    if (tool === 'dim-radius') {
+      const hitThreshDR = (e.pointerType === 'touch' ? 24 : 8) * ps;
+      const hitDR = hitTest(pt, shapes.filter(sh => sh.type === 'circle' || sh.type === 'curve'), hitThreshDR);
+      if (!hitDR) return;
+      const dimId = newId();
+      // Default offset: upper-right at 45°, length = radius or a screen constant
+      const defLen = 60 * ps;
+      commitShapes([...shapes, {
+        id: dimId, type: 'dim-radius',
+        shapeId: hitDR.id,
+        offset: { x: defLen * Math.cos(-Math.PI/4), y: defLen * Math.sin(-Math.PI/4) },
+        stroke: STROKE, strokeWidth: STROKE_W,
+        layerId: getDimLayerId(),
+      }]);
+      setSelectedIds([dimId]);
+      setPrevTool(tool);
+      setSnapPoint(null);
       return;
     }
 
@@ -2346,6 +2558,11 @@ function SketchPage({ page, projectId, onReload }) {
 
     if (!drawState) return;
 
+    // dim-linear: P2 tracks cursor after P1 is placed
+    if (drawState.type === 'dim-linear') {
+      setDrawState(d => d?.phase === 1 ? { ...d, x2: pt.x, y2: pt.y } : d);
+    }
+
     if (drawState.type === 'line') {
       setDrawState(d => ({ ...d, x2: pt.x, y2: pt.y }));
     } else if (drawState.type === 'curve') {
@@ -2653,6 +2870,38 @@ function SketchPage({ page, projectId, onReload }) {
           );
           if (Math.hypot(nearest.x - tp.x, nearest.y - tp.y) < thresh) return s;
         }
+      } else if (s.type === 'dim-linear') {
+        // Hit the dimension line (the offset line parallel to P1→P2)
+        const { p1, p2 } = s;
+        const off = s.offset || 0;
+        const len = Math.hypot(p2.x-p1.x, p2.y-p1.y);
+        if (len < 1) continue;
+        const perpX = -(p2.y-p1.y)/len, perpY = (p2.x-p1.x)/len;
+        const dp1 = { x: p1.x + perpX*off, y: p1.y + perpY*off };
+        const dp2 = { x: p2.x + perpX*off, y: p2.y + perpY*off };
+        if (distToSegment(tp, dp1, dp2) < thresh) return s;
+      } else if (s.type === 'dim-angle') {
+        const l1 = shapes.find(sh => sh.id === s.line1Id && sh.type === 'line');
+        const l2 = shapes.find(sh => sh.id === s.line2Id && sh.type === 'line');
+        if (!l1 || !l2) continue;
+        const inter = lineIntersection(l1.x1, l1.y1, l1.x2, l1.y2, l2.x1, l2.y1, l2.x2, l2.y2);
+        if (!inter) continue;
+        const arcR = (s.scale || 1.0) * 40 * ps;
+        if (Math.abs(Math.hypot(tp.x-inter.x, tp.y-inter.y) - arcR) < thresh * 2) return s;
+      } else if (s.type === 'dim-bearing') {
+        const ln = shapes.find(sh => sh.id === s.lineId && sh.type === 'line');
+        if (!ln) continue;
+        const off = s.offset || { x: 0, y: 0 };
+        const tx = (ln.x1+ln.x2)/2 + off.x, ty = (ln.y1+ln.y2)/2 + off.y;
+        if (Math.hypot(tp.x-tx, tp.y-ty) < thresh * 3) return s;
+      } else if (s.type === 'dim-radius') {
+        const ref = shapes.find(sh => sh.id === s.shapeId);
+        if (!ref) continue;
+        const off = s.offset || { x: 0, y: 0 };
+        const cx = ref.type === 'circle' ? ref.cx : (ref.x1+ref.x2)/2;
+        const cy = ref.type === 'circle' ? ref.cy : (ref.y1+ref.y2)/2;
+        const tx = cx + off.x, ty = cy + off.y;
+        if (distToSegment(tp, { x: cx, y: cy }, { x: tx, y: ty }) < thresh) return s;
       }
     }
     return null;
@@ -2692,6 +2941,23 @@ function SketchPage({ page, projectId, onReload }) {
         if (!s.nodes || !s.nodes.length) return false;
         minX=Math.min(...s.nodes.map(n=>n.x)); maxX=Math.max(...s.nodes.map(n=>n.x));
         minY=Math.min(...s.nodes.map(n=>n.y)); maxY=Math.max(...s.nodes.map(n=>n.y)); break;
+      case 'dim-linear':
+        minX=Math.min(s.p1.x,s.p2.x); maxX=Math.max(s.p1.x,s.p2.x);
+        minY=Math.min(s.p1.y,s.p2.y); maxY=Math.max(s.p1.y,s.p2.y); break;
+      case 'dim-bearing': {
+        const _ln=shapes.find(sh=>sh.id===s.lineId); if(!_ln) return false;
+        const _ox=s.offset?.x||0, _oy=s.offset?.y||0;
+        minX=Math.min(_ln.x1,_ln.x2,(_ln.x1+_ln.x2)/2+_ox); maxX=Math.max(_ln.x1,_ln.x2,(_ln.x1+_ln.x2)/2+_ox);
+        minY=Math.min(_ln.y1,_ln.y2,(_ln.y1+_ln.y2)/2+_oy); maxY=Math.max(_ln.y1,_ln.y2,(_ln.y1+_ln.y2)/2+_oy); break;
+      }
+      case 'dim-radius': {
+        const _ref=shapes.find(sh=>sh.id===s.shapeId); if(!_ref) return false;
+        const _rcx=_ref.type==='circle'?_ref.cx:(_ref.x1+_ref.x2)/2;
+        const _rcy=_ref.type==='circle'?_ref.cy:(_ref.y1+_ref.y2)/2;
+        minX=Math.min(_rcx,_rcx+(s.offset?.x||0)); maxX=Math.max(_rcx,_rcx+(s.offset?.x||0));
+        minY=Math.min(_rcy,_rcy+(s.offset?.y||0)); maxY=Math.max(_rcy,_rcy+(s.offset?.y||0)); break;
+      }
+      case 'dim-angle': return false; // no simple AABB for a referenced angle arc
       default: return false;
     }
     return minX <= rx2 && maxX >= rx1 && minY <= ry2 && maxY >= ry1;
@@ -3101,6 +3367,22 @@ function SketchPage({ page, projectId, onReload }) {
           const _bh  = (s.h ||  80) * _bps / 2;
           add(s.x - _bw, s.y - _bh); add(s.x + _bw, s.y + _bh); break;
         }
+        case 'dim-linear':
+          add(s.p1.x, s.p1.y); add(s.p2.x, s.p2.y); break;
+        case 'dim-bearing': {
+          const _bln = shapes.find(sh => sh.id === s.lineId);
+          if (_bln) { add(_bln.x1,_bln.y1); add(_bln.x2,_bln.y2); } break;
+        }
+        case 'dim-radius': {
+          const _bref = shapes.find(sh => sh.id === s.shapeId);
+          if (_bref) {
+            const _bcx = _bref.type === 'circle' ? _bref.cx : (_bref.x1+_bref.x2)/2;
+            const _bcy = _bref.type === 'circle' ? _bref.cy : (_bref.y1+_bref.y2)/2;
+            add(_bcx, _bcy);
+            add(_bcx + (s.offset?.x||0), _bcy + (s.offset?.y||0));
+          }
+          break;
+        }
         default: break;
       }
     }
@@ -3233,6 +3515,153 @@ function SketchPage({ page, projectId, onReload }) {
             strokeLinecap="round"
             strokeLinejoin="round"
           />
+        );
+        break;
+      }
+      // ── Dimension shapes (Phase 7) ──────────────────────────────────────────
+      case 'dim-linear': {
+        // Linear dimension: extension lines from P1/P2 to the offset dim line, arrowheads, label.
+        const { p1, p2 } = s;
+        const off = s.offset || 0;
+        const len = Math.hypot(p2.x-p1.x, p2.y-p1.y);
+        if (len < 1) return null;
+        const perpX = -(p2.y-p1.y)/len, perpY = (p2.x-p1.x)/len;
+        // Dim line endpoints
+        const dp1x = p1.x + perpX*off, dp1y = p1.y + perpY*off;
+        const dp2x = p2.x + perpX*off, dp2y = p2.y + perpY*off;
+        const sw = 1.2 * ps;
+        const gap = 3 * ps;    // gap from measurement point before ext line starts
+        const ext = 6 * ps;    // ext line overshoot past the dim line
+        // Direction along dim line (P1→P2)
+        const udx = (p2.x-p1.x)/len, udy = (p2.y-p1.y)/len;
+        // Open-tick arrowhead: V shape pointing inward
+        const ah = 8 * ps, as = 3 * ps;
+        const mkArrow = (ax, ay, dx, dy) =>
+          `M ${ax-dx*ah*0.5+dy*as} ${ay-dy*ah*0.5-dx*as} L ${ax} ${ay} L ${ax-dx*ah*0.5-dy*as} ${ay-dy*ah*0.5+dx*as}`;
+        inner = (
+          <g style={sel}>
+            {/* Extension line P1 side */}
+            <line x1={p1.x+perpX*gap} y1={p1.y+perpY*gap}
+                  x2={dp1x+perpX*ext} y2={dp1y+perpY*ext}
+                  stroke={STROKE} strokeWidth={sw*0.75} strokeLinecap="round" />
+            {/* Extension line P2 side */}
+            <line x1={p2.x+perpX*gap} y1={p2.y+perpY*gap}
+                  x2={dp2x+perpX*ext} y2={dp2y+perpY*ext}
+                  stroke={STROKE} strokeWidth={sw*0.75} strokeLinecap="round" />
+            {/* Dimension line */}
+            <line x1={dp1x} y1={dp1y} x2={dp2x} y2={dp2y}
+                  stroke={STROKE} strokeWidth={sw} strokeLinecap="round" />
+            {/* Arrowhead at P1 end (pointing toward P2) */}
+            <path d={mkArrow(dp1x, dp1y, udx, udy)}
+                  stroke={STROKE} strokeWidth={sw} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            {/* Arrowhead at P2 end (pointing toward P1) */}
+            <path d={mkArrow(dp2x, dp2y, -udx, -udy)}
+                  stroke={STROKE} strokeWidth={sw} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          </g>
+        );
+        break;
+      }
+      case 'dim-angle': {
+        // Angle dimension: arc at intersection of two referenced lines.
+        const l1 = shapes.find(sh => sh.id === s.line1Id && sh.type === 'line');
+        const l2 = shapes.find(sh => sh.id === s.line2Id && sh.type === 'line');
+        if (!l1 || !l2) return null;
+        const inter = lineIntersection(l1.x1, l1.y1, l1.x2, l1.y2, l2.x1, l2.y1, l2.x2, l2.y2);
+        if (!inter) return null;
+        // Direction from intersection toward each line's midpoint — gives us the
+        // "near side" of each line, so the arc always sits between the segments.
+        const mid1 = { x:(l1.x1+l1.x2)/2, y:(l1.y1+l1.y2)/2 };
+        const mid2 = { x:(l2.x1+l2.x2)/2, y:(l2.y1+l2.y2)/2 };
+        const d1 = Math.hypot(mid1.x-inter.x, mid1.y-inter.y) || 1;
+        const d2 = Math.hypot(mid2.x-inter.x, mid2.y-inter.y) || 1;
+        const a1 = Math.atan2((mid1.y-inter.y)/d1, (mid1.x-inter.x)/d1);
+        const a2 = Math.atan2((mid2.y-inter.y)/d2, (mid2.x-inter.x)/d2);
+        // Arc from a1 to a2 using the shorter sweep
+        let dAng = ((a2-a1)+2*Math.PI) % (2*Math.PI);
+        let sweep = 0;
+        if (dAng > Math.PI) { dAng = 2*Math.PI - dAng; sweep = 1; }
+        const arcR = (s.scale || 1.0) * 40 * ps;
+        const ax1 = inter.x + Math.cos(a1)*arcR, ay1 = inter.y + Math.sin(a1)*arcR;
+        const ax2 = inter.x + Math.cos(a2)*arcR, ay2 = inter.y + Math.sin(a2)*arcR;
+        const sw2 = 1.2 * ps;
+        inner = (
+          <g style={sel}>
+            <path d={`M ${ax1} ${ay1} A ${arcR} ${arcR} 0 0 ${sweep} ${ax2} ${ay2}`}
+                  stroke={STROKE} strokeWidth={sw2} fill="none" strokeLinecap="round" />
+          </g>
+        );
+        break;
+      }
+      case 'dim-bearing': {
+        // Bearing dimension: small North arrow + leader back to line midpoint.
+        const ln = shapes.find(sh => sh.id === s.lineId && sh.type === 'line');
+        if (!ln) return null;
+        const off = s.offset || { x: 0, y: 0 };
+        const lmx = (ln.x1+ln.x2)/2, lmy = (ln.y1+ln.y2)/2;
+        const tx = lmx + off.x, ty = lmy + off.y;
+        // North direction: screen-up rotated by northAzimuth (clockwise)
+        const nRad = northAzimuth * Math.PI / 180;
+        const ndx = Math.sin(nRad), ndy = -Math.cos(nRad);
+        const nh = 18 * ps;
+        const nTipX = tx + ndx*nh*0.6,  nTipY = ty + ndy*nh*0.6;
+        const nBaseX = tx - ndx*nh*0.4, nBaseY = ty - ndy*nh*0.4;
+        const as = 3.5 * ps;
+        const sw3 = 1.2 * ps;
+        // Perpendicular of the north arrow direction (for arrowhead sides)
+        const npx = -ndy, npy = ndx;
+        inner = (
+          <g style={sel}>
+            {/* Dashed leader from label position back to line midpoint */}
+            <line x1={lmx} y1={lmy} x2={tx} y2={ty}
+                  stroke={STROKE} strokeWidth={sw3*0.7}
+                  strokeDasharray={`${3*ps},${2*ps}`} strokeLinecap="round" />
+            {/* North arrow stem */}
+            <line x1={nBaseX} y1={nBaseY} x2={nTipX} y2={nTipY}
+                  stroke={STROKE} strokeWidth={sw3} strokeLinecap="round" />
+            {/* Solid arrowhead at tip */}
+            <polygon points={`${nTipX},${nTipY} ${nTipX-ndx*nh*0.25+npx*as},${nTipY-ndy*nh*0.25+npy*as} ${nTipX-ndx*nh*0.25-npx*as},${nTipY-ndy*nh*0.25-npy*as}`}
+                     fill={STROKE} style={sel} />
+            {/* "N" label above the arrowhead */}
+            <text x={nTipX + ndx*7*ps} y={nTipY + ndy*7*ps}
+                  textAnchor="middle" dominantBaseline="middle"
+                  fontSize={7*ps} fontFamily="Courier New, monospace"
+                  fill={STROKE} stroke="rgba(255,255,248,0.8)" strokeWidth={1.5*ps}
+                  paintOrder="stroke fill"
+                  style={{ pointerEvents:'none', userSelect:'none' }}>N</text>
+          </g>
+        );
+        break;
+      }
+      case 'dim-radius': {
+        // Radius dimension: leader line from shape centre to label offset position.
+        const ref = shapes.find(sh => sh.id === s.shapeId);
+        if (!ref) return null;
+        let rcx, rcy, rr;
+        if (ref.type === 'circle') {
+          rcx = ref.cx; rcy = ref.cy; rr = ref.r;
+        } else if (ref.type === 'curve') {
+          const { px: rpx, py: rpy } = getCurvePI(ref);
+          const rarc = computeArcFromPI(ref.x1, ref.y1, ref.x2, ref.y2, rpx, rpy);
+          if (!rarc) return null;
+          rcx = rarc.cx; rcy = rarc.cy; rr = rarc.R;
+        } else {
+          return null;
+        }
+        const off = s.offset || { x: 50*ps, y: -50*ps };
+        const ex = rcx + off.x, ey = rcy + off.y;
+        const leaderLen = Math.hypot(off.x, off.y) || 1;
+        const ux = off.x/leaderLen, uy = off.y/leaderLen;
+        // Leader starts at the shape surface (radius from centre in the leader direction)
+        const surfX = rcx + ux * rr, surfY = rcy + uy * rr;
+        const sw4 = 1.2 * ps;
+        inner = (
+          <g style={sel}>
+            <line x1={surfX} y1={surfY} x2={ex} y2={ey}
+                  stroke={STROKE} strokeWidth={sw4} strokeLinecap="round" />
+            {/* Short tick at label end */}
+            <line x1={ex} y1={ey} x2={ex + 12*ps} y2={ey}
+                  stroke={STROKE} strokeWidth={sw4} strokeLinecap="round" />
+          </g>
         );
         break;
       }
@@ -3395,6 +3824,77 @@ function SketchPage({ page, projectId, onReload }) {
           {D(s.x + s.w/2,     s.y + s.h + OFF, 0,   fmtPxAsReal(Math.abs(s.w), scaleDenom, units))}
           {D(s.x + s.w + OFF, s.y + s.h/2,     -90, fmtPxAsReal(Math.abs(s.h), scaleDenom, units))}
         </>;
+      }
+
+      // ── Dimension shape labels (Phase 7) ────────────────────────────────────
+      case 'dim-linear': {
+        const { p1, p2 } = s;
+        const off = s.offset || 0;
+        const len = Math.hypot(p2.x-p1.x, p2.y-p1.y);
+        if (len < 5*ps) return null;
+        const perpX = -(p2.y-p1.y)/len, perpY = (p2.x-p1.x)/len;
+        const mx = (p1.x+p2.x)/2 + perpX*off;
+        const my = (p1.y+p2.y)/2 + perpY*off;
+        const ang = Math.atan2(p2.y-p1.y, p2.x-p1.x) * 180/Math.PI;
+        const txt = s.ntsLabel ? s.ntsLabel + ' *' : fmtPxAsReal(len, scaleDenom, units);
+        return dimTextEl(mx, my, normAng(ang), txt, ps);
+      }
+      case 'dim-angle': {
+        const al1 = shapes.find(sh => sh.id === s.line1Id && sh.type === 'line');
+        const al2 = shapes.find(sh => sh.id === s.line2Id && sh.type === 'line');
+        if (!al1 || !al2) return null;
+        const aInter = lineIntersection(al1.x1, al1.y1, al1.x2, al1.y2, al2.x1, al2.y1, al2.x2, al2.y2);
+        if (!aInter) return null;
+        const amid1 = { x:(al1.x1+al1.x2)/2, y:(al1.y1+al1.y2)/2 };
+        const amid2 = { x:(al2.x1+al2.x2)/2, y:(al2.y1+al2.y2)/2 };
+        const ad1 = Math.hypot(amid1.x-aInter.x, amid1.y-aInter.y) || 1;
+        const ad2 = Math.hypot(amid2.x-aInter.x, amid2.y-aInter.y) || 1;
+        const aa1 = Math.atan2((amid1.y-aInter.y)/ad1, (amid1.x-aInter.x)/ad1);
+        const aa2 = Math.atan2((amid2.y-aInter.y)/ad2, (amid2.x-aInter.x)/ad2);
+        let dAngA = ((aa2-aa1)+2*Math.PI) % (2*Math.PI);
+        let midAng;
+        if (dAngA > Math.PI) { dAngA = 2*Math.PI - dAngA; midAng = aa1 - dAngA/2; }
+        else                 { midAng = aa1 + dAngA/2; }
+        const arcRA = (s.scale || 1.0) * 40 * ps;
+        const lx = aInter.x + Math.cos(midAng) * (arcRA + 12*ps);
+        const ly = aInter.y + Math.sin(midAng) * (arcRA + 12*ps);
+        const angleDeg = dAngA * 180 / Math.PI;
+        const atxt = s.ntsLabel ? s.ntsLabel + ' *' : toDMS(angleDeg);
+        return dimTextEl(lx, ly, 0, atxt, ps);
+      }
+      case 'dim-bearing': {
+        const bln = shapes.find(sh => sh.id === s.lineId && sh.type === 'line');
+        if (!bln) return null;
+        const boff = s.offset || { x: 0, y: 0 };
+        const btx = (bln.x1+bln.x2)/2 + boff.x;
+        const bty = (bln.y1+bln.y2)/2 + boff.y;
+        // Bearing: azimuth of the line clockwise from North (adjusted by northAzimuth)
+        const rawAz = ((Math.atan2(bln.x2-bln.x1, -(bln.y2-bln.y1)) * 180/Math.PI) + 360) % 360;
+        const adjustedAz = (rawAz - northAzimuth + 360) % 360;
+        const btxt = s.ntsLabel ? s.ntsLabel + ' *' : toDMS(adjustedAz);
+        // Place text below the North arrow base
+        const nRadB = northAzimuth * Math.PI / 180;
+        const ndxB = Math.sin(nRadB), ndyB = -Math.cos(nRadB);
+        return dimTextEl(btx - ndxB*14*ps, bty - ndyB*14*ps, 0, btxt, ps);
+      }
+      case 'dim-radius': {
+        const rref = shapes.find(sh => sh.id === s.shapeId);
+        if (!rref) return null;
+        let rrcx, rrcy, rrR;
+        if (rref.type === 'circle') {
+          rrcx = rref.cx; rrcy = rref.cy; rrR = rref.r;
+        } else if (rref.type === 'curve') {
+          const { px: rrpx, py: rrpy } = getCurvePI(rref);
+          const rrarc = computeArcFromPI(rref.x1, rref.y1, rref.x2, rref.y2, rrpx, rrpy);
+          if (!rrarc) return null;
+          rrcx = rrarc.cx; rrcy = rrarc.cy; rrR = rrarc.R;
+        } else {
+          return null;
+        }
+        const rroff = s.offset || { x: 50*ps, y: -50*ps };
+        const rrex = rrcx + rroff.x + 14*ps, rrey = rrcy + rroff.y;
+        const rrtxt = s.ntsLabel ? s.ntsLabel + ' *' : `R ${fmtPxAsReal(rrR, scaleDenom, units)}`;
+        return dimTextEl(rrex, rrey, 0, rrtxt, ps);
       }
       default: return null;
     }
