@@ -3932,6 +3932,19 @@ function SketchPage({ page, projectId, onReload }) {
             setDragNode({ shapeId: shape.id, nodeKey: n.key });
             setDragStart({ svgX: screenToWorld(ev).x, svgY: screenToWorld(ev).y, snapshot: shapes });
           };
+          if (n.key === 'offset') {
+            // Offset handle for dim-linear — amber diamond, drag to move the dim line
+            const sz = 6 * ps;
+            const pts = `${np.x},${np.y-sz} ${np.x+sz},${np.y} ${np.x},${np.y+sz} ${np.x-sz},${np.y}`;
+            return (
+              <g key="offset">
+                <polygon points={pts}
+                  fill="rgba(245,158,11,0.22)" stroke="#F59E0B" strokeWidth={1.5 * ps}
+                  style={{ cursor: 'move' }}
+                  onPointerDown={onDown} />
+              </g>
+            );
+          }
           if (n.key === 'pi') {
             // PI handle — green diamond with guide line from chord midpoint to PI
             const midRaw = { x: (shape.x1+shape.x2)/2, y: (shape.y1+shape.y2)/2 };
@@ -3969,13 +3982,13 @@ function SketchPage({ page, projectId, onReload }) {
           );
         })}
 
-        {/* Dashed line from pivot to rotate handle */}
-        <line x1={piv.x} y1={piv.y} x2={rhPos.x} y2={rhPos.y}
+        {/* Pivot + rotate handles are suppressed for dimension shapes — they don't rotate */}
+        {!shape.type.startsWith('dim-') && <line x1={piv.x} y1={piv.y} x2={rhPos.x} y2={rhPos.y}
           stroke="rgba(245,158,11,0.45)" strokeWidth={ps} strokeDasharray={`${3*ps},${3*ps}`}
-          style={{ pointerEvents: 'none' }} />
+          style={{ pointerEvents: 'none' }} />}
 
-        {/* Pivot handle — amber crosshair circle */}
-        <g key="pivot" style={{ cursor: 'move' }}
+        {/* Pivot handle — amber crosshair circle (not shown for dim shapes) */}
+        {!shape.type.startsWith('dim-') && <g key="pivot" style={{ cursor: 'move' }}
           onPointerDown={ev => {
             ev.stopPropagation();
             setDragNode({ shapeId: shape.id, nodeKey: 'pivot' });
@@ -3989,10 +4002,10 @@ function SketchPage({ page, projectId, onReload }) {
             stroke="#F59E0B" strokeWidth={1.5 * ps} />
           <line x1={piv.x} y1={piv.y - crossArm} x2={piv.x} y2={piv.y + crossArm}
             stroke="#F59E0B" strokeWidth={1.5 * ps} />
-        </g>
+        </g>}
 
-        {/* Rotate handle — amber ↻ circle */}
-        <g key="rotate" style={{ cursor: 'grab' }}
+        {/* Rotate handle — amber ↻ circle (not shown for dim shapes) */}
+        {!shape.type.startsWith('dim-') && <g key="rotate" style={{ cursor: 'grab' }}
           onPointerDown={ev => {
             ev.stopPropagation();
             const svgPt = screenToWorld(ev);
@@ -4010,7 +4023,7 @@ function SketchPage({ page, projectId, onReload }) {
             fontSize={11 * ps} fill="#F59E0B" style={{ pointerEvents: 'none', userSelect: 'none' }}>
             ↻
           </text>
-        </g>
+        </g>}
       </>
     );
   }
@@ -4130,6 +4143,38 @@ function SketchPage({ page, projectId, onReload }) {
           />
         );
       }
+      case 'dim-linear': {
+        // Phase 1 preview: dot at P1, dashed rubber-band line to cursor + ghosted dim
+        const { x1, y1, x2, y2 } = drawState;
+        const len = Math.hypot(x2-x1, y2-y1);
+        if (len < 2) return <circle cx={x1} cy={y1} r={4*ps} fill="#3B82F6" opacity={0.7} />;
+        const perpX = -(y2-y1)/len, perpY = (x2-x1)/len;
+        const off = 20 * ps;
+        const dp1x = x1+perpX*off, dp1y = y1+perpY*off;
+        const dp2x = x2+perpX*off, dp2y = y2+perpY*off;
+        const ang = Math.atan2(y2-y1, x2-x1) * 180/Math.PI;
+        const udx = (x2-x1)/len, udy = (y2-y1)/len;
+        const ah = 8*ps, as = 3*ps;
+        const mkA = (ax, ay, dx, dy) =>
+          `M ${ax-dx*ah*0.5+dy*as} ${ay-dy*ah*0.5-dx*as} L ${ax} ${ay} L ${ax-dx*ah*0.5-dy*as} ${ay-dy*ah*0.5+dx*as}`;
+        return <>
+          <circle cx={x1} cy={y1} r={4*ps} fill="#3B82F6" opacity={0.7} />
+          <line x1={x1} y1={y1} x2={x2} y2={y2} {...props} />
+          {len > 8*ps && <>
+            <line x1={x1+perpX*3*ps} y1={y1+perpY*3*ps} x2={dp1x+perpX*6*ps} y2={dp1y+perpY*6*ps}
+                  stroke={STROKE} strokeWidth={1.2*ps} strokeLinecap="round" opacity={0.65} />
+            <line x1={x2+perpX*3*ps} y1={y2+perpY*3*ps} x2={dp2x+perpX*6*ps} y2={dp2y+perpY*6*ps}
+                  stroke={STROKE} strokeWidth={1.2*ps} strokeLinecap="round" opacity={0.65} />
+            <line x1={dp1x} y1={dp1y} x2={dp2x} y2={dp2y}
+                  stroke={STROKE} strokeWidth={1.2*ps} strokeLinecap="round" opacity={0.65} />
+            <path d={mkA(dp1x, dp1y, udx, udy)}
+                  stroke={STROKE} strokeWidth={1.2*ps} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.65} />
+            <path d={mkA(dp2x, dp2y, -udx, -udy)}
+                  stroke={STROKE} strokeWidth={1.2*ps} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.65} />
+            {showDims && len > 5*ps && dimTextEl((dp1x+dp2x)/2, (dp1y+dp2y)/2, normAng(ang), fmtPxAsReal(len, scaleDenom, units), ps)}
+          </>}
+        </>;
+      }
       default: return null;
     }
   }
@@ -4139,6 +4184,8 @@ function SketchPage({ page, projectId, onReload }) {
     select: 'default', line: 'crosshair', curve: 'crosshair',
     pencil: 'crosshair', pen: 'crosshair', node: 'default',
     circle: 'crosshair', rect: 'crosshair', text: 'text', eraser: 'pointer',
+    'dim-linear': 'crosshair', 'dim-angle': 'pointer',
+    'dim-bearing': 'pointer', 'dim-radius': 'pointer',
   };
 
   return (
@@ -4586,6 +4633,50 @@ function SketchPage({ page, projectId, onReload }) {
               </>
             );
           })()}
+
+          {/* ── Dimension tool context controls ─────────────────────────── */}
+          {['dim-linear', 'dim-angle', 'dim-bearing', 'dim-radius'].includes(tool) && (<>
+            <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
+            {tool === 'dim-linear' && (
+              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+                {drawState ? 'click P2' : 'click P1'}
+              </span>
+            )}
+            {tool === 'dim-angle' && (
+              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+                {drawState ? 'click 2nd line' : 'click a line'}
+              </span>
+            )}
+            {tool === 'dim-bearing' && (
+              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>click a line</span>
+            )}
+            {tool === 'dim-radius' && (
+              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>click circle or arc</span>
+            )}
+            {/* North azimuth: relevant to bearing dims */}
+            {tool === 'dim-bearing' && (<>
+              <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 4px', flexShrink: 0 }} />
+              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>N:</span>
+              <input
+                type="number" min={0} max={359} step={1}
+                value={northAzimuth}
+                onChange={e => {
+                  const v = ((Number(e.target.value) % 360) + 360) % 360;
+                  setNorthAzimuth(v);
+                  persist(undefined, undefined, undefined, { northAzimuth: v });
+                }}
+                title="True North azimuth — clockwise degrees from screen-up"
+                style={{
+                  width: 44, height: 22, borderRadius: 3, fontSize: 10, textAlign: 'center',
+                  fontFamily: 'Courier New, monospace', outline: 'none',
+                  background: 'rgba(255,255,255,0.08)',
+                  border: '1px solid rgba(255,255,255,0.18)',
+                  color: 'rgba(255,255,255,0.7)',
+                }}
+              />
+              <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.3)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>°</span>
+            </>)}
+          </>)}
 
           {/* ── Undo / Redo buttons ─────────────────────────────────────── */}
           <button
