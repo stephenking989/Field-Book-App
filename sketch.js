@@ -2788,6 +2788,7 @@ function SketchPage({ page, projectId, onReload }) {
   // thresh: mouse ≈ 8, touch ≈ 24 (fingers are imprecise).
   // For rotated shapes, the test point is un-rotated into shape-local space.
   function hitTest(pt, shapeList, thresh = 8) {
+    const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
     for (let i = shapeList.length - 1; i >= 0; i--) {
       const s = shapeList[i];
       // Un-rotate the test point into the shape's local (unrotated) space
