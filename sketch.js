@@ -914,6 +914,7 @@ function SketchPage({ page, projectId, onReload }) {
     midpoint:      false,  // snap to midpoints of segments
     intersection:  false,  // snap to line/line and line/circle intersections
     perpendicular: false,  // snap to perpendicular foot on a segment
+    tangent:       false,  // snap to tangent point from cursor to a circle
     grid:          false,  // snap to minor grid intersections
   });
   const [snapPoint, setSnapPoint] = useState(null); // {x,y,type}|null — visual indicator
@@ -3063,6 +3064,29 @@ function SketchPage({ page, projectId, onReload }) {
     return { x: a.x+t*dx, y: a.y+t*dy };
   }
 
+  // Tangent points from external point pt to a circle {cx, cy, r}.
+  // Returns 0, 1, or 2 points where a line from pt is tangent to the circle.
+  function getTangentPoints(pt, circle) {
+    const dx = pt.x - circle.cx;
+    const dy = pt.y - circle.cy;
+    const distSq = dx*dx + dy*dy;
+    const rSq = circle.r * circle.r;
+    if (distSq < rSq - 1e-8) return []; // pt is inside circle
+    if (distSq < 1e-8) return []; // pt is at centre
+    const dist = Math.sqrt(distSq);
+    if (dist <= circle.r) return []; // on or inside circle boundary
+    // Angle from pt→centre to the tangent line
+    const alpha = Math.asin(Math.min(1, circle.r / dist));
+    // Angle of the pt→centre direction
+    const theta = Math.atan2(circle.cy - pt.y, circle.cx - pt.x);
+    // The two tangent points lie on the circle at angles (theta ± (π/2 - alpha)) from centre
+    const phi = Math.PI / 2 - alpha;
+    return [
+      { x: circle.cx + circle.r * Math.cos(theta + phi + Math.PI), y: circle.cy + circle.r * Math.sin(theta + phi + Math.PI) },
+      { x: circle.cx + circle.r * Math.cos(theta - phi + Math.PI), y: circle.cy + circle.r * Math.sin(theta - phi + Math.PI) },
+    ];
+  }
+
   // Returns the nearest point(s) on a shape's actual geometry (edges/arcs).
   // Used by "On Object" snap — lets endpoints snap anywhere along a line, arc, circle, or rect edge.
   function nearestOnShape(pt, s) {
@@ -3123,6 +3147,7 @@ function SketchPage({ page, projectId, onReload }) {
       midpoint:      SNAP_R_PX * 0.75 * ps,   // ~10.5px
       intersection:  SNAP_R_PX * 0.50 * ps,   // ~7px  — weakest (on-object)
       perpendicular: SNAP_R_PX * 0.70 * ps,   // ~10px
+      tangent:       SNAP_R_PX * 0.70 * ps,   // ~10px
       grid:          SNAP_R_PX * 0.65 * ps,   // ~9px
     };
     const candidates = [];
@@ -3197,7 +3222,18 @@ function SketchPage({ page, projectId, onReload }) {
       }
     }
 
-    // ── 5. Grid ────────────────────────────────────────────────────────────
+    // ── 5. Tangent ─────────────────────────────────────────────────────────
+    if (snapModes.tangent && drawingFrom) {
+      for (const s of visibleShapes) {
+        if (s.type !== 'circle') continue;
+        for (const tp of getTangentPoints(drawingFrom, s)) {
+          const d = Math.hypot(pt.x-tp.x, pt.y-tp.y);
+          if (d < SR.tangent) candidates.push({ pt: tp, dist: d, type: 'tangent' });
+        }
+      }
+    }
+
+    // ── 6. Grid ────────────────────────────────────────────────────────────
     if (snapModes.grid) {
       const containerW = svgSizeRef.current.w || viewBox.w;
       const majorPx = realToPx(niceScaleBarValue(scaleDenom, viewBox.w, containerW, units), scaleDenom, units);
@@ -3212,7 +3248,7 @@ function SketchPage({ page, projectId, onReload }) {
       }
     }
 
-    const PRIORITY = { endpoint: 0, midpoint: 1, intersection: 2, perpendicular: 3, grid: 4 };
+    const PRIORITY = { endpoint: 0, midpoint: 1, intersection: 2, perpendicular: 3, tangent: 3, grid: 4 };
     candidates.sort((a, b) => a.dist - b.dist || PRIORITY[a.type] - PRIORITY[b.type]);
     return candidates;
   }
@@ -4397,6 +4433,7 @@ function SketchPage({ page, projectId, onReload }) {
               { key: 'midpoint',     label: 'Midpoint',       icon: '◈', col: '#22D3EE', bg: 'rgba(34,211,238,0.15)',  desc: 'Segment midpoints' },
               { key: 'intersection', label: 'On Object',      icon: '◎', col: '#FB923C', bg: 'rgba(251,146,60,0.15)',  desc: 'Nearest pt on shape' },
               { key: 'perpendicular',label: 'Perpendicular',  icon: '⊾', col: '#C084FC', bg: 'rgba(192,132,252,0.15)', desc: 'Perpendicular foot' },
+              { key: 'tangent',      label: 'Tangent',        icon: '⌒', col: '#A78BFA', bg: 'rgba(167,139,250,0.15)', desc: 'Tangent to circle' },
               { key: 'grid',         label: 'Grid',           icon: '⊞', col: '#FCD34D', bg: 'rgba(251,191,36,0.15)',  desc: 'Grid intersections' },
             ].map(({ key, label, icon, col, bg, desc }) => {
               const on = snapModes[key];
@@ -4421,17 +4458,6 @@ function SketchPage({ page, projectId, onReload }) {
                 </button>
               );
             })}
-            {/* Tangent — future */}
-            <button disabled style={{
-              width: '100%', height: 38, display: 'flex', alignItems: 'center',
-              gap: 10, padding: '0 14px',
-              background: 'transparent', border: 'none', cursor: 'default',
-              color: 'rgba(255,255,255,0.22)', fontSize: 11, opacity: 0.5,
-            }}>
-              <span style={{ fontSize: 14, lineHeight: 1, width: 16, textAlign: 'center' }}>⌒</span>
-              <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>Tangent</span>
-              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.18)' }}>soon</span>
-            </button>
           </div>
         )}
 
@@ -5101,6 +5127,7 @@ function SketchPage({ page, projectId, onReload }) {
                 midpoint:      '#22D3EE',
                 intersection:  '#FB923C',
                 perpendicular: '#C084FC',
+                tangent:       '#A78BFA',
                 grid:          '#FCD34D',
               };
               const col = colors[type] || '#22C55E';
@@ -5128,6 +5155,14 @@ function SketchPage({ page, projectId, onReload }) {
                 const d = r * 0.72;
                 indicator = <rect x={sx-d} y={sy-d} width={2*d} height={2*d}
                   fill="none" stroke={col} strokeWidth={sw} opacity={0.9} />;
+              } else if (type === 'tangent') {
+                // Violet arc (open semicircle) with centre dot — tangent-to-circle marker
+                const d = r * 0.82;
+                indicator = <>
+                  <path d={`M ${sx - d} ${sy} A ${d} ${d} 0 0 1 ${sx + d} ${sy}`}
+                    fill="none" stroke={col} strokeWidth={sw} opacity={0.9} strokeLinecap="round" />
+                  <circle cx={sx} cy={sy} r={2.5 * _ps} fill={col} opacity={0.9} />
+                </>;
               } else {
                 // Grid — yellow crosshair
                 indicator = <>
