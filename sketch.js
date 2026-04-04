@@ -3649,8 +3649,8 @@ function SketchPage({ page, projectId, onReload }) {
         const a2 = dimAngleArm(l2.x1, l2.y1, l2.x2, l2.y2, inter.x, inter.y);
         // Normalise to the shorter arc, then apply flip if requested.
         let dAng = ((a2-a1)+2*Math.PI) % (2*Math.PI);
-        let sweep = 0;
-        if (dAng > Math.PI) { dAng = 2*Math.PI - dAng; sweep = 1; }
+        let sweep = 1;
+        if (dAng > Math.PI) { dAng = 2*Math.PI - dAng; sweep = 0; }
         const arcR = (s.scale || 1.0) * 40 * ps;
         const ax1 = inter.x + Math.cos(a1)*arcR, ay1 = inter.y + Math.sin(a1)*arcR;
         const ax2 = inter.x + Math.cos(a2)*arcR, ay2 = inter.y + Math.sin(a2)*arcR;
