@@ -3911,10 +3911,12 @@ function SketchPage({ page, projectId, onReload }) {
         const midAng = s.flip ? midAngNormal + Math.PI : midAngNormal;
         const angleDeg = s.flip ? (360 - dAngA * 180/Math.PI) : (dAngA * 180/Math.PI);
         const arcRA = (s.scale || 1.0) * 40 * ps;
-        const lx = aInter.x + Math.cos(midAng) * (arcRA + 12*ps);
-        const ly = aInter.y + Math.sin(midAng) * (arcRA + 12*ps);
+        const lx = aInter.x + Math.cos(midAng) * (arcRA + 20*ps);
+        const ly = aInter.y + Math.sin(midAng) * (arcRA + 20*ps);
         const atxt = s.ntsLabel ? s.ntsLabel + ' *' : toDMS(angleDeg);
-        return dimTextEl(lx, ly, 0, atxt, ps);
+        // Rotate label to align with the bisector so it reads along the angle bisector.
+        const labelRotDeg = normAng(midAng * 180 / Math.PI);
+        return dimTextEl(lx, ly, labelRotDeg, atxt, ps);
       }
       case 'dim-bearing': {
         if (!s.p1 || !s.p2) return null;
