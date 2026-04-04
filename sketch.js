@@ -1960,15 +1960,20 @@ function SketchPage({ page, projectId, onReload }) {
       const hitThreshDA = (e.pointerType === 'touch' ? 24 : 8) * ps;
       const hitDA = hitTest(pt, shapes.filter(sh => sh.type === 'line'), hitThreshDA);
       if (!drawState) {
-        if (!hitDA) return; // must click on a line
+        // Phase 1: click first line
+        if (!hitDA) return;
         setDrawState({ type: 'dim-angle', phase: 1, line1Id: hitDA.id });
+      } else if (drawState.phase === 1) {
+        // Phase 2: click second line → enter preview/side-selection mode
+        if (!hitDA || hitDA.id === drawState.line1Id) return;
+        setDrawState({ type: 'dim-angle', phase: 2, line1Id: drawState.line1Id, line2Id: hitDA.id, flip: false });
       } else {
-        if (!hitDA || hitDA.id === drawState.line1Id) return; // must click a different line
+        // Phase 3: commit with whichever side the cursor is currently on
         const dimId = newId();
         commitShapes([...shapes, {
           id: dimId, type: 'dim-angle',
-          line1Id: drawState.line1Id, line2Id: hitDA.id,
-          scale: 1.0, flip: false,
+          line1Id: drawState.line1Id, line2Id: drawState.line2Id,
+          scale: 1.0, flip: drawState.flip || false,
           stroke: STROKE, strokeWidth: STROKE_W,
           layerId: getDimLayerId(),
         }]);
@@ -2594,6 +2599,26 @@ function SketchPage({ page, projectId, onReload }) {
     }
     if (drawState.type === 'dim-bearing') {
       setDrawState(d => d?.phase === 1 ? { ...d, x2: pt.x, y2: pt.y } : d);
+    }
+    // dim-angle phase 2: update flip based on which side of the intersection the cursor is on
+    if (drawState.type === 'dim-angle' && drawState.phase === 2) {
+      const _l1 = shapes.find(sh => sh.id === drawState.line1Id && sh.type === 'line');
+      const _l2 = shapes.find(sh => sh.id === drawState.line2Id && sh.type === 'line');
+      if (_l1 && _l2) {
+        const _int = lineIntersection(_l1.x1, _l1.y1, _l1.x2, _l1.y2, _l2.x1, _l2.y1, _l2.x2, _l2.y2);
+        if (_int) {
+          let _a1 = dimAngleArm(_l1.x1, _l1.y1, _l1.x2, _l1.y2, _int.x, _int.y);
+          let _a2 = dimAngleArm(_l2.x1, _l2.y1, _l2.x2, _l2.y2, _int.x, _int.y);
+          let _dAng = ((_a2-_a1)+2*Math.PI) % (2*Math.PI);
+          if (_dAng > Math.PI) { const _t = _a1; _a1 = _a2; _a2 = _t; _dAng = 2*Math.PI - _dAng; }
+          const _midNorm = _a1 + _dAng/2;
+          const _midFlip = _midNorm + Math.PI;
+          const _cAng = Math.atan2(pt.y - _int.y, pt.x - _int.x);
+          const _dN = Math.abs((((_cAng-_midNorm)+3*Math.PI) % (2*Math.PI)) - Math.PI);
+          const _dF = Math.abs((((_cAng-_midFlip)+3*Math.PI) % (2*Math.PI)) - Math.PI);
+          setDrawState(d => d ? { ...d, flip: _dF < _dN } : d);
+        }
+      }
     }
 
     if (drawState.type === 'line') {
@@ -4249,6 +4274,39 @@ function SketchPage({ page, projectId, onReload }) {
           </>}
         </>;
       }
+      case 'dim-angle': {
+        if (drawState.phase === 1) {
+          // Highlight the first selected line in blue
+          const _pl1 = shapes.find(sh => sh.id === drawState.line1Id && sh.type === 'line');
+          if (!_pl1) return null;
+          return <line x1={_pl1.x1} y1={_pl1.y1} x2={_pl1.x2} y2={_pl1.y2}
+                       stroke="#3B82F6" strokeWidth={2.5*ps} strokeLinecap="round" opacity={0.55} />;
+        }
+        // Phase 2: live arc preview that flips as cursor crosses sides
+        const _pl1 = shapes.find(sh => sh.id === drawState.line1Id && sh.type === 'line');
+        const _pl2 = shapes.find(sh => sh.id === drawState.line2Id && sh.type === 'line');
+        if (!_pl1 || !_pl2) return null;
+        const _pi = lineIntersection(_pl1.x1, _pl1.y1, _pl1.x2, _pl1.y2, _pl2.x1, _pl2.y1, _pl2.x2, _pl2.y2);
+        if (!_pi) return null;
+        let _pa1 = dimAngleArm(_pl1.x1, _pl1.y1, _pl1.x2, _pl1.y2, _pi.x, _pi.y);
+        let _pa2 = dimAngleArm(_pl2.x1, _pl2.y1, _pl2.x2, _pl2.y2, _pi.x, _pi.y);
+        let _pdAng = ((_pa2-_pa1)+2*Math.PI) % (2*Math.PI);
+        if (_pdAng > Math.PI) { const _t = _pa1; _pa1 = _pa2; _pa2 = _t; _pdAng = 2*Math.PI - _pdAng; }
+        const _flip = drawState.flip || false;
+        const _pr = 40 * ps;
+        const _pax1 = _pi.x + Math.cos(_pa1)*_pr, _pay1 = _pi.y + Math.sin(_pa1)*_pr;
+        const _pax2 = _pi.x + Math.cos(_pa2)*_pr, _pay2 = _pi.y + Math.sin(_pa2)*_pr;
+        const _pLarge = _flip ? 1 : 0, _pSweep = _flip ? 0 : 1;
+        const _pMid = (_pa1 + _pdAng/2) + (_flip ? Math.PI : 0);
+        const _pDeg  = _flip ? (360 - _pdAng*180/Math.PI) : (_pdAng*180/Math.PI);
+        const _plx = _pi.x + Math.cos(_pMid)*(_pr + 30*ps);
+        const _ply = _pi.y + Math.sin(_pMid)*(_pr + 30*ps);
+        return <>
+          <path d={`M ${_pax1} ${_pay1} A ${_pr} ${_pr} 0 ${_pLarge} ${_pSweep} ${_pax2} ${_pay2}`}
+                stroke={STROKE} strokeWidth={1.5*ps} fill="none" strokeLinecap="round" opacity={0.6} />
+          {showDims && dimTextEl(_plx, _ply, normAng(_pMid*180/Math.PI), toDMS(_pDeg), ps)}
+        </>;
+      }
       default: return null;
     }
   }
@@ -4708,7 +4766,7 @@ function SketchPage({ page, projectId, onReload }) {
             )}
             {tool === 'dim-angle' && (
               <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
-                {drawState ? 'click 2nd line' : 'click a line'}
+                {!drawState ? 'click a line' : drawState.phase === 1 ? 'click 2nd line' : 'click to confirm side'}
               </span>
             )}
             {tool === 'dim-bearing' && (
