@@ -399,27 +399,31 @@ function fmtDim(v) {
   return v.toFixed(2);
 }
 
-// Render a single dimension text element at (lx, ly) rotated by `angle` degrees.
-// Uses SVG paint-order trick to stroke a white halo behind the fill, keeping
-// the label readable over lines, fills, and the grid at any zoom level.
+// Render a dimension text label at (lx, ly) rotated by `angle` degrees.
+// A white rectangle sized to the text bounding box is drawn first so that
+// no drawing lines can cross through the label text.
 // NOT a React component (lowercase) — call as a factory that returns a React element.
 function dimTextEl(lx, ly, angle, text, ps) {
-  const a = angle || 0;
-  return (
-    <text
-      x={lx} y={ly}
-      transform={a ? `rotate(${a},${lx},${ly})` : undefined}
-      fontSize={9.5 * ps}
-      fontFamily="Courier New, monospace"
-      textAnchor="middle"
-      dominantBaseline="middle"
-      fill={STROKE}
-      stroke="rgba(255,255,255,0.90)"
-      strokeWidth={2.5 * ps}
-      paintOrder="stroke fill"
-      style={{ pointerEvents: 'none', userSelect: 'none' }}
+  const a   = angle || 0;
+  const fs  = 9.5 * ps;
+  // Courier New is monospace: char width ≈ 0.6 em, line height ≈ 1.4 em.
+  const rw  = (text ? text.length : 1) * fs * 0.6 + 4 * ps;
+  const rh  = fs * 1.4;
+  const content = <>
+    <rect x={lx - rw/2} y={ly - rh/2} width={rw} height={rh}
+          fill="rgba(255,255,255,0.97)" />
+    <text x={lx} y={ly}
+          fontSize={fs}
+          fontFamily="Courier New, monospace"
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fill={STROKE}
+          style={{ pointerEvents: 'none', userSelect: 'none' }}
     >{text}</text>
-  );
+  </>;
+  return a
+    ? <g transform={`rotate(${a},${lx},${ly})`} style={{ pointerEvents:'none', userSelect:'none' }}>{content}</g>
+    : <g style={{ pointerEvents:'none', userSelect:'none' }}>{content}</g>;
 }
 
 // Format decimal degrees as D°MM'SS"
@@ -871,6 +875,8 @@ function offsetShape(s, dx, dy) {
     case 'dim-linear':
       return { ...s, p1: { x:s.p1.x+dx, y:s.p1.y+dy }, p2: { x:s.p2.x+dx, y:s.p2.y+dy } };
     case 'dim-bearing':
+      if (s.p1 && s.p2) return { ...s, p1: { x:s.p1.x+dx, y:s.p1.y+dy }, p2: { x:s.p2.x+dx, y:s.p2.y+dy } };
+      return s;
     case 'dim-radius':
       return { ...s, offset: { x:(s.offset?.x||0)+dx, y:(s.offset?.y||0)+dy } };
     // dim-angle references line IDs — shifting it independently doesn't make geometric sense;
@@ -1499,7 +1505,6 @@ function SketchPage({ page, projectId, onReload }) {
         ];
       }
       case 'dim-angle': {
-        // No geometric handles — just a body handle at the arc midpoint
         const l1 = shapes.find(sh => sh.id === shape.line1Id && sh.type === 'line');
         const l2 = shapes.find(sh => sh.id === shape.line2Id && sh.type === 'line');
         if (!l1 || !l2) return [];
@@ -1507,21 +1512,19 @@ function SketchPage({ page, projectId, onReload }) {
         if (!inter) return [];
         const _ps3 = viewBox.w / (svgSizeRef.current.w || viewBox.w);
         const arcR = (shape.scale || 1.0) * 40 * _ps3;
-        const mid1 = { x: (l1.x1+l1.x2)/2, y: (l1.y1+l1.y2)/2 };
-        const mid2 = { x: (l2.x1+l2.x2)/2, y: (l2.y1+l2.y2)/2 };
-        const d1 = Math.hypot(mid1.x-inter.x, mid1.y-inter.y) || 1;
-        const d2 = Math.hypot(mid2.x-inter.x, mid2.y-inter.y) || 1;
-        const a1 = Math.atan2((mid1.y-inter.y)/d1, (mid1.x-inter.x)/d1);
-        const a2 = Math.atan2((mid2.y-inter.y)/d2, (mid2.x-inter.x)/d2);
+        const a1 = dimAngleArm(l1.x1, l1.y1, l1.x2, l1.y2, inter.x, inter.y);
+        const a2 = dimAngleArm(l2.x1, l2.y1, l2.x2, l2.y2, inter.x, inter.y);
         let dAng = ((a2-a1)+2*Math.PI) % (2*Math.PI);
-        const midAng = dAng > Math.PI ? a1 - (2*Math.PI-dAng)/2 : a1 + dAng/2;
+        if (dAng > Math.PI) dAng = 2*Math.PI - dAng;
+        const midAng = (a1 + dAng/2) + (shape.flip ? Math.PI : 0);
         return [{ key: 'body', x: inter.x + Math.cos(midAng)*arcR, y: inter.y + Math.sin(midAng)*arcR, type: 'control' }];
       }
       case 'dim-bearing': {
-        const ln = shapes.find(sh => sh.id === shape.lineId && sh.type === 'line');
-        if (!ln) return [];
-        const off = shape.offset || { x: 0, y: 0 };
-        return [{ key: 'body', x: (ln.x1+ln.x2)/2 + off.x, y: (ln.y1+ln.y2)/2 + off.y, type: 'control' }];
+        if (!shape.p1 || !shape.p2) return [];
+        return [
+          { key: 'p1', x: shape.p1.x, y: shape.p1.y, type: 'endpoint' },
+          { key: 'p2', x: shape.p2.x, y: shape.p2.y, type: 'endpoint' },
+        ];
       }
       case 'dim-radius': {
         const ref = shapes.find(sh => sh.id === shape.shapeId);
@@ -1713,14 +1716,38 @@ function SketchPage({ page, projectId, onReload }) {
         break;
       }
       case 'dim-bearing':
-        if (nodeKey === 'body') return { ...shape, offset: { x:(shape.offset?.x||0)+dx, y:(shape.offset?.y||0)+dy } };
+        if (nodeKey === 'p1') return { ...shape, p1: { x:(shape.p1?.x||0)+dx, y:(shape.p1?.y||0)+dy } };
+        if (nodeKey === 'p2') return { ...shape, p2: { x:(shape.p2?.x||0)+dx, y:(shape.p2?.y||0)+dy } };
         break;
       case 'dim-radius':
         if (nodeKey === 'body') return { ...shape, offset: { x:(shape.offset?.x||0)+dx, y:(shape.offset?.y||0)+dy } };
         break;
-      case 'dim-angle':
-        // No moveable handles — body drag handled by the 'body' key above
-        break;
+      case 'dim-angle': {
+        if (nodeKey !== 'body') break;
+        const _l1 = shapes.find(sh => sh.id === shape.line1Id && sh.type === 'line');
+        const _l2 = shapes.find(sh => sh.id === shape.line2Id && sh.type === 'line');
+        if (!_l1 || !_l2) break;
+        const _inter = lineIntersection(_l1.x1, _l1.y1, _l1.x2, _l1.y2, _l2.x1, _l2.y1, _l2.x2, _l2.y2);
+        if (!_inter) break;
+        const _psD = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+        const _arcR = (shape.scale || 1.0) * 40 * _psD;
+        const _a1 = dimAngleArm(_l1.x1, _l1.y1, _l1.x2, _l1.y2, _inter.x, _inter.y);
+        const _a2 = dimAngleArm(_l2.x1, _l2.y1, _l2.x2, _l2.y2, _inter.x, _inter.y);
+        let _dAng = ((_a2-_a1)+2*Math.PI) % (2*Math.PI);
+        if (_dAng > Math.PI) _dAng = 2*Math.PI - _dAng;
+        const _midNorm = _a1 + _dAng/2;
+        const _midFlip = _midNorm + Math.PI;
+        // Current handle position + incremental drag delta
+        const _curMid = shape.flip ? _midFlip : _midNorm;
+        const hx = _inter.x + Math.cos(_curMid)*_arcR + dx;
+        const hy = _inter.y + Math.sin(_curMid)*_arcR + dy;
+        const toDrag = Math.atan2(hy - _inter.y, hx - _inter.x);
+        const newDist = Math.hypot(hx - _inter.x, hy - _inter.y);
+        const newScale = Math.max(0.3, newDist / (40 * _psD));
+        const angDiff = (a, b) => Math.abs(((a - b + 3*Math.PI) % (2*Math.PI)) - Math.PI);
+        const newFlip = angDiff(toDrag, _midFlip) < angDiff(toDrag, _midNorm);
+        return { ...shape, scale: newScale, flip: newFlip };
+      }
     }
     return shape;
   }
@@ -1941,7 +1968,7 @@ function SketchPage({ page, projectId, onReload }) {
         commitShapes([...shapes, {
           id: dimId, type: 'dim-angle',
           line1Id: drawState.line1Id, line2Id: hitDA.id,
-          scale: 1.0,
+          scale: 1.0, flip: false,
           stroke: STROKE, strokeWidth: STROKE_W,
           layerId: getDimLayerId(),
         }]);
@@ -1954,23 +1981,23 @@ function SketchPage({ page, projectId, onReload }) {
     }
 
     if (tool === 'dim-bearing') {
-      const hitThreshDB = (e.pointerType === 'touch' ? 24 : 8) * ps;
-      const hitDB = hitTest(pt, shapes.filter(sh => sh.type === 'line'), hitThreshDB);
-      if (!hitDB) return;
-      const dimId = newId();
-      // Default offset: 40 screen-px above the line (perpendicular to line direction)
-      const blen = Math.hypot(hitDB.x2-hitDB.x1, hitDB.y2-hitDB.y1) || 1;
-      const bperpX = -(hitDB.y2-hitDB.y1)/blen, bperpY = (hitDB.x2-hitDB.x1)/blen;
-      commitShapes([...shapes, {
-        id: dimId, type: 'dim-bearing',
-        lineId: hitDB.id,
-        offset: { x: bperpX * 40*ps, y: bperpY * 40*ps },
-        stroke: STROKE, strokeWidth: STROKE_W,
-        layerId: getDimLayerId(),
-      }]);
-      setSelectedIds([dimId]);
-      setPrevTool(tool);
-      setSnapPoint(null);
+      const sp = anySnapActive ? resolveSnap(pt) : pt;
+      if (!drawState) {
+        setDrawState({ type: 'dim-bearing', phase: 1, x1: sp.x, y1: sp.y, x2: sp.x, y2: sp.y });
+      } else {
+        const dimId = newId();
+        commitShapes([...shapes, {
+          id: dimId, type: 'dim-bearing',
+          p1: { x: drawState.x1, y: drawState.y1 },
+          p2: { x: sp.x, y: sp.y },
+          stroke: STROKE, strokeWidth: STROKE_W,
+          layerId: getDimLayerId(),
+        }]);
+        setSelectedIds([dimId]);
+        setPrevTool(tool);
+        setDrawState(null);
+        setSnapPoint(null);
+      }
       return;
     }
 
@@ -2467,6 +2494,8 @@ function SketchPage({ page, projectId, onReload }) {
         if (drawState.type === 'curve')  drawingFrom = { x: drawState.x1, y: drawState.y1 };
         if (drawState.type === 'rect')   drawingFrom = { x: drawState.ox, y: drawState.oy };
         if (drawState.type === 'circle') drawingFrom = { x: drawState.cx, y: drawState.cy };
+        if (drawState.type === 'dim-linear'  && drawState.phase === 1) drawingFrom = { x: drawState.x1, y: drawState.y1 };
+        if (drawState.type === 'dim-bearing' && drawState.phase === 1) drawingFrom = { x: drawState.x1, y: drawState.y1 };
         pt = resolveSnap(rawPt, drawingFrom);
       } else {
         setSnapPoint(null);
@@ -2559,8 +2588,11 @@ function SketchPage({ page, projectId, onReload }) {
 
     if (!drawState) return;
 
-    // dim-linear: P2 tracks cursor after P1 is placed
+    // dim-linear / dim-bearing: P2 tracks cursor after P1 is placed
     if (drawState.type === 'dim-linear') {
+      setDrawState(d => d?.phase === 1 ? { ...d, x2: pt.x, y2: pt.y } : d);
+    }
+    if (drawState.type === 'dim-bearing') {
       setDrawState(d => d?.phase === 1 ? { ...d, x2: pt.x, y2: pt.y } : d);
     }
 
@@ -2891,11 +2923,8 @@ function SketchPage({ page, projectId, onReload }) {
         const arcR = (s.scale || 1.0) * 40 * ps;
         if (Math.abs(Math.hypot(tp.x-inter.x, tp.y-inter.y) - arcR) < thresh * 2) return s;
       } else if (s.type === 'dim-bearing') {
-        const ln = shapes.find(sh => sh.id === s.lineId && sh.type === 'line');
-        if (!ln) continue;
-        const off = s.offset || { x: 0, y: 0 };
-        const tx = (ln.x1+ln.x2)/2 + off.x, ty = (ln.y1+ln.y2)/2 + off.y;
-        if (Math.hypot(tp.x-tx, tp.y-ty) < thresh * 3) return s;
+        if (!s.p1 || !s.p2) continue;
+        if (distToSegment(tp, s.p1, s.p2) < thresh * 2) return s;
       } else if (s.type === 'dim-radius') {
         const ref = shapes.find(sh => sh.id === s.shapeId);
         if (!ref) continue;
@@ -3062,6 +3091,17 @@ function SketchPage({ page, projectId, onReload }) {
     if (lenSq < 1e-8) return null;
     const t = Math.max(0, Math.min(1, ((pt.x-a.x)*dx + (pt.y-a.y)*dy) / lenSq));
     return { x: a.x+t*dx, y: a.y+t*dy };
+  }
+
+  // Direction from an intersection point INTO the body of line segment (lx1,ly1)→(lx2,ly2).
+  // Uses the projection parameter t to decide which endpoint is "near" the intersection,
+  // then points toward the far endpoint so the arm always lies inside the segment.
+  function dimAngleArm(lx1, ly1, lx2, ly2, px, py) {
+    const dx = lx2 - lx1, dy = ly2 - ly1;
+    const lenSq = dx*dx + dy*dy || 1;
+    const t = ((px - lx1)*dx + (py - ly1)*dy) / lenSq;
+    // t ≤ 0.5 → intersection is in the first half → arm points toward endpoint 2
+    return t <= 0.5 ? Math.atan2(dy, dx) : Math.atan2(-dy, -dx);
   }
 
   // Tangent points from external point pt to a circle {cx, cy, r}.
@@ -3406,10 +3446,8 @@ function SketchPage({ page, projectId, onReload }) {
         }
         case 'dim-linear':
           add(s.p1.x, s.p1.y); add(s.p2.x, s.p2.y); break;
-        case 'dim-bearing': {
-          const _bln = shapes.find(sh => sh.id === s.lineId);
-          if (_bln) { add(_bln.x1,_bln.y1); add(_bln.x2,_bln.y2); } break;
-        }
+        case 'dim-bearing':
+          if (s.p1 && s.p2) { add(s.p1.x, s.p1.y); add(s.p2.x, s.p2.y); } break;
         case 'dim-radius': {
           const _bref = shapes.find(sh => sh.id === s.shapeId);
           if (_bref) {
@@ -3605,66 +3643,48 @@ function SketchPage({ page, projectId, onReload }) {
         if (!l1 || !l2) return null;
         const inter = lineIntersection(l1.x1, l1.y1, l1.x2, l1.y2, l2.x1, l2.y1, l2.x2, l2.y2);
         if (!inter) return null;
-        // Direction from intersection toward each line's midpoint — gives us the
-        // "near side" of each line, so the arc always sits between the segments.
-        const mid1 = { x:(l1.x1+l1.x2)/2, y:(l1.y1+l1.y2)/2 };
-        const mid2 = { x:(l2.x1+l2.x2)/2, y:(l2.y1+l2.y2)/2 };
-        const d1 = Math.hypot(mid1.x-inter.x, mid1.y-inter.y) || 1;
-        const d2 = Math.hypot(mid2.x-inter.x, mid2.y-inter.y) || 1;
-        const a1 = Math.atan2((mid1.y-inter.y)/d1, (mid1.x-inter.x)/d1);
-        const a2 = Math.atan2((mid2.y-inter.y)/d2, (mid2.x-inter.x)/d2);
-        // Arc from a1 to a2 using the shorter sweep
+        // Use endpoint-parameter heuristic so the arc always sits inside the actual
+        // line segments regardless of where the intersection falls relative to them.
+        const a1 = dimAngleArm(l1.x1, l1.y1, l1.x2, l1.y2, inter.x, inter.y);
+        const a2 = dimAngleArm(l2.x1, l2.y1, l2.x2, l2.y2, inter.x, inter.y);
+        // Normalise to the shorter arc, then apply flip if requested.
         let dAng = ((a2-a1)+2*Math.PI) % (2*Math.PI);
         let sweep = 0;
         if (dAng > Math.PI) { dAng = 2*Math.PI - dAng; sweep = 1; }
         const arcR = (s.scale || 1.0) * 40 * ps;
         const ax1 = inter.x + Math.cos(a1)*arcR, ay1 = inter.y + Math.sin(a1)*arcR;
         const ax2 = inter.x + Math.cos(a2)*arcR, ay2 = inter.y + Math.sin(a2)*arcR;
+        // flip=true draws the complementary (larger) arc on the other side.
+        const largeArc = s.flip ? 1 : 0;
+        const sweepF   = s.flip ? (1 - sweep) : sweep;
         const sw2 = 1.2 * ps;
         inner = (
           <g style={sel}>
-            <path d={`M ${ax1} ${ay1} A ${arcR} ${arcR} 0 0 ${sweep} ${ax2} ${ay2}`}
+            <path d={`M ${ax1} ${ay1} A ${arcR} ${arcR} 0 ${largeArc} ${sweepF} ${ax2} ${ay2}`}
                   stroke={STROKE} strokeWidth={sw2} fill="none" strokeLinecap="round" />
           </g>
         );
         break;
       }
       case 'dim-bearing': {
-        // Bearing dimension: small North arrow + leader back to line midpoint.
-        const ln = shapes.find(sh => sh.id === s.lineId && sh.type === 'line');
-        if (!ln) return null;
-        const off = s.offset || { x: 0, y: 0 };
-        const lmx = (ln.x1+ln.x2)/2, lmy = (ln.y1+ln.y2)/2;
-        const tx = lmx + off.x, ty = lmy + off.y;
-        // North direction: screen-up rotated by northAzimuth (clockwise)
-        const nRad = northAzimuth * Math.PI / 180;
-        const ndx = Math.sin(nRad), ndy = -Math.cos(nRad);
-        const nh = 18 * ps;
-        const nTipX = tx + ndx*nh*0.6,  nTipY = ty + ndy*nh*0.6;
-        const nBaseX = tx - ndx*nh*0.4, nBaseY = ty - ndy*nh*0.4;
-        const as = 3.5 * ps;
+        // Bearing dimension: arrow from P1 to P2, label rotated along the line.
+        // Legacy shapes that referenced a lineId are silently skipped.
+        if (!s.p1 || !s.p2) return null;
+        const { p1, p2 } = s;
+        const bLen = Math.hypot(p2.x-p1.x, p2.y-p1.y);
+        if (bLen < 1) return null;
+        const udx = (p2.x-p1.x)/bLen, udy = (p2.y-p1.y)/bLen;
         const sw3 = 1.2 * ps;
-        // Perpendicular of the north arrow direction (for arrowhead sides)
-        const npx = -ndy, npy = ndx;
+        const ah = 8 * ps, as = 3 * ps;
+        const mkArrow = (ax, ay, dx, dy) =>
+          `M ${ax-dx*ah*0.5+dy*as} ${ay-dy*ah*0.5-dx*as} L ${ax} ${ay} L ${ax-dx*ah*0.5-dy*as} ${ay-dy*ah*0.5+dx*as}`;
         inner = (
           <g style={sel}>
-            {/* Dashed leader from label position back to line midpoint */}
-            <line x1={lmx} y1={lmy} x2={tx} y2={ty}
-                  stroke={STROKE} strokeWidth={sw3*0.7}
-                  strokeDasharray={`${3*ps},${2*ps}`} strokeLinecap="round" />
-            {/* North arrow stem */}
-            <line x1={nBaseX} y1={nBaseY} x2={nTipX} y2={nTipY}
+            <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}
                   stroke={STROKE} strokeWidth={sw3} strokeLinecap="round" />
-            {/* Solid arrowhead at tip */}
-            <polygon points={`${nTipX},${nTipY} ${nTipX-ndx*nh*0.25+npx*as},${nTipY-ndy*nh*0.25+npy*as} ${nTipX-ndx*nh*0.25-npx*as},${nTipY-ndy*nh*0.25-npy*as}`}
-                     fill={STROKE} style={sel} />
-            {/* "N" label above the arrowhead */}
-            <text x={nTipX + ndx*7*ps} y={nTipY + ndy*7*ps}
-                  textAnchor="middle" dominantBaseline="middle"
-                  fontSize={7*ps} fontFamily="Courier New, monospace"
-                  fill={STROKE} stroke="rgba(255,255,248,0.8)" strokeWidth={1.5*ps}
-                  paintOrder="stroke fill"
-                  style={{ pointerEvents:'none', userSelect:'none' }}>N</text>
+            <path d={mkArrow(p2.x, p2.y, udx, udy)}
+                  stroke={STROKE} strokeWidth={sw3} fill="none"
+                  strokeLinecap="round" strokeLinejoin="round" />
           </g>
         );
         break;
@@ -3882,37 +3902,31 @@ function SketchPage({ page, projectId, onReload }) {
         if (!al1 || !al2) return null;
         const aInter = lineIntersection(al1.x1, al1.y1, al1.x2, al1.y2, al2.x1, al2.y1, al2.x2, al2.y2);
         if (!aInter) return null;
-        const amid1 = { x:(al1.x1+al1.x2)/2, y:(al1.y1+al1.y2)/2 };
-        const amid2 = { x:(al2.x1+al2.x2)/2, y:(al2.y1+al2.y2)/2 };
-        const ad1 = Math.hypot(amid1.x-aInter.x, amid1.y-aInter.y) || 1;
-        const ad2 = Math.hypot(amid2.x-aInter.x, amid2.y-aInter.y) || 1;
-        const aa1 = Math.atan2((amid1.y-aInter.y)/ad1, (amid1.x-aInter.x)/ad1);
-        const aa2 = Math.atan2((amid2.y-aInter.y)/ad2, (amid2.x-aInter.x)/ad2);
+        const aa1 = dimAngleArm(al1.x1, al1.y1, al1.x2, al1.y2, aInter.x, aInter.y);
+        const aa2 = dimAngleArm(al2.x1, al2.y1, al2.x2, al2.y2, aInter.x, aInter.y);
         let dAngA = ((aa2-aa1)+2*Math.PI) % (2*Math.PI);
-        let midAng;
-        if (dAngA > Math.PI) { dAngA = 2*Math.PI - dAngA; midAng = aa1 - dAngA/2; }
-        else                 { midAng = aa1 + dAngA/2; }
+        if (dAngA > Math.PI) dAngA = 2*Math.PI - dAngA;
+        // midAng sits in the centre of whichever arc sector is displayed.
+        const midAngNormal  = aa1 + dAngA / 2;
+        const midAng = s.flip ? midAngNormal + Math.PI : midAngNormal;
+        const angleDeg = s.flip ? (360 - dAngA * 180/Math.PI) : (dAngA * 180/Math.PI);
         const arcRA = (s.scale || 1.0) * 40 * ps;
         const lx = aInter.x + Math.cos(midAng) * (arcRA + 12*ps);
         const ly = aInter.y + Math.sin(midAng) * (arcRA + 12*ps);
-        const angleDeg = dAngA * 180 / Math.PI;
         const atxt = s.ntsLabel ? s.ntsLabel + ' *' : toDMS(angleDeg);
         return dimTextEl(lx, ly, 0, atxt, ps);
       }
       case 'dim-bearing': {
-        const bln = shapes.find(sh => sh.id === s.lineId && sh.type === 'line');
-        if (!bln) return null;
-        const boff = s.offset || { x: 0, y: 0 };
-        const btx = (bln.x1+bln.x2)/2 + boff.x;
-        const bty = (bln.y1+bln.y2)/2 + boff.y;
-        // Bearing: azimuth of the line clockwise from North (adjusted by northAzimuth)
-        const rawAz = ((Math.atan2(bln.x2-bln.x1, -(bln.y2-bln.y1)) * 180/Math.PI) + 360) % 360;
+        if (!s.p1 || !s.p2) return null;
+        const { p1: bp1, p2: bp2 } = s;
+        const bLen2 = Math.hypot(bp2.x-bp1.x, bp2.y-bp1.y);
+        if (bLen2 < 5*ps) return null;
+        const bmx = (bp1.x+bp2.x)/2, bmy = (bp1.y+bp2.y)/2;
+        const rawAz = ((Math.atan2(bp2.x-bp1.x, -(bp2.y-bp1.y)) * 180/Math.PI) + 360) % 360;
         const adjustedAz = (rawAz - northAzimuth + 360) % 360;
+        const lineAngDeg = Math.atan2(bp2.y-bp1.y, bp2.x-bp1.x) * 180/Math.PI;
         const btxt = s.ntsLabel ? s.ntsLabel + ' *' : toDMS(adjustedAz);
-        // Place text below the North arrow base
-        const nRadB = northAzimuth * Math.PI / 180;
-        const ndxB = Math.sin(nRadB), ndyB = -Math.cos(nRadB);
-        return dimTextEl(btx - ndxB*14*ps, bty - ndyB*14*ps, 0, btxt, ps);
+        return dimTextEl(bmx, bmy, normAng(lineAngDeg), btxt, ps);
       }
       case 'dim-radius': {
         const rref = shapes.find(sh => sh.id === s.shapeId);
@@ -4180,6 +4194,28 @@ function SketchPage({ page, projectId, onReload }) {
           />
         );
       }
+      case 'dim-bearing': {
+        // Phase 1 preview: dot at P1, dashed line to cursor, ghosted bearing arrow + label
+        const { x1: bx1, y1: by1, x2: bx2, y2: by2 } = drawState;
+        const bpLen = Math.hypot(bx2-bx1, by2-by1);
+        if (bpLen < 2) return <circle cx={bx1} cy={by1} r={4*ps} fill="#3B82F6" opacity={0.7} />;
+        const budx = (bx2-bx1)/bpLen, budy = (by2-by1)/bpLen;
+        const bah = 8*ps, bas = 3*ps;
+        const bAng = Math.atan2(by2-by1, bx2-bx1) * 180/Math.PI;
+        const bAz  = ((Math.atan2(bx2-bx1, -(by2-by1)) * 180/Math.PI) + 360) % 360;
+        const bAzAdj = (bAz - northAzimuth + 360) % 360;
+        const mkBA = (ax, ay, dx, dy) =>
+          `M ${ax-dx*bah*0.5+dy*bas} ${ay-dy*bah*0.5-dx*bas} L ${ax} ${ay} L ${ax-dx*bah*0.5-dy*bas} ${ay-dy*bah*0.5+dx*bas}`;
+        return <>
+          <circle cx={bx1} cy={by1} r={4*ps} fill="#3B82F6" opacity={0.7} />
+          <line x1={bx1} y1={by1} x2={bx2} y2={by2} {...props} />
+          <path d={mkBA(bx2, by2, budx, budy)}
+                stroke={STROKE} strokeWidth={1.2*ps} fill="none"
+                strokeLinecap="round" strokeLinejoin="round" opacity={0.65} />
+          {showDims && bpLen > 5*ps &&
+            dimTextEl((bx1+bx2)/2, (by1+by2)/2, normAng(bAng), toDMS(bAzAdj), ps)}
+        </>;
+      }
       case 'dim-linear': {
         // Phase 1 preview: dot at P1, dashed rubber-band line to cursor + ghosted dim
         const { x1, y1, x2, y2 } = drawState;
@@ -4222,7 +4258,7 @@ function SketchPage({ page, projectId, onReload }) {
     pencil: 'crosshair', pen: 'crosshair', node: 'default',
     circle: 'crosshair', rect: 'crosshair', text: 'text', eraser: 'pointer',
     'dim-linear': 'crosshair', 'dim-angle': 'pointer',
-    'dim-bearing': 'pointer', 'dim-radius': 'pointer',
+    'dim-bearing': 'crosshair', 'dim-radius': 'pointer',
   };
 
   return (
@@ -4675,7 +4711,9 @@ function SketchPage({ page, projectId, onReload }) {
               </span>
             )}
             {tool === 'dim-bearing' && (
-              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>click a line</span>
+              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+                {drawState ? 'click P2' : 'click P1'}
+              </span>
             )}
             {tool === 'dim-radius' && (
               <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>click circle or arc</span>
