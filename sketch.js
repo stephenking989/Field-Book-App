@@ -1512,10 +1512,10 @@ function SketchPage({ page, projectId, onReload }) {
         if (!inter) return [];
         const _ps3 = viewBox.w / (svgSizeRef.current.w || viewBox.w);
         const arcR = (shape.scale || 1.0) * 40 * _ps3;
-        const a1 = dimAngleArm(l1.x1, l1.y1, l1.x2, l1.y2, inter.x, inter.y);
-        const a2 = dimAngleArm(l2.x1, l2.y1, l2.x2, l2.y2, inter.x, inter.y);
+        let a1 = dimAngleArm(l1.x1, l1.y1, l1.x2, l1.y2, inter.x, inter.y);
+        let a2 = dimAngleArm(l2.x1, l2.y1, l2.x2, l2.y2, inter.x, inter.y);
         let dAng = ((a2-a1)+2*Math.PI) % (2*Math.PI);
-        if (dAng > Math.PI) dAng = 2*Math.PI - dAng;
+        if (dAng > Math.PI) { const t = a1; a1 = a2; a2 = t; dAng = 2*Math.PI - dAng; }
         const midAng = (a1 + dAng/2) + (shape.flip ? Math.PI : 0);
         return [{ key: 'body', x: inter.x + Math.cos(midAng)*arcR, y: inter.y + Math.sin(midAng)*arcR, type: 'control' }];
       }
@@ -3645,18 +3645,18 @@ function SketchPage({ page, projectId, onReload }) {
         if (!inter) return null;
         // Use endpoint-parameter heuristic so the arc always sits inside the actual
         // line segments regardless of where the intersection falls relative to them.
-        const a1 = dimAngleArm(l1.x1, l1.y1, l1.x2, l1.y2, inter.x, inter.y);
-        const a2 = dimAngleArm(l2.x1, l2.y1, l2.x2, l2.y2, inter.x, inter.y);
-        // Normalise to the shorter arc, then apply flip if requested.
+        let a1 = dimAngleArm(l1.x1, l1.y1, l1.x2, l1.y2, inter.x, inter.y);
+        let a2 = dimAngleArm(l2.x1, l2.y1, l2.x2, l2.y2, inter.x, inter.y);
+        // Canonicalize: swap so the CW short arc (sweep=1) always sits inside the
+        // measured angle, regardless of which line the user clicked first.
         let dAng = ((a2-a1)+2*Math.PI) % (2*Math.PI);
-        let sweep = 1;
-        if (dAng > Math.PI) { dAng = 2*Math.PI - dAng; sweep = 0; }
+        if (dAng > Math.PI) { const t = a1; a1 = a2; a2 = t; dAng = 2*Math.PI - dAng; }
         const arcR = (s.scale || 1.0) * 40 * ps;
         const ax1 = inter.x + Math.cos(a1)*arcR, ay1 = inter.y + Math.sin(a1)*arcR;
         const ax2 = inter.x + Math.cos(a2)*arcR, ay2 = inter.y + Math.sin(a2)*arcR;
         // flip=true draws the complementary (larger) arc on the other side.
         const largeArc = s.flip ? 1 : 0;
-        const sweepF   = s.flip ? (1 - sweep) : sweep;
+        const sweepF   = s.flip ? 0 : 1;
         const sw2 = 1.2 * ps;
         inner = (
           <g style={sel}>
@@ -3902,19 +3902,18 @@ function SketchPage({ page, projectId, onReload }) {
         if (!al1 || !al2) return null;
         const aInter = lineIntersection(al1.x1, al1.y1, al1.x2, al1.y2, al2.x1, al2.y1, al2.x2, al2.y2);
         if (!aInter) return null;
-        const aa1 = dimAngleArm(al1.x1, al1.y1, al1.x2, al1.y2, aInter.x, aInter.y);
-        const aa2 = dimAngleArm(al2.x1, al2.y1, al2.x2, al2.y2, aInter.x, aInter.y);
+        let aa1 = dimAngleArm(al1.x1, al1.y1, al1.x2, al1.y2, aInter.x, aInter.y);
+        let aa2 = dimAngleArm(al2.x1, al2.y1, al2.x2, al2.y2, aInter.x, aInter.y);
         let dAngA = ((aa2-aa1)+2*Math.PI) % (2*Math.PI);
-        if (dAngA > Math.PI) dAngA = 2*Math.PI - dAngA;
-        // midAng sits in the centre of whichever arc sector is displayed.
-        const midAngNormal  = aa1 + dAngA / 2;
+        // Same canonicalization as rendering — swap if needed so midAng is always correct.
+        if (dAngA > Math.PI) { const t = aa1; aa1 = aa2; aa2 = t; dAngA = 2*Math.PI - dAngA; }
+        const midAngNormal = aa1 + dAngA / 2;
         const midAng = s.flip ? midAngNormal + Math.PI : midAngNormal;
         const angleDeg = s.flip ? (360 - dAngA * 180/Math.PI) : (dAngA * 180/Math.PI);
         const arcRA = (s.scale || 1.0) * 40 * ps;
-        const lx = aInter.x + Math.cos(midAng) * (arcRA + 20*ps);
-        const ly = aInter.y + Math.sin(midAng) * (arcRA + 20*ps);
+        const lx = aInter.x + Math.cos(midAng) * (arcRA + 30*ps);
+        const ly = aInter.y + Math.sin(midAng) * (arcRA + 30*ps);
         const atxt = s.ntsLabel ? s.ntsLabel + ' *' : toDMS(angleDeg);
-        // Rotate label to align with the bisector so it reads along the angle bisector.
         const labelRotDeg = normAng(midAng * 180 / Math.PI);
         return dimTextEl(lx, ly, labelRotDeg, atxt, ps);
       }
