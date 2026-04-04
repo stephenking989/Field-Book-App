@@ -689,6 +689,8 @@
     ChevR: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>,
     Expand: () => <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>,
     Collapse: () => <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="10" y1="14" x2="3" y2="21"/><line x1="21" y1="3" x2="14" y2="10"/></svg>,
+    PageL: () => <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>,
+    PageR: () => <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 6 15 12 9 18"/></svg>,
     Table: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/><line x1="15" y1="9" x2="15" y2="21"/></svg>,
     Grid: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>,
     File: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>,
@@ -2133,6 +2135,131 @@
     }
   }
 
+  // Single-page PDF export — same format as the per-page section of exportProjectPDF
+  // but outputs only the one page (no cover, no TOC).
+  async function exportSinglePagePDF(projectId, pageId, toast, setExporting) {
+    if (!window.jspdf?.jsPDF) { toast.error('PDF library not loaded'); return; }
+    setExporting(true);
+    try {
+      const proj = DB.getProject(projectId);
+      if (!proj) { toast.error('Project not found'); return; }
+      const page = proj.pages.find(p => p.id === pageId);
+      if (!page) { toast.error('Page not found'); return; }
+
+      const { jsPDF } = window.jspdf;
+      const W = 210, H = 297, margin = 14;
+      const GD = _hexRgb('#1C3829');
+      const GL = _hexRgb('#52B788');
+      const CR = _hexRgb('#FDFAF4');
+      const metaMap = {
+        data:   { label: 'Data',   color: '#2D6A4F', bg: '#D8F3DC' },
+        sketch: { label: 'Sketch', color: '#3B82F6', bg: '#EFF6FF' },
+        title:  { label: 'Title',  color: '#D97706', bg: '#FEF3C7' },
+      };
+      const meta = metaMap[page.type] || metaMap.data;
+      const pdf  = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const contentY = _pdfPageHeader(pdf, page, meta, W, margin);
+
+      if (page.type === 'sketch') {
+        const drawH = H - contentY - 16;
+        const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units);
+        if (svgStr && window.html2canvas) {
+          const vb = page.viewBox || { x: 0, y: 0, w: 800, h: 600 };
+          const outW = 1200, outH = Math.round(1200 * vb.h / vb.w);
+          const tmp = document.createElement('div');
+          tmp.style.cssText = `position:fixed;left:-9999px;top:-9999px;width:${outW}px;height:${outH}px;overflow:hidden;`;
+          tmp.innerHTML = svgStr;
+          document.body.appendChild(tmp);
+          try {
+            const canvas = await window.html2canvas(tmp, { scale: 1.5, useCORS: true, logging: false, width: outW, height: outH });
+            document.body.removeChild(tmp);
+            const availW = W - margin*2;
+            const aspect = canvas.width / canvas.height;
+            let imgW = availW, imgH = imgW / aspect;
+            if (imgH > drawH) { imgH = drawH; imgW = imgH * aspect; }
+            pdf.addImage(canvas.toDataURL('image/png'), 'PNG',
+              margin + (availW - imgW) / 2, contentY + (drawH - imgH) / 2, imgW, imgH);
+            if (page.scaleDenom > 1) {
+              pdf.setFontSize(7); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(107, 114, 128);
+              pdf.text(`Scale  1 : ${page.scaleDenom}`, margin, H - 16);
+            }
+          } catch (_) { document.body.removeChild(tmp); }
+        }
+      } else if (page.type === 'title') {
+        const BRD2 = _hexRgb('#DDD6C8');
+        let ty = contentY + 4;
+        const fields = [
+          ['PROJECT TITLE / LOCATION', page.location], ['CREW & RESPONSIBILITIES', page.crew],
+          ['EQUIPMENT (Make, Model, S/N)', page.equipment], ['DATUM & PROJECTION', page.datum],
+          ['TOTAL STATION SETTINGS', page.tsSettings], ['H.I. / PRISM HEIGHT', page.hiPrism],
+          ['SUMMARY OF WORK', page.summary], ['CODE LIST / ADDITIONAL NOTES', page.notes],
+        ];
+        for (const [lbl, val] of fields) {
+          if (!val?.trim() || ty > H - 16) continue;
+          const lines = pdf.splitTextToSize(val.trim(), W - margin*2);
+          const bH = lines.length * 4.5 + 12;
+          pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(107, 114, 128);
+          pdf.text(lbl, margin, ty + 4);
+          pdf.setFontSize(9); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(44, 44, 44);
+          pdf.text(lines, margin, ty + 9.5);
+          pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.3);
+          pdf.line(margin, ty + bH, W - margin, ty + bH);
+          ty += bH + 3;
+        }
+      } else {
+        const cols = page.columns || [], rows = page.rows || [];
+        if (cols.length === 0) {
+          pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
+          pdf.text('(No columns defined)', W/2, contentY + 20, { align: 'center' });
+        } else {
+          const head = [cols.map(c => c.label || c.id)];
+          const body = rows.map(row => cols.map(col => {
+            const raw = (row.cells || {})[col.id] || '';
+            if (!raw.trim()) return '';
+            if ((col.colType || 'num') === 'dms' && !raw.startsWith('=')) return formatDMS(parseDMSInput(raw)) || raw;
+            return raw;
+          }));
+          pdf.autoTable({
+            head, body, startY: contentY + 2,
+            margin: { left: margin, right: margin, bottom: 14 },
+            tableWidth: W - margin*2,
+            headStyles: { fillColor: GD, textColor: CR, fontSize: 8, fontStyle: 'bold', halign: 'center',
+                          cellPadding: { top: 3, bottom: 3, left: 3, right: 3 } },
+            bodyStyles: { fontSize: 8, textColor: [44, 44, 44],
+                          cellPadding: { top: 2.5, bottom: 2.5, left: 3, right: 3 } },
+            alternateRowStyles: { fillColor: [248, 247, 244] },
+            columnStyles: cols.reduce((acc, col, i) => {
+              acc[i] = { halign: col.colType === 'text' ? 'left' : 'center',
+                         font: col.colType === 'dms' ? 'courier' : 'helvetica' };
+              return acc;
+            }, {}),
+          });
+          const fy = pdf.lastAutoTable?.finalY;
+          if (fy && fy < H - 14) {
+            pdf.setFontSize(7); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(107, 114, 128);
+            pdf.text(`${rows.length} row${rows.length !== 1 ? 's' : ''}  ·  ${cols.length} column${cols.length !== 1 ? 's' : ''}`, margin, fy + 5);
+          }
+        }
+      }
+
+      // Footer
+      pdf.setFillColor(...GD); pdf.rect(0, H - 10, W, 10, 'F');
+      pdf.setFontSize(6.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(...GL);
+      pdf.text(proj.name, margin, H - 4);
+      pdf.text('1', W - margin, H - 4, { align: 'right' });
+
+      const slug = (page.title?.trim() || `P${page.pageNumber}`).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const fname = `${proj.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_${slug}_${new Date().toISOString().split('T')[0]}.pdf`;
+      pdf.save(fname);
+      toast.success(`Exported ${fname}`);
+    } catch (err) {
+      console.error('[exportSinglePagePDF]', err);
+      toast.error('PDF export failed — see console');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // PROJECT VIEW
   // ─────────────────────────────────────────────────────────────────────────────
@@ -2558,7 +2685,8 @@
   function PageView({ projectId, pageId }) {
     const [project, setProject] = useState(null);
     const [page, setPage]       = useState(null);
-    const [doubleMode, setDoubleMode] = useState(false);
+    const [exporting, setExporting] = useState(false);
+    const toast = useContext(ToastContext);
 
     function reload() {
       const proj = DB.getProject(projectId);
@@ -2581,19 +2709,38 @@
       }
     }
 
-    const meta   = TYPE_META[page.type] || TYPE_META.data;
-    const pages  = project.pages;
-    const myIdx  = pages.findIndex(p => p.id === pageId);
-    const adjPage = doubleMode
-      ? (pages[myIdx + 1] || pages[myIdx - 1] || null)
-      : null;
+    function handleExportPDF() {
+      exportSinglePagePDF(projectId, pageId, toast, setExporting);
+    }
+
+    const meta     = TYPE_META[page.type] || TYPE_META.data;
+    const pages    = project.pages;
+    const myIdx    = pages.findIndex(p => p.id === pageId);
+    const prevPage = pages[myIdx - 1] || null;
+    const nextPage = pages[myIdx + 1] || null;
 
     const navActions = (
       <>
-        <button onClick={() => setDoubleMode(d => !d)}
-          className="p-1.5 rounded-lg active:bg-white/10 transition-colors"
-          title={doubleMode ? 'Single page' : 'Two-page spread'}>
-          {doubleMode ? <Ico.Collapse /> : <Ico.Expand />}
+        <button
+          onClick={() => prevPage && navigate(`#/project/${projectId}/page/${prevPage.id}`)}
+          disabled={!prevPage}
+          className="p-1.5 rounded-lg active:bg-white/10 transition-colors disabled:opacity-30"
+          title="Previous page">
+          <Ico.PageL />
+        </button>
+        <button
+          onClick={() => nextPage && navigate(`#/project/${projectId}/page/${nextPage.id}`)}
+          disabled={!nextPage}
+          className="p-1.5 rounded-lg active:bg-white/10 transition-colors disabled:opacity-30"
+          title="Next page">
+          <Ico.PageR />
+        </button>
+        <button
+          onClick={handleExportPDF}
+          disabled={exporting}
+          className="p-1.5 rounded-lg active:bg-white/10 transition-colors disabled:opacity-50"
+          title="Export page as PDF">
+          <Ico.Download />
         </button>
         <button onClick={handleDelete} className="p-1.5 rounded-lg active:bg-white/10 transition-colors text-red-300">
           <Ico.Trash />
@@ -2602,32 +2749,6 @@
     );
 
     const PageContent = getPageComponent(page.type);
-
-    if (doubleMode && adjPage) {
-      const AdjContent = getPageComponent(adjPage.type);
-      const adjMeta    = TYPE_META[adjPage.type] || TYPE_META.data;
-      return (
-        <div className="flex flex-col h-full" style={{ background: '#FDFAF4' }}>
-          <NavBar
-            title={`P.${page.pageNumber} + P.${adjPage.pageNumber}`}
-            subtitle={project.name}
-            onBack={() => navigate(`#/project/${projectId}`)}
-            actions={navActions}
-          />
-          <div className="double-spread flex-1">
-            <div className="spread-panel">
-              <PageContent page={page} projectId={projectId} onReload={reload} />
-            </div>
-            <div className="spread-panel">
-              <AdjContent page={adjPage} projectId={projectId} onReload={reload} />
-            </div>
-          </div>
-          <p className="text-center text-[10px] text-fb-muted py-1.5 bg-fb-cream2 border-t border-fb-border flex-shrink-0">
-            Rotate device for best spread view
-          </p>
-        </div>
-      );
-    }
 
     return (
       <div className="flex flex-col h-full" style={{ background: '#FDFAF4' }}>
