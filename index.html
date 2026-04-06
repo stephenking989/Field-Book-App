@@ -622,6 +622,19 @@
       projects[pi].pages = pages;
       DB.saveProjects(projects);
     },
+    // ── Custom data-page templates ────────────────────────────────────────────
+    getCustomTemplates() {
+      try { return JSON.parse(localStorage.getItem('fb_custom_templates') || '[]'); }
+      catch { return []; }
+    },
+    saveCustomTemplate(tpl) {
+      const all = DB.getCustomTemplates().filter(t => t.name !== tpl.name);
+      localStorage.setItem('fb_custom_templates', JSON.stringify([tpl, ...all]));
+    },
+    deleteCustomTemplate(name) {
+      const all = DB.getCustomTemplates().filter(t => t.name !== name);
+      localStorage.setItem('fb_custom_templates', JSON.stringify(all));
+    },
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -2084,12 +2097,14 @@
             pdf.text('(No columns defined)', W/2, contentY + 20, { align: 'center' });
           } else {
             const head = [cols.map(c => c.label || c.id)];
+            const hfRes = evalDataPageCells(cols, rows);
             const body = rows.map(row => cols.map(col => {
               const raw = (row.cells || {})[col.id] || '';
               if (!raw.trim()) return '';
-              if ((col.colType || 'num') === 'dms' && !raw.startsWith('=')) {
-                return formatDMS(parseDMSInput(raw)) || raw;
-              }
+              const key = row.id + '_' + col.id;
+              const cellType = getCellType(row, col);
+              if (raw.startsWith('=')) return hfRes[key] || '';
+              if (cellType === 'dms') return formatDMS(parseDMSInput(raw)) || raw;
               return raw;
             }));
 
@@ -2317,10 +2332,14 @@
           pdf.text('(No columns defined)', W/2, contentY + 20, { align: 'center' });
         } else {
           const head = [cols.map(c => c.label || c.id)];
+          const hfRes = evalDataPageCells(cols, rows);
           const body = rows.map(row => cols.map(col => {
             const raw = (row.cells || {})[col.id] || '';
             if (!raw.trim()) return '';
-            if ((col.colType || 'num') === 'dms' && !raw.startsWith('=')) return formatDMS(parseDMSInput(raw)) || raw;
+            const key = row.id + '_' + col.id;
+            const cellType = getCellType(row, col);
+            if (raw.startsWith('=')) return hfRes[key] || '';
+            if (cellType === 'dms') return formatDMS(parseDMSInput(raw)) || raw;
             return raw;
           }));
           pdf.autoTable({
@@ -2429,7 +2448,7 @@
           { id: 'c5', label: 'Elev',    colType: 'num',  width: 80 },
           { id: 'c6', label: 'Notes',   colType: 'text', width: 120 },
         ];
-        const rows = Array.from({ length: 27 }, (_, i) => {
+        const rows = Array.from({ length: 20 }, (_, i) => {
           const cells = {};
           cols.forEach(c => { cells[c.id] = ''; });
           return { id: 'r_' + Date.now() + '_' + i, cells };
@@ -2819,6 +2838,9 @@
     const [project, setProject] = useState(null);
     const [page, setPage]       = useState(null);
     const [exporting, setExporting] = useState(false);
+    const [showExportMenu, setShowExportMenu] = useState(false);
+    const exportFnsRef = useRef({ exportCSV: null, exportPDF: null });
+    const registerExports = useCallback(fns => { exportFnsRef.current = fns; }, []);
     const toast = useToast();
 
     function reload() {
@@ -2868,13 +2890,42 @@
           title="Next page">
           <Ico.PageR />
         </button>
-        <button
-          onClick={handleExportPDF}
-          disabled={exporting}
-          className="p-1.5 rounded-lg active:bg-white/10 transition-colors disabled:opacity-50"
-          title="Export page as PDF">
-          <Ico.Download />
-        </button>
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => {
+              if (page.type === 'data') { setShowExportMenu(v => !v); }
+              else { handleExportPDF(); }
+            }}
+            disabled={exporting}
+            className="p-1.5 rounded-lg active:bg-white/10 transition-colors disabled:opacity-50"
+            title={page.type === 'data' ? 'Export options' : 'Export page as PDF'}>
+            {exporting ? <span style={{ fontSize: 14 }}>⏳</span> : <Ico.Download />}
+          </button>
+          {showExportMenu && page.type === 'data' && (
+            <div
+              style={{
+                position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 300,
+                background: '#fff', borderRadius: 12, padding: 6, minWidth: 160,
+                boxShadow: '0 4px 24px rgba(0,0,0,0.18)',
+              }}
+              onClick={e => e.stopPropagation()}>
+              <button
+                onClick={() => { exportFnsRef.current.exportPDF?.(); setShowExportMenu(false); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                  padding: '9px 14px', borderRadius: 8, textAlign: 'left', fontSize: 13,
+                  color: '#1a3a2a', fontWeight: 600 }}>
+                <Ico.Download /> Export PDF
+              </button>
+              <button
+                onClick={() => { exportFnsRef.current.exportCSV?.(); setShowExportMenu(false); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                  padding: '9px 14px', borderRadius: 8, textAlign: 'left', fontSize: 13,
+                  color: '#1a3a2a', fontWeight: 600 }}>
+                <Ico.Download /> Export CSV
+              </button>
+            </div>
+          )}
+        </div>
         <button onClick={handleDelete} className="p-1.5 rounded-lg active:bg-white/10 transition-colors text-red-300">
           <Ico.Trash />
         </button>
@@ -2895,8 +2946,15 @@
             events directly and needs to fill the full remaining height without a
             scrollable ancestor (which the browser prefers over canvas wheel handlers).
             All other page types keep overflow-y-auto + the safe-area bottom spacer. */}
-        <div className={`flex-1 screen-enter${page.type === 'sketch' ? ' overflow-hidden flex flex-col' : ' overflow-y-auto'}`}>
-          <PageContent page={page} projectId={projectId} onReload={reload} />
+        <div
+          className={`flex-1 screen-enter${page.type === 'sketch' ? ' overflow-hidden flex flex-col' : ' overflow-y-auto'}`}
+          onClick={() => showExportMenu && setShowExportMenu(false)}>
+          <PageContent
+            page={page}
+            projectId={projectId}
+            onReload={reload}
+            onRegisterExports={page.type === 'data' ? registerExports : undefined}
+          />
           {page.type !== 'sketch' && <div style={{ height: 'max(24px, env(safe-area-inset-bottom))' }} />}
         </div>
       </div>
@@ -3297,15 +3355,20 @@
   // HYPERFORMULA ENGINE  — one instance per DataPage mount
   // ─────────────────────────────────────────────────────────────────────────────
 
+  // Return the effective type for a single cell: per-cell override wins over column default.
+  function getCellType(row, col) {
+    return (row?.cellMeta || {})[col?.id]?.colType || col?.colType || 'num';
+  }
+
   // Build a 2-D array of raw values suitable for HyperFormula from the page data.
-  // DMS columns store their decimal-degree equivalent so formulas work numerically.
+  // DMS columns/cells store their decimal-degree equivalent so formulas work numerically.
   function buildHFSheet(columns, rows) {
     return rows.map(row =>
       columns.map(col => {
         const raw = (row.cells || {})[col.id] || '';
         if (!raw.trim()) return '';
         if (raw.startsWith('=')) return raw;   // formula — pass through
-        if ((col.colType || 'num') === 'dms') {
+        if (getCellType(row, col) === 'dms') {
           const dd = parseDMSInput(raw);
           return dd !== null ? dd : raw;
         }
@@ -3315,11 +3378,52 @@
     );
   }
 
+  // Evaluate all formula cells for export functions that run outside React.
+  // Returns a map { "rowId_colId": displayString } same shape as calcResults state.
+  function evalDataPageCells(columns, rows) {
+    const results = {};
+    if (typeof HyperFormula === 'undefined' || !columns.length || !rows.length) return results;
+    try {
+      const sheetData = buildHFSheet(columns, rows);
+      const hf = HyperFormula.buildFromArray(sheetData, { licenseKey: 'gpl-v3', precisionRounding: 10 });
+      rows.forEach((row, ri) => {
+        columns.forEach((col, ci) => {
+          const raw = (row.cells || {})[col.id] || '';
+          if (!raw.trim()) return;
+          const key = row.id + '_' + col.id;
+          const cellType = getCellType(row, col);
+          if (raw.startsWith('=')) {
+            try {
+              const val = hf.getCellValue({ sheet: 0, row: ri, col: ci });
+              if (typeof val === 'number') {
+                results[key] = cellType === 'dms' ? formatDMS(val) : String(Math.round(val * 1e8) / 1e8);
+              } else if (val instanceof Error || (val && val.type)) {
+                const custom = evalSurveyFormula(raw, hf);
+                results[key] = custom !== null
+                  ? (typeof custom === 'number'
+                      ? (cellType === 'dms' ? formatDMS(custom) : String(Math.round(custom * 1e8) / 1e8))
+                      : String(custom))
+                  : '#ERR';
+              } else {
+                results[key] = String(val ?? '');
+              }
+            } catch(e) { results[key] = '#ERR'; }
+          } else if (cellType === 'dms') {
+            const dd = parseDMSInput(raw);
+            if (dd !== null) results[key] = formatDMS(dd);
+          }
+        });
+      });
+      try { hf.destroy(); } catch(e) {}
+    } catch(e) {}
+    return results;
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // DATA PAGE
   // ─────────────────────────────────────────────────────────────────────────────
 
-  function DataPage({ page, projectId, onReload }) {
+  function DataPage({ page, projectId, onReload, onRegisterExports }) {
     const columns = page.columns || [];
     const [rows, setRows]               = useState(page.rows || []);
     const [activeCell, setActiveCell]   = useState(null);   // { rowIdx, colIdx }
@@ -3329,6 +3433,7 @@
     const [colModal, setColModal]       = useState(null);   // null | { col }
     const [colModalForm, setColModalForm] = useState({});
     const [templateModal, setTemplateModal] = useState(false);
+    const [customTemplates, setCustomTemplates] = useState(() => DB.getCustomTemplates());
     const [hf, setHf]                   = useState(null);
     const [calcResults, setCalcResults] = useState({});    // { 'r_xxx_cId': displayValue }
     const [selectionAnchor, setSelectionAnchor] = useState(null); // { rowIdx, colIdx }
@@ -3381,22 +3486,22 @@
           columns.forEach((col, ci) => {
             const raw = (row.cells || {})[col.id] || '';
             if (!raw.trim()) return;
+            const cellType = getCellType(row, col);
             if (raw.startsWith('=')) {
               try {
                 const val = instance.getCellValue({ sheet: 0, row: ri, col: ci });
-                const colType = col.colType || 'num';
                 const key = row.id + '_' + col.id;
 
                 if (typeof val === 'number') {
                   // Normal HF result
-                  results[key] = colType === 'dms' ? formatDMS(val) : String(Math.round(val * 1e8) / 1e8);
+                  results[key] = cellType === 'dms' ? formatDMS(val) : String(Math.round(val * 1e8) / 1e8);
 
                 } else if (val instanceof Error || (val && val.type)) {
                   // HF errored — could be our custom surveyor function → try JS evaluator
                   const custom = evalSurveyFormula(raw, instance);
                   if (custom !== null) {
                     results[key] = typeof custom === 'number'
-                      ? (colType === 'dms' ? formatDMS(custom) : String(Math.round(custom * 1e8) / 1e8))
+                      ? (cellType === 'dms' ? formatDMS(custom) : String(Math.round(custom * 1e8) / 1e8))
                       : String(custom);          // propagate '#VALUE!' / '#DIV/0!' / '#ERR' strings
                   } else {
                     results[key] = '#ERR';
@@ -3408,7 +3513,7 @@
               } catch(e) {
                 results[row.id + '_' + col.id] = '#ERR';
               }
-            } else if ((col.colType || 'num') === 'dms') {
+            } else if (cellType === 'dms') {
               const dd = parseDMSInput(raw);
               if (dd !== null) results[row.id + '_' + col.id] = formatDMS(dd);
             }
@@ -3556,6 +3661,37 @@
       if (!b) return false;
       return ri >= b.minR && ri <= b.maxR && ci >= b.minC && ci <= b.maxC;
     }
+
+    // ── Per-cell type override ────────────────────────────────────────
+    // Sets (or clears) a cell-level colType override for the active selection.
+    // Pass null to remove override and revert to column default.
+    function setCellsType(type) {
+      const b = getSelectionBounds();
+      if (!b) return;
+      const updated = rows.map((row, ri) => {
+        if (ri < b.minR || ri > b.maxR) return row;
+        const meta = { ...(row.cellMeta || {}) };
+        columns.forEach((col, ci) => {
+          if (ci < b.minC || ci > b.maxC) return;
+          if (type === null) {
+            delete meta[col.id];
+          } else {
+            meta[col.id] = { colType: type };
+          }
+        });
+        return { ...row, cellMeta: meta };
+      });
+      persistRows(updated);
+    }
+
+    // Current effective type of the active cell (for badge display)
+    const activeCellEffType = activeCell
+      ? getCellType(rows[activeCell.rowIdx], columns[activeCell.colIdx])
+      : null;
+    // Whether the active cell has a per-cell override (so we can show a reset option)
+    const activeCellHasOverride = activeCell
+      ? !!(rows[activeCell.rowIdx]?.cellMeta?.[columns[activeCell.colIdx]?.id]?.colType)
+      : false;
 
     function activateCell(ri, ci) {
       setActiveCell({ rowIdx: ri, colIdx: ci });
@@ -3914,71 +4050,85 @@
     const TEMPLATES = [
       {
         name: 'Level Loop',
-        desc: 'BS · HI · FS · Elev · Check',
+        desc: 'Station · BS · HI · FS · Elev · Notes',
         cols: [
-          { id: 'tc1', label: 'Station', colType: 'text', width: 90 },
-          { id: 'tc2', label: 'BS',      colType: 'num',  width: 75 },
-          { id: 'tc3', label: 'HI',      colType: 'num',  width: 85 },
-          { id: 'tc4', label: 'FS',      colType: 'num',  width: 75 },
-          { id: 'tc5', label: 'Elev',    colType: 'num',  width: 85 },
-          { id: 'tc6', label: 'Check',   colType: 'num',  width: 75 },
-          { id: 'tc7', label: 'Notes',   colType: 'text', width: 120 },
+          { id: 'll1', label: 'Station', colType: 'text', width: 100 },
+          { id: 'll2', label: 'BS',      colType: 'num',  width: 80 },
+          { id: 'll3', label: 'HI',      colType: 'num',  width: 90 },
+          { id: 'll4', label: 'FS',      colType: 'num',  width: 80 },
+          { id: 'll5', label: 'Elev',    colType: 'num',  width: 90 },
+          { id: 'll6', label: 'Notes',   colType: 'text', width: 130 },
         ],
       },
       {
-        name: 'Angle Observations',
-        desc: 'Pt · Circle ① · Circle ② · Mean · Notes',
+        name: 'Level Loop Backsight Avg',
+        desc: 'Station · HI · BS · BS AVG · IFS · FS(m) · Elevation · Notes',
         cols: [
-          { id: 'ta1', label: 'To Pt',    colType: 'text', width: 75 },
-          { id: 'ta2', label: 'Circle 1', colType: 'dms',  width: 100 },
-          { id: 'ta3', label: 'Circle 2', colType: 'dms',  width: 100 },
-          { id: 'ta4', label: 'Circle 3', colType: 'dms',  width: 100 },
-          { id: 'ta5', label: 'Mean',     colType: 'dms',  width: 100 },
-          { id: 'ta6', label: 'Notes',    colType: 'text', width: 120 },
+          { id: 'lb1', label: 'Station',   colType: 'text', width: 95 },
+          { id: 'lb2', label: 'HI',        colType: 'num',  width: 75 },
+          { id: 'lb3', label: 'BS',        colType: 'num',  width: 75 },
+          { id: 'lb4', label: 'BS AVG',    colType: 'num',  width: 85 },
+          { id: 'lb5', label: 'IFS',       colType: 'num',  width: 75 },
+          { id: 'lb6', label: 'FS(m)',     colType: 'num',  width: 75 },
+          { id: 'lb7', label: 'Elevation', colType: 'num',  width: 90 },
+          { id: 'lb8', label: 'Notes',     colType: 'text', width: 120 },
         ],
       },
       {
-        name: 'Traverse',
-        desc: 'Leg · Bearing · Distance · Lat · Dep · Notes',
+        name: 'Peg Test',
+        desc: 'Station · Measurements · Position · Notes',
         cols: [
-          { id: 'tv1', label: 'Leg',      colType: 'text', width: 60 },
-          { id: 'tv2', label: 'Bearing',  colType: 'dms',  width: 100 },
-          { id: 'tv3', label: 'Distance', colType: 'num',  width: 90 },
-          { id: 'tv4', label: 'Latitude', colType: 'num',  width: 90 },
-          { id: 'tv5', label: 'Departure',colType: 'num',  width: 90 },
-          { id: 'tv6', label: 'Notes',    colType: 'text', width: 120 },
+          { id: 'pt1', label: 'Station',      colType: 'text', width: 160 },
+          { id: 'pt2', label: 'Measurements', colType: 'num',  width: 120 },
+          { id: 'pt3', label: 'Position',     colType: 'text', width: 100 },
+          { id: 'pt4', label: 'Notes',        colType: 'text', width: 150 },
         ],
       },
       {
-        name: 'Stadia / Topo',
-        desc: 'Station · H.Dist · Vert% · Rod · HI · Elev · Desc',
+        name: 'Link Traverse',
+        desc: 'Station · HI/HT · HCR · Angle · Mean Angle · SD · VCR · Calcs · Calcs',
         cols: [
-          { id: 'ts1', label: 'Station', colType: 'text', width: 80 },
-          { id: 'ts2', label: 'H.Dist',  colType: 'num',  width: 75 },
-          { id: 'ts3', label: 'Vert%',   colType: 'num',  width: 70 },
-          { id: 'ts4', label: 'Rod',     colType: 'num',  width: 70 },
-          { id: 'ts5', label: 'HI',      colType: 'num',  width: 70 },
-          { id: 'ts6', label: 'Elev',    colType: 'num',  width: 80 },
-          { id: 'ts7', label: 'Desc',    colType: 'text', width: 120 },
+          { id: 'lt1', label: 'Station',    colType: 'text', width: 85 },
+          { id: 'lt2', label: 'HI/HT',     colType: 'num',  width: 70 },
+          { id: 'lt3', label: 'HCR',       colType: 'dms',  width: 105 },
+          { id: 'lt4', label: 'Angle',     colType: 'dms',  width: 105 },
+          { id: 'lt5', label: 'Mean Angle',colType: 'dms',  width: 105 },
+          { id: 'lt6', label: 'SD',        colType: 'num',  width: 75 },
+          { id: 'lt7', label: 'VCR',       colType: 'dms',  width: 105 },
+          { id: 'lt8', label: 'Calcs',     colType: 'text', width: 80 },
+          { id: 'lt9', label: 'Calcs',     colType: 'text', width: 95 },
         ],
       },
       {
-        name: 'Construction Stakes',
-        desc: 'Station · + · HI · Cut/Fill · Elev · Grade · Notes',
+        name: 'Building Layout',
+        desc: 'Station · HI/HT · HCR · Angle · Mean Angle · SD · VCR · Calcs · Calcs',
         cols: [
-          { id: 'cs1', label: 'Station', colType: 'text', width: 80 },
-          { id: 'cs2', label: '+',       colType: 'num',  width: 60 },
-          { id: 'cs3', label: 'HI',      colType: 'num',  width: 70 },
-          { id: 'cs4', label: 'Cut/Fill',colType: 'num',  width: 80 },
-          { id: 'cs5', label: 'Elev',    colType: 'num',  width: 80 },
-          { id: 'cs6', label: 'Grade',   colType: 'num',  width: 70 },
-          { id: 'cs7', label: 'Notes',   colType: 'text', width: 120 },
+          { id: 'bl1', label: 'Station',    colType: 'text', width: 85 },
+          { id: 'bl2', label: 'HI/HT',     colType: 'num',  width: 70 },
+          { id: 'bl3', label: 'HCR',       colType: 'dms',  width: 105 },
+          { id: 'bl4', label: 'Angle',     colType: 'dms',  width: 105 },
+          { id: 'bl5', label: 'Mean Angle',colType: 'dms',  width: 105 },
+          { id: 'bl6', label: 'SD',        colType: 'num',  width: 75 },
+          { id: 'bl7', label: 'VCR',       colType: 'dms',  width: 105 },
+          { id: 'bl8', label: 'Calcs',     colType: 'text', width: 80 },
+          { id: 'bl9', label: 'Calcs',     colType: 'text', width: 95 },
+        ],
+      },
+      {
+        name: 'Curve Layout',
+        desc: 'Station · Northing · Easting · Elev · Notes',
+        cols: [
+          { id: 'cl1', label: 'Station',  colType: 'text', width: 120 },
+          { id: 'cl2', label: 'Northing', colType: 'num',  width: 115 },
+          { id: 'cl3', label: 'Easting',  colType: 'num',  width: 115 },
+          { id: 'cl4', label: 'Elev',     colType: 'num',  width: 80 },
+          { id: 'cl5', label: 'Notes',    colType: 'text', width: 130 },
         ],
       },
     ];
 
     function applyTemplate(tpl) {
-      const newRows = Array.from({ length: 27 }, (_, i) => {
+      const newRows = Array.from({ length: 20 }, (_, i) => {
         const cells = {};
         tpl.cols.forEach(c => { cells[c.id] = ''; });
         return { id: 'r_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2), cells };
@@ -3988,44 +4138,20 @@
       setTemplateModal(false);
     }
 
-    // ── Column sum footer ─────────────────────────────────────────────
-
-    function colSum(col) {
-      if ((col.colType || 'num') === 'text') return '';
-      let total = 0;
-      let hasNum = false;
-      rows.forEach(row => {
-        const raw = (row.cells || {})[col.id] || '';
-        if (!raw.trim()) return;
-        if (raw.startsWith('=')) {
-          const key = row.id + '_' + col.id;
-          const disp = calcResults[key];
-          if (disp && !disp.startsWith('#')) { const n = parseFloat(disp.replace(/[°'"]/g, '')); if (!isNaN(n)) { total += n; hasNum = true; } }
-        } else if ((col.colType || 'num') === 'dms') {
-          const dd = parseDMSInput(raw);
-          if (dd !== null) { total += dd; hasNum = true; }
-        } else {
-          const n = parseFloat(raw);
-          if (!isNaN(n)) { total += n; hasNum = true; }
-        }
-      });
-      if (!hasNum) return '';
-      return (col.colType || 'num') === 'dms' ? formatDMS(total) : (Math.round(total * 1e6) / 1e6).toString();
-    }
-
     // ── Display value for a cell ──────────────────────────────────────
 
     function displayValue(row, col) {
       const raw = (row.cells || {})[col.id] || '';
       if (!raw.trim()) return { text: '', isFormula: false, isDMS: false, isError: false };
       const key = row.id + '_' + col.id;
+      const cellType = getCellType(row, col);
       if (raw.startsWith('=')) {
         const res = calcResults[key] || '';
         const isError = res === '#ERR' || res.startsWith('#');
-        const isDMS = (col.colType || 'num') === 'dms' && !isError;
+        const isDMS = cellType === 'dms' && !isError;
         return { text: res, isFormula: true, isDMS, isError };
       }
-      if ((col.colType || 'num') === 'dms') {
+      if (cellType === 'dms') {
         const disp = calcResults[key] || formatDMS(parseDMSInput(raw));
         return { text: disp || raw, isFormula: false, isDMS: true, isError: false };
       }
@@ -4116,6 +4242,11 @@
       }
     }
 
+    // ── Register export functions with parent (PageView export dropdown) ────
+    useEffect(() => {
+      if (onRegisterExports) onRegisterExports({ exportCSV, exportPDF });
+    });
+
     // ── Formula reference highlighting (derived) ──────────────────────
     const REF_COLORS = ['#e63946','#1d6fa0','#2a9d8f','#c77d1a','#8338ec','#3a86ff','#fb5607'];
 
@@ -4137,7 +4268,7 @@
 
     // ── DMS numpad visibility ─────────────────────────────────────────
     const isDMSCell = editingCell !== null &&
-      (columns[editingCell.colIdx]?.colType || 'num') === 'dms';
+      getCellType(rows[editingCell.rowIdx], columns[editingCell.colIdx]) === 'dms';
 
     if (columns.length === 0) {
       return (
@@ -4232,15 +4363,41 @@
             title="Auto-increment active cell value down through all rows below (BM-1 → BM-2 → BM-3…)">
             Fill ↓
           </button>
-          <div className="dp-tb-sep" />
-          <span className="dp-tb-label">Export:</span>
-          <button onClick={exportCSV} title="Export table to CSV (DMS columns export as decimal degrees)">CSV</button>
-          <button onClick={exportPDF} title="Export page to PDF">PDF</button>
         </div>
 
         {/* ── Formula bar ── */}
         <div className="dp-formula-bar">
           <span className="cell-ref">{activeCellRef || '—'}</span>
+          {/* Cell-type badge — tap to cycle, long-press/double-tap resets to column default */}
+          {activeCellEffType && (
+            <button
+              title={activeCellHasOverride
+                ? `Cell override: ${activeCellEffType.toUpperCase()} — double-tap to reset to column default`
+                : `Column type: ${activeCellEffType.toUpperCase()} — tap to override this cell`}
+              onPointerDown={e => {
+                e.preventDefault();
+                // Double-tap (two taps < 400ms) resets override
+                const now = Date.now();
+                const last = e.currentTarget._lastTap || 0;
+                e.currentTarget._lastTap = now;
+                if (now - last < 400) {
+                  setCellsType(null); // remove override
+                } else {
+                  const cycle = { text: 'num', num: 'dms', dms: 'text' };
+                  setCellsType(cycle[activeCellEffType] || 'num');
+                }
+              }}
+              style={{
+                padding: '2px 6px', borderRadius: 4, fontSize: 10, fontWeight: 700,
+                fontFamily: 'Courier New, monospace', flexShrink: 0, cursor: 'pointer',
+                border: `1.5px solid ${activeCellHasOverride ? typeColors[activeCellEffType] : typeColors[activeCellEffType] + '88'}`,
+                color: typeColors[activeCellEffType],
+                background: activeCellHasOverride ? typeColors[activeCellEffType] + '22' : 'transparent',
+                outline: 'none',
+              }}>
+              {typeLabels[activeCellEffType]}{activeCellHasOverride ? ' ●' : ''}
+            </button>
+          )}
           <span className="fx-label">fx</span>
           <input
             ref={fbInputRef}
@@ -4464,22 +4621,6 @@
                   </td>
                 </tr>
               ))}
-              {/* ── Column sum footer ── */}
-              {rows.length > 0 && (
-                <tr className="dp-sum-row">
-                  <td className="dp-row-num" style={{ fontWeight: 700, color: '#2D6A4F', fontSize: 9 }}>Σ</td>
-                  {columns.map(col => (
-                    <td key={col.id} style={{ width: colWidth(col), minWidth: colWidth(col) }}>
-                      <span style={{ display: 'block', height: 32, lineHeight: '32px', padding: '0 5px',
-                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                        color: (col.colType || 'num') === 'dms' ? '#1a3a8c' : '#065f46' }}>
-                        {colSum(col)}
-                      </span>
-                    </td>
-                  ))}
-                  <td></td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>
@@ -4589,10 +4730,70 @@
         {/* ── Template modal ── */}
         {templateModal && (
           <div className="modal-backdrop" onClick={() => setTemplateModal(false)}>
-            <div ref={templateModalRef} className="modal-sheet" onClick={e => e.stopPropagation()}>
+            <div ref={templateModalRef} className="modal-sheet" onClick={e => e.stopPropagation()}
+              style={{ maxHeight: '85vh', overflowY: 'auto' }}>
               <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
-              <h2 className="text-lg font-bold text-fb-dark mb-1">Surveyor Templates</h2>
-              <p className="text-fb-muted text-xs mb-4">Applying a template will replace the current columns and clear all rows.</p>
+              <h2 className="text-lg font-bold text-fb-dark mb-1">Templates</h2>
+              <p className="text-fb-muted text-xs mb-4">Applying a template replaces the current columns and clears all rows.</p>
+
+              {/* Save current as template */}
+              {columns.length > 0 && (
+                <button
+                  onClick={() => {
+                    const name = window.prompt('Template name:');
+                    if (!name || !name.trim()) return;
+                    const tpl = {
+                      name: name.trim(),
+                      desc: columns.map(c => c.label || c.id).join(' · '),
+                      cols: columns.map((c, i) => ({ ...c, id: 'ct' + Date.now() + '_' + i })),
+                      custom: true,
+                      savedAt: new Date().toISOString(),
+                    };
+                    DB.saveCustomTemplate(tpl);
+                    setCustomTemplates(DB.getCustomTemplates());
+                  }}
+                  className="w-full flex items-center justify-center gap-2 mb-4 py-2.5 rounded-xl border-2 border-dashed border-fb-mid text-fb-mid font-semibold text-sm active:bg-fb-mid/10">
+                  <span style={{ fontSize: 16 }}>＋</span> Save current columns as template
+                </button>
+              )}
+
+              {/* My templates */}
+              {customTemplates.length > 0 && (
+                <>
+                  <p className="text-fb-muted text-xs font-semibold uppercase tracking-wide mb-2 px-1">My Templates</p>
+                  <div className="space-y-2 mb-4">
+                    {customTemplates.map(tpl => (
+                      <div key={tpl.name} className="flex items-stretch gap-2">
+                        <button
+                          onClick={() => {
+                            if (rows.some(r => Object.values(r.cells || {}).some(v => v.trim())))
+                              if (!window.confirm('This will clear all existing data. Continue?')) return;
+                            applyTemplate(tpl);
+                          }}
+                          className="flex-1 flex items-start gap-3 p-3 rounded-xl border-2 border-fb-mid/30 active:border-fb-mid text-left">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-fb-text text-sm">{tpl.name}</p>
+                            <p className="text-fb-muted text-xs mt-0.5 font-data">{tpl.desc}</p>
+                          </div>
+                          <Ico.ChevR />
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (!window.confirm(`Delete template "${tpl.name}"?`)) return;
+                            DB.deleteCustomTemplate(tpl.name);
+                            setCustomTemplates(DB.getCustomTemplates());
+                          }}
+                          className="w-10 flex items-center justify-center rounded-xl border-2 border-red-100 text-red-300 active:text-red-500 active:border-red-300 flex-shrink-0">
+                          <Ico.Trash />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Built-in templates */}
+              <p className="text-fb-muted text-xs font-semibold uppercase tracking-wide mb-2 px-1">Built-in</p>
               <div className="space-y-2">
                 {TEMPLATES.map(tpl => (
                   <button key={tpl.name}
@@ -4610,6 +4811,7 @@
                   </button>
                 ))}
               </div>
+
               <button onClick={() => setTemplateModal(false)}
                 className="w-full mt-4 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold text-sm">
                 Cancel
