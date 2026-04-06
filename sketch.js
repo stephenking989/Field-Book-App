@@ -998,6 +998,7 @@ function SketchPage({ page, projectId, onReload }) {
   const [scaleDenom,    setScaleDenom]    = useState(page.scaleDenom  || 1);
   const [units,         setUnits]         = useState(page.units       || 'm');
   const [showScaleBar,  setShowScaleBar]  = useState(true);
+  const [showNorthArrow, setShowNorthArrow] = useState(page.showNorthArrow !== false);
   const [showGrid,      setShowGrid]      = useState(true);
   // Tracks the live text-input value while the user is typing a new denominator
   const [scaleInput,    setScaleInput]    = useState(String(page.scaleDenom || 1));
@@ -1153,6 +1154,16 @@ function SketchPage({ page, projectId, onReload }) {
     }, 1000);
     return () => clearTimeout(vbSaveRef.current);
   }, [viewBox.x, viewBox.y, viewBox.w, viewBox.h]);
+
+  // Persist visual toggle states so PDF export respects show/hide settings
+  useEffect(() => {
+    const t = setTimeout(() => {
+      window._fb.DB.updatePage(projectId, page.id, {
+        showGrid, showDims, showScaleBar, showNorthArrow,
+      });
+    }, 400);
+    return () => clearTimeout(t);
+  }, [showGrid, showDims, showScaleBar, showNorthArrow]);
 
   // ── Native canvas input handlers (wheel zoom, middle-mouse pan, context menu) ──
   // All three are attached as native DOM listeners on svgWrapRef rather than as
@@ -4438,6 +4449,7 @@ function SketchPage({ page, projectId, onReload }) {
               { label: 'Dims on Draw', icon: '✦', state: dimsOnDraw,    set: () => setDimsOnDraw(v => !v),    activeCol: '#90CDF4', activeBg: 'rgba(99,179,237,0.12)' },
               { label: 'Card',         icon: '▤', state: showValueCard, set: () => setShowValueCard(v => !v), activeCol: '#C4B5FD', activeBg: 'rgba(167,139,250,0.18)' },
               { label: 'Scale Bar',    icon: '⊟', state: showScaleBar,  set: () => setShowScaleBar(v => !v),  activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
+              { label: 'N Arrow',      icon: '↑', state: showNorthArrow, set: () => setShowNorthArrow(v => !v), activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
             ].map(({ label, icon, state, set, activeCol, activeBg }) => (
               <button key={label}
                 onClick={set}
@@ -5079,12 +5091,14 @@ function SketchPage({ page, projectId, onReload }) {
         <div ref={svgWrapRef} style={{ flex: 1, position: 'relative', overflow: 'hidden', touchAction: 'none', backgroundColor: '#FEFEFE' }}>
 
           {/* North arrow */}
+          {showNorthArrow && (
           <div style={{ position: 'absolute', top: 10, right: 14, opacity: 0.28, display: 'flex',
             flexDirection: 'column', alignItems: 'center', color: '#3B5BDB',
             fontFamily: 'Courier New, monospace', fontSize: 11, pointerEvents: 'none', zIndex: 2 }}>
             <span style={{ fontSize: 20, lineHeight: 1 }}>↑</span>
             <span style={{ fontWeight: 700, lineHeight: 1 }}>N</span>
           </div>
+          )}
 
           {/* Empty hint */}
           {shapes.length === 0 && !drawState && (

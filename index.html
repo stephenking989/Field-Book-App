@@ -1506,7 +1506,7 @@
   // Build an SVG string from stored sketch page data.
   // Uses window._fbSketchUtils (exposed by sketch.js) for arc/path geometry,
   // dimension formatting, scale bar, and north arrow.
-  function buildSketchSVG(shapes, layers, viewBox, scaleDenom, units) {
+  function buildSketchSVG(shapes, layers, viewBox, scaleDenom, units, showDims = true, transparent = false) {
     const utils = window._fbSketchUtils;
     if (!utils) return null;
     const { arcPath: _arc, pathToSVGD: _pathD, computeArcFromPI: _cArc,
@@ -1713,10 +1713,11 @@
         el = `<g transform="rotate(${s._rot},${px},${py})">${el}</g>`;
       }
       shapesSVG += el;
-      dimsSVG   += _dimsSVG(s);
+      if (showDims) dimsSVG += _dimsSVG(s);
     }
 
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}" width="${outW}" height="${outH}" style="background:#FDFAF4;">${shapesSVG}${dimsSVG}${_scaleBarSVG()}${_northArrowSVG()}</svg>`;
+    const bgAttr = transparent ? '' : ' style="background:#FDFAF4;"';
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}" width="${outW}" height="${outH}"${bgAttr}>${shapesSVG}${dimsSVG}</svg>`;
   }
 
   // Draw the notebook-style page header on the current jsPDF page.
@@ -1783,6 +1784,82 @@
     }
 
     return y;
+  }
+
+  // ── PDF SKETCH OVERLAY HELPERS ─────────────────────────────────────────────
+
+  // Draw a 5mm graph-paper grid over the content area of a notebook page.
+  function _drawPdfGrid(pdf, W, H, margin, top) {
+    const step = 5;
+    const left = margin, right = W - margin;
+    const bottom = H - margin;
+    pdf.setDrawColor(200, 195, 185);
+    pdf.setLineWidth(0.12);
+    for (let x = left; x <= right + 0.01; x += step) {
+      pdf.line(x, top, x, bottom);
+    }
+    for (let y = top; y <= bottom + 0.01; y += step) {
+      pdf.line(left, y, right, y);
+    }
+  }
+
+  // Draw a simple north arrow at the top-right of the content area.
+  function _drawPdfNorthArrow(pdf, W, margin) {
+    const cx = W - margin - 9;
+    const cy = margin + 32;
+    pdf.setDrawColor(40, 40, 40); pdf.setLineWidth(0.6);
+    pdf.line(cx, cy + 6, cx, cy - 3);
+    pdf.line(cx, cy - 3, cx - 2.5, cy + 1.5);
+    pdf.line(cx, cy - 3, cx + 2.5, cy + 1.5);
+    pdf.setFillColor(40, 40, 40);
+    pdf.circle(cx, cy + 6, 0.9, 'F');
+    pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(40, 40, 40);
+    pdf.text('N', cx, cy - 5.5, { align: 'center' });
+  }
+
+  // Draw a map-style alternating scale bar at the bottom-right of the content area.
+  function _drawPdfScaleBar(pdf, scaleDenom, units, W, H, margin) {
+    if (!scaleDenom || scaleDenom <= 1) return;
+    const u = units || 'm';
+    // Find a nice real-world value that gives ~40-60mm bar width
+    const niceVals = [1,2,5,10,25,50,100,150,200,250,500,1000,2000];
+    const targetMM = 50;
+    const targetReal = targetMM * scaleDenom / 1000;
+    let niceReal = niceVals[niceVals.length - 1];
+    for (const v of niceVals) {
+      if (v >= targetReal * 0.6) { niceReal = v; break; }
+    }
+    const barW  = niceReal * 1000 / scaleDenom;
+    const barH  = 3.5;
+    const nSegs = 5;
+    const segW  = barW / nSegs;
+    const bx    = W - margin - 4 - barW;
+    const by    = H - margin - 19;
+    const dk = [55, 55, 55], wh = [255, 255, 255];
+    for (let i = 0; i < nSegs; i++) {
+      const sx = bx + i * segW;
+      if (i === 0) {
+        const sw2 = segW / 2, sh2 = barH / 2;
+        pdf.setFillColor(...dk); pdf.rect(sx,        by,        sw2, sh2, 'F');
+        pdf.setFillColor(...wh); pdf.rect(sx + sw2,  by,        sw2, sh2, 'F');
+        pdf.setFillColor(...wh); pdf.rect(sx,        by + sh2,  sw2, sh2, 'F');
+        pdf.setFillColor(...dk); pdf.rect(sx + sw2,  by + sh2,  sw2, sh2, 'F');
+      } else {
+        pdf.setFillColor(...(i % 2 === 1 ? dk : wh));
+        pdf.rect(sx, by, segW, barH, 'F');
+      }
+    }
+    pdf.setDrawColor(...dk); pdf.setLineWidth(0.3);
+    pdf.rect(bx, by, barW, barH, 'S');
+    for (let i = 1; i < nSegs; i++) {
+      pdf.line(bx + i * segW, by, bx + i * segW, by + barH);
+    }
+    pdf.setFontSize(5.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(44, 44, 44);
+    for (let i = 0; i <= nSegs; i++) {
+      const val = Math.round((i / nSegs) * niceReal);
+      pdf.text(String(val), bx + i * segW, by - 1, { align: 'center' });
+    }
+    pdf.text(u, bx + barW + 2, by + barH, { align: 'left' });
   }
 
   // Main project PDF export — called from ProjectView.
@@ -1906,10 +1983,12 @@
 
         if (page.type === 'sketch') {
           const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin);
+          // Grid covers full content area
+          if (page.showGrid !== false) _drawPdfGrid(pdf, W, H, margin, contentY);
           const drawH = (H - margin - 14) - contentY;
 
           // Generate SVG and render via html2canvas
-          const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units);
+          const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units, page.showDims !== false, true);
           if (svgStr && window.html2canvas) {
             const vb = page.viewBox || { x: 0, y: 0, w: 800, h: 600 };
             const outW = 1200, outH = Math.round(1200 * vb.h / vb.w);
@@ -1918,7 +1997,7 @@
             tmp.innerHTML = svgStr.replace(`width="${outW}"`, `width="${outW}"`);
             document.body.appendChild(tmp);
             try {
-              const canvas = await window.html2canvas(tmp, { scale: 1.5, useCORS: true, logging: false, width: outW, height: outH });
+              const canvas = await window.html2canvas(tmp, { scale: 1.5, useCORS: true, logging: false, width: outW, height: outH, backgroundColor: null });
               document.body.removeChild(tmp);
               const availW = W - margin*2;
               const aspect = canvas.width / canvas.height;
@@ -1927,6 +2006,9 @@
               const imgX = margin + (availW - imgW) / 2;
               const imgY = contentY + (drawH - imgH) / 2;
               pdf.addImage(canvas.toDataURL('image/png'), 'PNG', imgX, imgY, imgW, imgH);
+              // North arrow and scale bar drawn directly in PDF (on top of sketch)
+              if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
+              if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin);
             } catch {
               if (tmp.parentNode) document.body.removeChild(tmp);
               pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
@@ -2169,8 +2251,10 @@
       const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin);
 
       if (page.type === 'sketch') {
+        // Grid covers full content area
+        if (page.showGrid !== false) _drawPdfGrid(pdf, W, H, margin, contentY);
         const drawH = (H - margin - 14) - contentY;
-        const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units);
+        const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units, page.showDims !== false, true);
         if (svgStr && window.html2canvas) {
           const vb = page.viewBox || { x: 0, y: 0, w: 800, h: 600 };
           const outW = 1200, outH = Math.round(1200 * vb.h / vb.w);
@@ -2179,7 +2263,7 @@
           tmp.innerHTML = svgStr;
           document.body.appendChild(tmp);
           try {
-            const canvas = await window.html2canvas(tmp, { scale: 1.5, useCORS: true, logging: false, width: outW, height: outH });
+            const canvas = await window.html2canvas(tmp, { scale: 1.5, useCORS: true, logging: false, width: outW, height: outH, backgroundColor: null });
             document.body.removeChild(tmp);
             const availW = W - margin*2;
             const aspect = canvas.width / canvas.height;
@@ -2187,6 +2271,9 @@
             if (imgH > drawH) { imgH = drawH; imgW = imgH * aspect; }
             pdf.addImage(canvas.toDataURL('image/png'), 'PNG',
               margin + (availW - imgW) / 2, contentY + (drawH - imgH) / 2, imgW, imgH);
+            // North arrow and scale bar drawn directly in PDF (on top of sketch)
+            if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
+            if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin);
           } catch (_) { document.body.removeChild(tmp); }
         }
       } else if (page.type === 'title') {
