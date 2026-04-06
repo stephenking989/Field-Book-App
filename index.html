@@ -4574,12 +4574,38 @@
       }, 800);
     }
 
-    // Grows a textarea to fit its content — called via onInput and ref
+    // Grows a textarea to fit its content, then keeps the cursor visible.
     function grow(el) {
       if (!el) return;
       el.style.height = 'auto';
       el.style.height = el.scrollHeight + 'px';
+      // After the layout settles, scroll the active element back into view so
+      // the cursor doesn't disappear below the bottom of the page/keyboard.
+      if (document.activeElement === el) {
+        requestAnimationFrame(() => el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+      }
     }
+
+    // When a field is focused, wait for the mobile keyboard to finish sliding
+    // open (~350 ms) then scroll the field to the center of whatever visible
+    // viewport remains above the keyboard.
+    function focusScroll(e) {
+      const el = e.target;
+      setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 350);
+    }
+
+    // visualViewport fires when the keyboard opens / closes. Re-scroll the
+    // active element so it stays visible whenever the available height changes.
+    useEffect(() => {
+      if (!window.visualViewport) return;
+      function onVVResize() {
+        const el = document.activeElement;
+        if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA')) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+      window.visualViewport.addEventListener('resize', onVVResize);
+      return () => window.visualViewport.removeEventListener('resize', onVVResize);
+    }, []);
 
     const taClass = 'tp-grow w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed overflow-hidden';
     const inClass = 'w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300';
@@ -4609,12 +4635,13 @@
             {dirty && <span className="text-[10px] text-fb-muted italic">saving...</span>}
           </div>
         </div>
-        <div className="px-5">
+        {/* paddingBottom ensures bottom fields can scroll up above the keyboard */}
+        <div className="px-5" style={{ paddingBottom: '50vh' }}>
           {/* Project Title / Location */}
           <div className={secClass}>
             <p className={lblClass}>Project Title / Location</p>
             <textarea
-              ref={grow} onInput={e => grow(e.target)}
+              ref={grow} onInput={e => grow(e.target)} onFocus={focusScroll}
               value={form.location} onChange={e => handleChange('location', e.target.value)}
               placeholder="Property address, legal description, project name..."
               className={taClass} rows={1} />
@@ -4623,7 +4650,7 @@
           <div className={secClass}>
             <p className={lblClass}>Crew &amp; Responsibilities</p>
             <textarea
-              ref={grow} onInput={e => grow(e.target)}
+              ref={grow} onInput={e => grow(e.target)} onFocus={focusScroll}
               value={form.crew} onChange={e => handleChange('crew', e.target.value)}
               placeholder="Party chief: —   Rod person: —   Note keeper: —"
               className={taClass} rows={1} />
@@ -4632,7 +4659,7 @@
           <div className={secClass}>
             <p className={lblClass}>Equipment (Make, Model, S/N)</p>
             <textarea
-              ref={grow} onInput={e => grow(e.target)}
+              ref={grow} onInput={e => grow(e.target)} onFocus={focusScroll}
               value={form.equipment} onChange={e => handleChange('equipment', e.target.value)}
               placeholder="Total station: —   Level: —   Prism: —"
               className={taClass} rows={1} />
@@ -4641,6 +4668,7 @@
           <div className={secClass}>
             <p className={lblClass}>Datum &amp; Projection</p>
             <input type="text" value={form.datum} onChange={e => handleChange('datum', e.target.value)}
+              onFocus={focusScroll}
               placeholder="NAD83(CSRS), UTM Zone 20N / CGVD2013"
               className={inClass} />
           </div>
@@ -4651,24 +4679,24 @@
               <div className="flex items-baseline gap-1.5 min-w-0">
                 <span className={instrLblClass}>PPM</span>
                 <input type="text" value={form.ppm} onChange={e => handleChange('ppm', e.target.value)}
-                  placeholder="—" className={instrInputClass} />
+                  onFocus={focusScroll} placeholder="—" className={instrInputClass} />
               </div>
               <div className="flex items-baseline gap-1.5 min-w-0">
                 <span className={instrLblClass}>Temp</span>
                 <input type="text" value={form.temperature} onChange={e => handleChange('temperature', e.target.value)}
-                  placeholder="—" className={instrInputClass} />
+                  onFocus={focusScroll} placeholder="—" className={instrInputClass} />
                 <span className={instrUnitClass}>°C</span>
               </div>
               <div className="flex items-baseline gap-1.5 min-w-0">
                 <span className={instrLblClass}>Pressure</span>
                 <input type="text" value={form.pressure} onChange={e => handleChange('pressure', e.target.value)}
-                  placeholder="—" className={instrInputClass} />
+                  onFocus={focusScroll} placeholder="—" className={instrInputClass} />
                 <span className={instrUnitClass}>hPa</span>
               </div>
               <div className="flex items-baseline gap-1.5 min-w-0">
                 <span className={instrLblClass}>Prism K</span>
                 <input type="text" value={form.prismConst} onChange={e => handleChange('prismConst', e.target.value)}
-                  placeholder="—" className={instrInputClass} />
+                  onFocus={focusScroll} placeholder="—" className={instrInputClass} />
                 <span className={instrUnitClass}>mm</span>
               </div>
             </div>
@@ -4677,7 +4705,7 @@
           <div className={secClass}>
             <p className={lblClass}>Summary of Work</p>
             <textarea
-              ref={grow} onInput={e => grow(e.target)}
+              ref={grow} onInput={e => grow(e.target)} onFocus={focusScroll}
               value={form.summary} onChange={e => handleChange('summary', e.target.value)}
               placeholder="Overview of survey objectives for this session..."
               className={taClass} rows={1} />
@@ -4686,7 +4714,7 @@
           <div className={secClass}>
             <p className={lblClass}>Code List / File Names / Additional Notes</p>
             <textarea
-              ref={grow} onInput={e => grow(e.target)}
+              ref={grow} onInput={e => grow(e.target)} onFocus={focusScroll}
               value={form.notes} onChange={e => handleChange('notes', e.target.value)}
               placeholder="Feature codes, digital file names, check shots, other notes..."
               className={taClass} rows={1} />
