@@ -1731,27 +1731,13 @@
     pdf.setFillColor(...GD);
     pdf.rect(0, 0, W, 22, 'F');
 
-    // Type badge
-    pdf.setFillColor(..._hexRgb(meta.bg));
-    pdf.roundedRect(margin, 6, 18, 8, 2, 2, 'F');
-    pdf.setFontSize(6.5);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setTextColor(..._hexRgb(meta.color));
-    pdf.text(meta.label.toUpperCase(), margin + 9, 11.5, { align: 'center' });
-
-    // Page number
-    pdf.setFontSize(7.5);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setTextColor(...GL);
-    pdf.text(`P.${page.pageNumber}`, margin + 22, 11.5);
-
-    // Page title
+    // Page title — left-aligned, no badge or page-number prefix (both moved to footer)
     const titleStr = page.title?.trim() || '(Untitled)';
     pdf.setFontSize(11);
     pdf.setFont('helvetica', 'bold');
     pdf.setTextColor(...CR);
-    const titleLines = pdf.splitTextToSize(titleStr, W - margin*2 - 60);
-    pdf.text(titleLines[0], margin + 32, 13);
+    const titleLines = pdf.splitTextToSize(titleStr, W - margin*2 - 50);
+    pdf.text(titleLines[0], margin, 13);
 
     // Date / weather on the right
     const dateStr = [page.date, page.weather].filter(Boolean).join('  ·  ');
@@ -1809,6 +1795,11 @@
       const BRD = _hexRgb('#DDD6C8');
 
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      // Export timestamp — used in per-page footer
+      const exportTs = new Date().toLocaleString('en-CA', {
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      });
 
       // ── PAGE 1: TITLE PAGE ─────────────────────────────────────────────────
 
@@ -1932,7 +1923,7 @@
               // Scale bar (if applicable)
               if (page.scaleDenom && page.scaleDenom > 1) {
                 pdf.setFontSize(7); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(107, 114, 128);
-                pdf.text(`Scale  1 : ${page.scaleDenom}`, margin, H - 5);
+                pdf.text(`Scale  1 : ${page.scaleDenom}`, margin, H - 14);
               }
             } catch {
               if (tmp.parentNode) document.body.removeChild(tmp);
@@ -1950,24 +1941,24 @@
           const BRD2 = _hexRgb('#DDD6C8');
           let ty = contentY + 4;
 
-          // Build instrument settings line from individual fields
-          const instrParts = [
-            page.ppm         ? `PPM: ${page.ppm}`           : '',
-            page.temperature ? `Temp: ${page.temperature}°C` : '',
-            page.pressure    ? `Press: ${page.pressure} hPa` : '',
-            page.prismConst  ? `Prism K: ${page.prismConst} mm` : '',
-          ].filter(Boolean);
-          const instrLine = instrParts.join('    ');
+          // Instrument settings — always rendered so the section is never missing.
+          // Empty fields show "—" so the surveyor can see what wasn't recorded.
+          const instrLine = [
+            `PPM: ${page.ppm        || '—'}`,
+            `Temp: ${page.temperature || '—'} °C`,
+            `Press: ${page.pressure  || '—'} hPa`,
+            `Prism K: ${page.prismConst || '—'} mm`,
+          ].join('    ');
 
           const titleFields = [
-            ['PROJECT TITLE / LOCATION',    page.location],
-            ['CREW & RESPONSIBILITIES',      page.crew],
-            ['EQUIPMENT (Make, Model, S/N)', page.equipment],
-            ['DATUM & PROJECTION',           page.datum],
-            ['INSTRUMENT SETTINGS',          instrLine || null],
-            ['SUMMARY OF WORK',              page.summary],
-            ['CODE LIST',                    page.codeList],
-            ['DIGITAL FILE NAMES',           page.fileNames],
+            ['LOCATION',                     page.location],
+            ['CREW & RESPONSIBILITIES',       page.crew],
+            ['EQUIPMENT (Make, Model, S/N)',  page.equipment],
+            ['DATUM & PROJECTION',            page.datum],
+            ['INSTRUMENT SETTINGS',           instrLine],
+            ['SUMMARY OF WORK',               page.summary],
+            ['CODE LIST',                     page.codeList],
+            ['DIGITAL FILE NAMES',            page.fileNames],
           ];
 
           for (const [lbl, val] of titleFields) {
@@ -2061,12 +2052,13 @@
           }
         }
 
-        // Page footer (project name + pdf page number)
-        pdf.setFillColor(...GD);
-        pdf.rect(0, H - 10, W, 10, 'F');
-        pdf.setFontSize(6.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(...GL);
-        pdf.text(proj.name, margin, H - 4);
-        pdf.text(String(pdfPageNum), W - margin, H - 4, { align: 'right' });
+        // Page footer — thin rule, fieldbook page number left, export timestamp right
+        pdf.setDrawColor(..._hexRgb('#DDD6C8')); pdf.setLineWidth(0.3);
+        pdf.line(margin, H - 10, W - margin, H - 10);
+        pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(..._hexRgb('#2D6A4F'));
+        pdf.text(`P.${page.pageNumber}`, margin, H - 5);
+        pdf.setFont('helvetica', 'normal'); pdf.setTextColor(150, 150, 150);
+        pdf.text(`Exported  ${exportTs}`, W - margin, H - 5, { align: 'right' });
       }
 
       // ── DRAW TOC on page 2 ─────────────────────────────────────────────────
