@@ -549,6 +549,8 @@
         pressure: '',
         prismConst: '',
         summary: '',
+        codeList: '',
+        fileNames: '',
         // sketch page
         shapes: [],
         ...pageData,
@@ -1762,8 +1764,9 @@
 
     let y = 26;
 
-    // Notes section (below header, beige background)
-    if (page.notes?.trim()) {
+    // Notes section (below header, beige background).
+    // Title pages manage their own content fields; suppress the header notes band for them.
+    if (page.notes?.trim() && page.type !== 'title') {
       const noteLines = pdf.splitTextToSize(page.notes.trim(), W - margin*2 - 6);
       const noteH = noteLines.length * 4.5 + 8;
       pdf.setFillColor(248, 245, 238);
@@ -1947,15 +1950,24 @@
           const BRD2 = _hexRgb('#DDD6C8');
           let ty = contentY + 4;
 
+          // Build instrument settings line from individual fields
+          const instrParts = [
+            page.ppm         ? `PPM: ${page.ppm}`           : '',
+            page.temperature ? `Temp: ${page.temperature}°C` : '',
+            page.pressure    ? `Press: ${page.pressure} hPa` : '',
+            page.prismConst  ? `Prism K: ${page.prismConst} mm` : '',
+          ].filter(Boolean);
+          const instrLine = instrParts.join('    ');
+
           const titleFields = [
-            ['PROJECT TITLE / LOCATION',                          page.location],
-            ['CREW & RESPONSIBILITIES',                           page.crew],
-            ['EQUIPMENT (Make, Model, S/N)',                      page.equipment],
-            ['DATUM & PROJECTION',                                page.datum],
-            ['TOTAL STATION SETTINGS (PPM, Temp, Press, Prism)', page.tsSettings],
-            ['H.I. / PRISM HEIGHT',                               page.hiPrism],
-            ['SUMMARY OF WORK',                                   page.summary],
-            ['CODE LIST / FILE NAMES / ADDITIONAL NOTES',        page.notes],
+            ['PROJECT TITLE / LOCATION',    page.location],
+            ['CREW & RESPONSIBILITIES',      page.crew],
+            ['EQUIPMENT (Make, Model, S/N)', page.equipment],
+            ['DATUM & PROJECTION',           page.datum],
+            ['INSTRUMENT SETTINGS',          instrLine || null],
+            ['SUMMARY OF WORK',              page.summary],
+            ['CODE LIST',                    page.codeList],
+            ['DIGITAL FILE NAMES',           page.fileNames],
           ];
 
           for (const [lbl, val] of titleFields) {
@@ -2346,6 +2358,8 @@
             temperature: prevTitle.temperature || '',
             pressure:    prevTitle.pressure    || '',
             prismConst:  prevTitle.prismConst  || '',
+            codeList:    prevTitle.codeList    || '', // carry over — codes are project-wide
+            // fileNames intentionally blank — different every session
           };
         }
       }
@@ -4533,7 +4547,8 @@
       pressure:    page.pressure    || '',
       prismConst:  page.prismConst  || '',
       summary:     page.summary     || '',
-      notes:       page.notes       || '',
+      codeList:    page.codeList    || '',
+      fileNames:   page.fileNames   || '',
     });
     const [dirty, setDirty] = useState(false);
     const timerRef = useRef(null);
@@ -4558,7 +4573,8 @@
         pressure:    page.pressure    || '',
         prismConst:  page.prismConst  || '',
         summary:     page.summary     || '',
-        notes:       page.notes       || '',
+        codeList:    page.codeList    || '',
+        fileNames:   page.fileNames   || '',
       });
     }, [page.id]);
 
@@ -4710,13 +4726,22 @@
               placeholder="Overview of survey objectives for this session..."
               className={taClass} rows={1} />
           </div>
-          {/* Notes */}
+          {/* Code List — carries over to new title pages */}
           <div className={secClass}>
-            <p className={lblClass}>Code List / File Names / Additional Notes</p>
+            <p className={lblClass}>Code List</p>
             <textarea
               ref={grow} onInput={e => grow(e.target)} onFocus={focusScroll}
-              value={form.notes} onChange={e => handleChange('notes', e.target.value)}
-              placeholder="Feature codes, digital file names, check shots, other notes..."
+              value={form.codeList} onChange={e => handleChange('codeList', e.target.value)}
+              placeholder="TL - Tree Line&#10;FT - Fallen Tree&#10;SPK - Spike&#10;SM FD - Survey Marker Found..."
+              className={taClass} rows={1} />
+          </div>
+          {/* Digital File Names — day-specific, does not carry over */}
+          <div className={secClass}>
+            <p className={lblClass}>Digital File Names</p>
+            <textarea
+              ref={grow} onInput={e => grow(e.target)} onFocus={focusScroll}
+              value={form.fileNames} onChange={e => handleChange('fileNames', e.target.value)}
+              placeholder="e.g. 2026-04-06_Site9_TS.job&#10;2026-04-06_Site9_GNSS.csv"
               className={taClass} rows={1} />
           </div>
         </div>
