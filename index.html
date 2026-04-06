@@ -1719,58 +1719,66 @@
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}" width="${outW}" height="${outH}" style="background:#FDFAF4;">${shapesSVG}${dimsSVG}${_scaleBarSVG()}${_northArrowSVG()}</svg>`;
   }
 
-  // Draw the green page-header strip on the current jsPDF page.
+  // Draw the notebook-style page header on the current jsPDF page.
   // Returns the y coordinate where content should start below the header.
-  function _pdfPageHeader(pdf, page, meta, W, margin) {
+  function _pdfPageHeader(pdf, page, meta, W, H, margin) {
     const GD = _hexRgb('#1C3829');
     const GM = _hexRgb('#2D6A4F');
     const CR = _hexRgb('#FDFAF4');
     const GL = _hexRgb('#52B788');
 
-    // Header background
+    // Full dark green page background
     pdf.setFillColor(...GD);
-    pdf.rect(0, 0, W, 22, 'F');
+    pdf.rect(0, 0, W, H, 'F');
 
-    // Page title — left-aligned, no badge or page-number prefix (both moved to footer)
+    // Cream rounded rect — the "paper" inset
+    pdf.setFillColor(...CR);
+    pdf.roundedRect(margin, margin, W - 2*margin, H - 2*margin, 4, 4, 'F');
+
+    // Dark green header bar inside the paper — rounded top corners only
+    pdf.setFillColor(...GM);
+    pdf.roundedRect(margin, margin, W - 2*margin, 20, 4, 4, 'F');
+    pdf.rect(margin, margin + 10, W - 2*margin, 10, 'F');
+
+    // Page title — left-aligned in header
     const titleStr = page.title?.trim() || '(Untitled)';
     pdf.setFontSize(11);
     pdf.setFont('helvetica', 'bold');
     pdf.setTextColor(...CR);
     const titleLines = pdf.splitTextToSize(titleStr, W - margin*2 - 50);
-    pdf.text(titleLines[0], margin, 13);
+    pdf.text(titleLines[0], margin + 4, margin + 13);
 
-    // Date / weather on the right
+    // Date / weather on the right in header
     const dateStr = [page.date, page.weather].filter(Boolean).join('  ·  ');
     if (dateStr) {
       pdf.setFontSize(7.5);
       pdf.setFont('helvetica', 'normal');
       pdf.setTextColor(...GL);
-      pdf.text(dateStr, W - margin, 13, { align: 'right' });
+      pdf.text(dateStr, W - margin - 4, margin + 13, { align: 'right' });
     }
 
-    let y = 26;
+    let y = margin + 20 + 3;
 
-    // Notes section (below header, beige background).
-    // Title pages manage their own content fields; suppress the header notes band for them.
+    // Notes band (non-title pages only) — drawn inside the cream rect
     if (page.notes?.trim() && page.type !== 'title') {
-      const noteLines = pdf.splitTextToSize(page.notes.trim(), W - margin*2 - 6);
+      const noteLines = pdf.splitTextToSize(page.notes.trim(), W - 2*margin - 18);
       const noteH = noteLines.length * 4.5 + 8;
       pdf.setFillColor(248, 245, 238);
-      pdf.rect(0, y, W, noteH, 'F');
+      pdf.rect(margin, y, W - 2*margin, noteH, 'F');
       pdf.setDrawColor(..._hexRgb('#DDD6C8'));
       pdf.setLineWidth(0.3);
-      pdf.line(0, y, W, y);
-      pdf.line(0, y + noteH, W, y + noteH);
+      pdf.line(margin, y, W - margin, y);
+      pdf.line(margin, y + noteH, W - margin, y + noteH);
       // "Notes:" label
       pdf.setFontSize(6.5);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(107, 114, 128);
-      pdf.text('NOTES', margin, y + 5.5);
+      pdf.text('NOTES', margin + 4, y + 5.5);
       // Notes text
       pdf.setFontSize(8);
       pdf.setFont('helvetica', 'normal');
       pdf.setTextColor(44, 44, 44);
-      pdf.text(noteLines, margin + 14, y + 5.5);
+      pdf.text(noteLines, margin + 18, y + 5.5);
       y += noteH + 2;
     }
 
@@ -1897,8 +1905,8 @@
         tocEntries.push({ pageNum: page.pageNumber, typeLabel: meta.label, title: displayTitle, pdfPage: pdfPageNum });
 
         if (page.type === 'sketch') {
-          const contentY = _pdfPageHeader(pdf, page, meta, W, margin);
-          const drawH = H - contentY - 16;
+          const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin);
+          const drawH = (H - margin - 14) - contentY;
 
           // Generate SVG and render via html2canvas
           const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units);
@@ -1919,12 +1927,6 @@
               const imgX = margin + (availW - imgW) / 2;
               const imgY = contentY + (drawH - imgH) / 2;
               pdf.addImage(canvas.toDataURL('image/png'), 'PNG', imgX, imgY, imgW, imgH);
-
-              // Scale bar (if applicable)
-              if (page.scaleDenom && page.scaleDenom > 1) {
-                pdf.setFontSize(7); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(107, 114, 128);
-                pdf.text(`Scale  1 : ${page.scaleDenom}`, margin, H - 14);
-              }
             } catch {
               if (tmp.parentNode) document.body.removeChild(tmp);
               pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
@@ -1937,7 +1939,7 @@
 
         } else if (page.type === 'title') {
           // ── TITLE PAGE ──────────────────────────────────────────────────────
-          const contentY = _pdfPageHeader(pdf, page, meta, W, margin);
+          const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin);
           const BRD2 = _hexRgb('#DDD6C8');
           let ty = contentY + 4;
 
@@ -1963,23 +1965,23 @@
 
           for (const [lbl, val] of titleFields) {
             if (!val?.trim()) continue;
-            if (ty > H - 16) break;
-            const lines = pdf.splitTextToSize(val.trim(), W - margin * 2);
+            if (ty > H - margin - 16) break;
+            const lines = pdf.splitTextToSize(val.trim(), W - margin * 2 - 8);
             const blockH = lines.length * 4.5 + 12;
 
             // Label
             pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold');
             pdf.setTextColor(107, 114, 128);
-            pdf.text(lbl, margin, ty + 4);
+            pdf.text(lbl, margin + 4, ty + 4);
 
             // Value
             pdf.setFontSize(9); pdf.setFont('helvetica', 'normal');
             pdf.setTextColor(44, 44, 44);
-            pdf.text(lines, margin, ty + 9.5);
+            pdf.text(lines, margin + 4, ty + 9.5);
 
             // Divider
             pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.3);
-            pdf.line(margin, ty + blockH, W - margin, ty + blockH);
+            pdf.line(margin + 4, ty + blockH, W - margin - 4, ty + blockH);
             ty += blockH + 3;
           }
 
@@ -1991,7 +1993,7 @@
 
         } else {
           // DATA page
-          const contentY = _pdfPageHeader(pdf, page, meta, W, margin);
+          const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin);
           const cols = page.columns || [];
           const rows = page.rows || [];
 
@@ -2019,7 +2021,7 @@
               head,
               body,
               startY: contentY + 2,
-              margin: { left: margin, right: margin, bottom: 14 },
+              margin: { left: margin, right: margin, bottom: margin + 14 },
               tableWidth: W - margin * 2,
               headStyles: {
                 fillColor: GD, textColor: CR, fontSize: 8, fontStyle: 'bold',
@@ -2052,13 +2054,13 @@
           }
         }
 
-        // Page footer — thin rule, fieldbook page number left, export timestamp right
+        // Notebook footer — inside cream paper area
         pdf.setDrawColor(..._hexRgb('#DDD6C8')); pdf.setLineWidth(0.3);
-        pdf.line(margin, H - 10, W - margin, H - 10);
+        pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
         pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(..._hexRgb('#2D6A4F'));
-        pdf.text(`P.${page.pageNumber}`, margin, H - 5);
+        pdf.text(`P.${page.pageNumber}`, margin + 4, H - margin - 4);
         pdf.setFont('helvetica', 'normal'); pdf.setTextColor(150, 150, 150);
-        pdf.text(`Exported  ${exportTs}`, W - margin, H - 5, { align: 'right' });
+        pdf.text(`Exported  ${exportTs}`, W - margin - 4, H - margin - 4, { align: 'right' });
       }
 
       // ── DRAW TOC on page 2 ─────────────────────────────────────────────────
@@ -2164,10 +2166,10 @@
       };
       const meta = metaMap[page.type] || metaMap.data;
       const pdf  = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-      const contentY = _pdfPageHeader(pdf, page, meta, W, margin);
+      const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin);
 
       if (page.type === 'sketch') {
-        const drawH = H - contentY - 16;
+        const drawH = (H - margin - 14) - contentY;
         const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units);
         if (svgStr && window.html2canvas) {
           const vb = page.viewBox || { x: 0, y: 0, w: 800, h: 600 };
@@ -2185,31 +2187,40 @@
             if (imgH > drawH) { imgH = drawH; imgW = imgH * aspect; }
             pdf.addImage(canvas.toDataURL('image/png'), 'PNG',
               margin + (availW - imgW) / 2, contentY + (drawH - imgH) / 2, imgW, imgH);
-            if (page.scaleDenom > 1) {
-              pdf.setFontSize(7); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(107, 114, 128);
-              pdf.text(`Scale  1 : ${page.scaleDenom}`, margin, H - 16);
-            }
           } catch (_) { document.body.removeChild(tmp); }
         }
       } else if (page.type === 'title') {
         const BRD2 = _hexRgb('#DDD6C8');
         let ty = contentY + 4;
-        const fields = [
-          ['PROJECT TITLE / LOCATION', page.location], ['CREW & RESPONSIBILITIES', page.crew],
-          ['EQUIPMENT (Make, Model, S/N)', page.equipment], ['DATUM & PROJECTION', page.datum],
-          ['TOTAL STATION SETTINGS', page.tsSettings], ['H.I. / PRISM HEIGHT', page.hiPrism],
-          ['SUMMARY OF WORK', page.summary], ['CODE LIST / ADDITIONAL NOTES', page.notes],
+
+        const instrLine = [
+          `PPM: ${page.ppm        || '—'}`,
+          `Temp: ${page.temperature || '—'} °C`,
+          `Press: ${page.pressure  || '—'} hPa`,
+          `Prism K: ${page.prismConst || '—'} mm`,
+        ].join('    ');
+
+        const titleFields = [
+          ['LOCATION',                     page.location],
+          ['CREW & RESPONSIBILITIES',       page.crew],
+          ['EQUIPMENT (Make, Model, S/N)',  page.equipment],
+          ['DATUM & PROJECTION',            page.datum],
+          ['INSTRUMENT SETTINGS',           instrLine],
+          ['SUMMARY OF WORK',               page.summary],
+          ['CODE LIST',                     page.codeList],
+          ['DIGITAL FILE NAMES',            page.fileNames],
         ];
-        for (const [lbl, val] of fields) {
-          if (!val?.trim() || ty > H - 16) continue;
-          const lines = pdf.splitTextToSize(val.trim(), W - margin*2);
+
+        for (const [lbl, val] of titleFields) {
+          if (!val?.trim() || ty > H - margin - 16) continue;
+          const lines = pdf.splitTextToSize(val.trim(), W - margin * 2 - 8);
           const bH = lines.length * 4.5 + 12;
           pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(107, 114, 128);
-          pdf.text(lbl, margin, ty + 4);
+          pdf.text(lbl, margin + 4, ty + 4);
           pdf.setFontSize(9); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(44, 44, 44);
-          pdf.text(lines, margin, ty + 9.5);
+          pdf.text(lines, margin + 4, ty + 9.5);
           pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.3);
-          pdf.line(margin, ty + bH, W - margin, ty + bH);
+          pdf.line(margin + 4, ty + bH, W - margin - 4, ty + bH);
           ty += bH + 3;
         }
       } else {
@@ -2227,7 +2238,7 @@
           }));
           pdf.autoTable({
             head, body, startY: contentY + 2,
-            margin: { left: margin, right: margin, bottom: 14 },
+            margin: { left: margin, right: margin, bottom: margin + 14 },
             tableWidth: W - margin*2,
             headStyles: { fillColor: GD, textColor: CR, fontSize: 8, fontStyle: 'bold', halign: 'center',
                           cellPadding: { top: 3, bottom: 3, left: 3, right: 3 } },
@@ -2248,11 +2259,17 @@
         }
       }
 
-      // Footer
-      pdf.setFillColor(...GD); pdf.rect(0, H - 10, W, 10, 'F');
-      pdf.setFontSize(6.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(...GL);
-      pdf.text(proj.name, margin, H - 4);
-      pdf.text('1', W - margin, H - 4, { align: 'right' });
+      // Notebook footer — inside cream paper area
+      const exportTsSP = new Date().toLocaleString('en-CA', {
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      });
+      pdf.setDrawColor(..._hexRgb('#DDD6C8')); pdf.setLineWidth(0.3);
+      pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
+      pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(..._hexRgb('#2D6A4F'));
+      pdf.text(`P.${page.pageNumber}`, margin + 4, H - margin - 4);
+      pdf.setFont('helvetica', 'normal'); pdf.setTextColor(150, 150, 150);
+      pdf.text(`Exported  ${exportTsSP}`, W - margin - 4, H - margin - 4, { align: 'right' });
 
       const slug = (page.title?.trim() || `P${page.pageNumber}`).replace(/[^a-zA-Z0-9_-]/g, '_');
       const fname = `${proj.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_${slug}_${new Date().toISOString().split('T')[0]}.pdf`;
