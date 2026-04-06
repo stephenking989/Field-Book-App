@@ -4585,22 +4585,9 @@
     const inClass = 'w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300';
     const lblClass = 'text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5';
     const secClass = 'py-2.5 border-b border-fb-border';
-    // Small label + input pair used in the instrument-settings grid
-    function InstrRow({ label, fieldKey, placeholder, unit }) {
-      return (
-        <div className="flex items-baseline gap-1.5 min-w-0">
-          <span className="text-[9px] font-bold text-fb-mid uppercase tracking-widest whitespace-nowrap flex-shrink-0">{label}</span>
-          <input
-            type="text"
-            value={form[fieldKey]}
-            onChange={e => handleChange(fieldKey, e.target.value)}
-            placeholder={placeholder}
-            className="flex-1 min-w-0 font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300"
-          />
-          {unit && <span className="text-[10px] text-fb-muted flex-shrink-0">{unit}</span>}
-        </div>
-      );
-    }
+    const instrInputClass = 'flex-1 min-w-0 font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300';
+    const instrLblClass   = 'text-[9px] font-bold text-fb-mid uppercase tracking-widest whitespace-nowrap flex-shrink-0';
+    const instrUnitClass  = 'text-[10px] text-fb-muted flex-shrink-0';
 
     return (
       <div style={{ background: '#FDFAF4' }}>
@@ -4661,10 +4648,29 @@
           <div className={secClass}>
             <p className={lblClass}>Instrument Settings</p>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-0.5">
-              <InstrRow label="PPM"         fieldKey="ppm"         placeholder="—" />
-              <InstrRow label="Temp"        fieldKey="temperature" placeholder="—" unit="°C" />
-              <InstrRow label="Pressure"    fieldKey="pressure"    placeholder="—" unit="hPa" />
-              <InstrRow label="Prism K"     fieldKey="prismConst"  placeholder="—" unit="mm" />
+              <div className="flex items-baseline gap-1.5 min-w-0">
+                <span className={instrLblClass}>PPM</span>
+                <input type="text" value={form.ppm} onChange={e => handleChange('ppm', e.target.value)}
+                  placeholder="—" className={instrInputClass} />
+              </div>
+              <div className="flex items-baseline gap-1.5 min-w-0">
+                <span className={instrLblClass}>Temp</span>
+                <input type="text" value={form.temperature} onChange={e => handleChange('temperature', e.target.value)}
+                  placeholder="—" className={instrInputClass} />
+                <span className={instrUnitClass}>°C</span>
+              </div>
+              <div className="flex items-baseline gap-1.5 min-w-0">
+                <span className={instrLblClass}>Pressure</span>
+                <input type="text" value={form.pressure} onChange={e => handleChange('pressure', e.target.value)}
+                  placeholder="—" className={instrInputClass} />
+                <span className={instrUnitClass}>hPa</span>
+              </div>
+              <div className="flex items-baseline gap-1.5 min-w-0">
+                <span className={instrLblClass}>Prism K</span>
+                <input type="text" value={form.prismConst} onChange={e => handleChange('prismConst', e.target.value)}
+                  placeholder="—" className={instrInputClass} />
+                <span className={instrUnitClass}>mm</span>
+              </div>
             </div>
           </div>
           {/* Summary */}
