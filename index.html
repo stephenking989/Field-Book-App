@@ -3488,7 +3488,10 @@
     const [customTemplates, setCustomTemplates] = useState(() => DB.getCustomTemplates());
     const [openTbMenu, setOpenTbMenu]   = useState(null); // 'insert' | 'formulas' | 'view' | null
     const [menuPos, setMenuPos]         = useState({ top: 0, left: 0 }); // fixed-position for open dropdown
-    const [dmsKeyboard, setDmsKeyboard] = useState(true); // DMS custom numpad enabled
+    // DMS keyboard — global setting persisted in localStorage, OFF by default
+    const [dmsKeyboard, setDmsKeyboard] = useState(() => {
+      try { return localStorage.getItem('fb_dms_keyboard') === 'true'; } catch { return false; }
+    });
     const [hf, setHf]                   = useState(null);
     const [calcResults, setCalcResults] = useState({});    // { 'r_xxx_cId': displayValue }
     const [selectionAnchor, setSelectionAnchor] = useState(null); // { rowIdx, colIdx }
@@ -3505,6 +3508,7 @@
     const colModalRef     = useRef(null);
     const templateModalRef = useRef(null);
     const tbMenuRef       = useRef(null); // ref on the open dropdown panel
+    const copyAnchorRef   = useRef(null); // { rowIdx, colIdx } of top-left cell at last copy
     const isDraggingSelRef = useRef(false); // true while mouse-drag cell selection is active
     const fbFocusedRef     = useRef(false); // true while formula bar input has focus
     const fillDragRef      = useRef({ active: false, startRow: -1, startCol: -1 });
@@ -3638,6 +3642,31 @@
     }
 
     function cellRef(ri, ci) { return colLetter(ci) + (ri + 1); }
+
+    // Inverse of colLetter — "A" → 0, "B" → 1, "AA" → 26, etc.
+    function colLetterToIdx(s) {
+      let n = 0;
+      for (let i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64);
+      return n - 1; // 0-based
+    }
+
+    // Adjust cell references in a formula by (dr rows, dc cols).
+    // Absolute refs ($A or $1) are not moved.  Out-of-bounds refs are clamped to row 1 / col A.
+    function adjustFormula(formula, dr, dc) {
+      if (!formula || !formula.startsWith('=') || (dr === 0 && dc === 0)) return formula;
+      return formula.replace(/(\$?)([A-Z]+)(\$?)(\d+)/g, (_, colAbs, colStr, rowAbs, rowStr) => {
+        let newCol = colStr;
+        let newRow = parseInt(rowStr, 10);
+        if (!colAbs) {
+          const newCI = Math.max(0, colLetterToIdx(colStr) + dc);
+          newCol = colLetter(newCI);
+        }
+        if (!rowAbs) {
+          newRow = Math.max(1, newRow + dr);
+        }
+        return `${colAbs}${newCol}${rowAbs}${newRow}`;
+      });
+    }
 
     // ── Auto-increment: "BM-1" → "BM-2", "TP3" → "TP4", "100" → "101" ──
     function autoIncrement(str) {
@@ -3832,39 +3861,11 @@
       if (!activeCell) return;
       const { rowIdx: ri, colIdx: ci } = activeCell;
 
-      // ── Ctrl+C / Cmd+C ── Copy selection as TSV (raw values so formulas paste intact)
-      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
-        e.preventDefault();
-        const b = getSelectionBounds();
-        if (!b) return;
-        const lines = [];
-        for (let r = b.minR; r <= b.maxR; r++) {
-          const row = rows[r];
-          if (!row) continue;
-          const cells = [];
-          for (let c = b.minC; c <= b.maxC; c++) {
-            const col = columns[c];
-            if (!col) { cells.push(''); continue; }
-            const raw = (row.cells || {})[col.id] || '';
-            if ((col.colType || 'num') === 'dms' && raw.trim()) {
-              const key = row.id + '_' + col.id;
-              if (raw.startsWith('=')) {
-                const res = calcResults[key] || '';
-                const dd = parseDMSInput(res);
-                cells.push(dd !== null ? formatDMSColon(dd) : res);
-              } else {
-                const dd = parseDMSInput(raw);
-                cells.push(dd !== null ? formatDMSColon(dd) : raw);
-              }
-            } else {
-              cells.push(raw);
-            }
-          }
-          lines.push(cells.join('\t'));
-        }
-        navigator.clipboard.writeText(lines.join('\n')).catch(() => {});
-        return;
-      }
+      // ── Ctrl+C / Cmd+C ── Copy selection
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') { e.preventDefault(); copyCells(); return; }
+
+      // ── Ctrl+X / Cmd+X ── Cut selection
+      if ((e.ctrlKey || e.metaKey) && e.key === 'x') { e.preventDefault(); cutCells(); return; }
 
       // ── Ctrl+V / Cmd+V ── Let the browser fire the native paste event, handled by handleGridPaste
       // (Do NOT call e.preventDefault() here — that would block the paste event from firing)
@@ -3978,17 +3979,110 @@
           updatedRows.push({ id: 'r_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2), cells });
         }
       }
+      const anchor = copyAnchorRef.current;
+      const dr = anchor ? startR - anchor.rowIdx : 0;
+      const dc = anchor ? startC - anchor.colIdx : 0;
       updatedRows = updatedRows.map((row, r) => {
         const li = r - startR;
         if (li < 0 || li >= lines.length) return row;
         const newCells = { ...row.cells };
         lines[li].forEach((val, ci2) => {
           const col = columns[startC + ci2];
-          if (col) newCells[col.id] = val;
+          if (!col) return;
+          // Adjust relative formula references if pasting from an in-app copy
+          const adjusted = (dr !== 0 || dc !== 0) && val.startsWith('=')
+            ? adjustFormula(val, dr, dc) : val;
+          newCells[col.id] = adjusted;
         });
         return { ...row, cells: newCells };
       });
       persistRows(updatedRows);
+    }
+
+    // ── Copy / Cut / Paste — also called from toolbar buttons ────────────────
+    function copyCells() {
+      const b = getSelectionBounds();
+      if (!b) return;
+      // Store anchor so paste can adjust relative formula references
+      copyAnchorRef.current = { rowIdx: b.minR, colIdx: b.minC };
+      const lines = [];
+      for (let r = b.minR; r <= b.maxR; r++) {
+        const row = rows[r];
+        if (!row) continue;
+        const cells = [];
+        for (let c = b.minC; c <= b.maxC; c++) {
+          const col = columns[c];
+          if (!col) { cells.push(''); continue; }
+          const raw = (row.cells || {})[col.id] || '';
+          if (raw.startsWith('=')) {
+            // Always copy raw formula — relative adjustment happens on paste
+            cells.push(raw);
+          } else if (getCellType(row, col) === 'dms' && raw.trim()) {
+            // Non-formula DMS: copy as displayed (e.g. 45°30'15") not Excel colon format
+            cells.push(displayValue(row, col).text || raw);
+          } else {
+            cells.push(raw);
+          }
+        }
+        lines.push(cells.join('\t'));
+      }
+      navigator.clipboard.writeText(lines.join('\n')).catch(() => {});
+      toast.success('Copied');
+    }
+
+    function cutCells() {
+      copyCells();
+      const b = getSelectionBounds();
+      if (!b) return;
+      const updated = rows.map((row, r) => {
+        if (r < b.minR || r > b.maxR) return row;
+        const newCells = { ...row.cells };
+        for (let c = b.minC; c <= b.maxC; c++) {
+          const col = columns[c];
+          if (col) newCells[col.id] = '';
+        }
+        return { ...row, cells: newCells };
+      });
+      persistRows(updated);
+    }
+
+    async function pasteCells() {
+      if (!activeCell) { toast.error('Select a cell first'); return; }
+      try {
+        const text = await navigator.clipboard.readText();
+        if (!text) return;
+        const { rowIdx: ri, colIdx: ci } = activeCell;
+        const lines = text.trimEnd().split('\n').map(l => l.split('\t'));
+        let updatedRows = [...rows];
+        const needed = ri + lines.length - updatedRows.length;
+        if (needed > 0) {
+          for (let i = 0; i < needed; i++) {
+            const cells = {};
+            columns.forEach(c => { cells[c.id] = ''; });
+            updatedRows.push({ id: 'r_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2), cells });
+          }
+        }
+        const anchor = copyAnchorRef.current;
+        const dr = anchor ? ri - anchor.rowIdx : 0;
+        const dc = anchor ? ci - anchor.colIdx : 0;
+        updatedRows = updatedRows.map((row, r) => {
+          const li = r - ri;
+          if (li < 0 || li >= lines.length) return row;
+          const newCells = { ...row.cells };
+          lines[li].forEach((val, ci2) => {
+            const col = columns[ci + ci2];
+            if (!col) return;
+            // Adjust relative formula references if pasting from an in-app copy
+            const adjusted = (dr !== 0 || dc !== 0) && val.startsWith('=')
+              ? adjustFormula(val, dr, dc) : val;
+            newCells[col.id] = adjusted;
+          });
+          return { ...row, cells: newCells };
+        });
+        persistRows(updatedRows);
+      } catch(err) {
+        toast.error('Paste failed — allow clipboard access in browser settings');
+      }
     }
 
     function handleFormulaBarCommit(e) {
@@ -4248,15 +4342,15 @@
         const raw = (row.cells || {})[col.id] || '';
         if (!raw.trim()) return '';
         const key = row.id + '_' + col.id;
-        if ((col.colType || 'num') === 'dms') {
-          // DMS columns: export as decimal degrees
+        if (getCellType(row, col) === 'dms') {
+          // DMS cells: export as DD:MM:SS (Excel-compatible colon format)
           if (raw.startsWith('=')) {
             const res = calcResults[key] || '';
             const dd = parseDMSInput(res);
-            return dd !== null ? String(dd) : res;
+            return dd !== null ? formatDMSColon(dd) : res;
           }
           const dd = parseDMSInput(raw);
-          return dd !== null ? String(dd) : raw;
+          return dd !== null ? formatDMSColon(dd) : raw;
         }
         if (raw.startsWith('=')) return calcResults[key] || '';
         return raw;
@@ -4425,6 +4519,11 @@
           {/* ── Dropdown panels — fixed-position, avoids toolbar overflow clipping ── */}
           {openTbMenu === 'insert' && (
             <div ref={tbMenuRef} className="dp-drop-panel" style={{ top: menuPos.top, left: menuPos.left }}>
+              <div className="dp-drop-section">Clipboard</div>
+              <button onClick={() => { copyCells(); setOpenTbMenu(null); }}>Copy</button>
+              <button onClick={() => { cutCells(); setOpenTbMenu(null); }}>Cut</button>
+              <button onClick={() => { pasteCells(); setOpenTbMenu(null); }}>Paste</button>
+              <div className="dp-drop-sep" />
               <div className="dp-drop-section">Rows &amp; Columns</div>
               <button onClick={() => { addRow(); setOpenTbMenu(null); }}>＋ Row</button>
               <button onClick={() => { addRows(5); setOpenTbMenu(null); }}>＋ 5 Rows</button>
@@ -4470,7 +4569,11 @@
           {openTbMenu === 'view' && (
             <div ref={tbMenuRef} className="dp-drop-panel" style={{ top: menuPos.top, left: menuPos.left, minWidth: 200 }}>
               <div className="dp-drop-section">Input</div>
-              <button className="dp-drop-toggle" onClick={() => setDmsKeyboard(v => !v)}>
+              <button className="dp-drop-toggle" onClick={() => setDmsKeyboard(v => {
+                  const next = !v;
+                  try { localStorage.setItem('fb_dms_keyboard', String(next)); } catch {}
+                  return next;
+                })}>
                 <span>DMS Keyboard</span>
                 <span className="dp-drop-toggle-pill">
                   <span className={dmsKeyboard ? 'on' : 'off'}>ON</span>
