@@ -271,7 +271,7 @@
     .dp-toolbar .dp-tb-sep { width: 1px; height: 18px; background: #DDD6C8; margin: 0 2px; flex-shrink: 0; }
     /* Dropdown panel */
     .dp-drop-panel {
-      position: absolute; top: calc(100% + 4px); left: 0; z-index: 400;
+      position: fixed; z-index: 500;
       background: white; border-radius: 10px; min-width: 170px;
       box-shadow: 0 4px 24px rgba(0,0,0,0.16); padding: 5px;
       border: 1px solid #E5E7EB;
@@ -3487,6 +3487,7 @@
     const [templateModal, setTemplateModal] = useState(false);
     const [customTemplates, setCustomTemplates] = useState(() => DB.getCustomTemplates());
     const [openTbMenu, setOpenTbMenu]   = useState(null); // 'insert' | 'formulas' | 'view' | null
+    const [menuPos, setMenuPos]         = useState({ top: 0, left: 0 }); // fixed-position for open dropdown
     const [dmsKeyboard, setDmsKeyboard] = useState(true); // DMS custom numpad enabled
     const [hf, setHf]                   = useState(null);
     const [calcResults, setCalcResults] = useState({});    // { 'r_xxx_cId': displayValue }
@@ -4382,93 +4383,102 @@
         <div className="dp-toolbar">
 
           {/* Insert ▾ */}
-          <div style={{ position: 'relative', flexShrink: 0 }}>
-            <button
-              className={`dp-drop-btn${openTbMenu === 'insert' ? ' active' : ''}`}
-              onPointerDown={e => { e.preventDefault(); setOpenTbMenu(m => m === 'insert' ? null : 'insert'); }}>
-              Insert ▾
-            </button>
-            {openTbMenu === 'insert' && (
-              <div ref={tbMenuRef} className="dp-drop-panel">
-                <div className="dp-drop-section">Rows &amp; Columns</div>
-                <button onClick={() => { addRow(); setOpenTbMenu(null); }}>＋ Row</button>
-                <button onClick={() => { addRows(5); setOpenTbMenu(null); }}>＋ 5 Rows</button>
-                <button onClick={() => { addColumn(); setOpenTbMenu(null); }}>＋ Column</button>
-                <div className="dp-drop-sep" />
-                <div className="dp-drop-section">Templates</div>
-                <button onClick={() => { setTemplateModal(true); setOpenTbMenu(null); }}>
-                  Apply Template…
-                </button>
-              </div>
-            )}
-          </div>
+          <button
+            className={`dp-drop-btn${openTbMenu === 'insert' ? ' active' : ''}`}
+            onPointerDown={e => {
+              e.preventDefault();
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenuPos({ top: r.bottom + 4, left: r.left });
+              setOpenTbMenu(m => m === 'insert' ? null : 'insert');
+            }}>
+            Insert ▾
+          </button>
 
           <div className="dp-tb-sep" />
 
           {/* Formulas ▾ */}
-          <div style={{ position: 'relative', flexShrink: 0 }}>
-            <button
-              className={`dp-drop-btn${openTbMenu === 'formulas' ? ' active' : ''}`}
-              onPointerDown={e => { e.preventDefault(); setOpenTbMenu(m => m === 'formulas' ? null : 'formulas'); }}>
-              Formulas ▾
-            </button>
-            {openTbMenu === 'formulas' && (
-              <div ref={tbMenuRef} className="dp-drop-panel">
-                <div className="dp-drop-section">Insert Formula</div>
-                <button onClick={() => {
-                  setOpenTbMenu(null);
-                  if (!activeCell) return;
-                  const { rowIdx: ri, colIdx: ci } = activeCell;
-                  if (!rows[ri] || !columns[ci]) return;
-                  const f = ri > 0 ? `=SUM(${cellRef(0,ci)}:${cellRef(ri-1,ci)})` : '=SUM(A1:A1)';
-                  setEditValue(f); startEdit(ri, ci);
-                }}>Σ  SUM</button>
-                <button onClick={() => {
-                  setOpenTbMenu(null);
-                  if (!activeCell) return;
-                  const { rowIdx: ri, colIdx: ci } = activeCell;
-                  if (!rows[ri] || !columns[ci]) return;
-                  const f = ri > 0 ? `=AVERAGE(${cellRef(0,ci)}:${cellRef(ri-1,ci)})` : '=AVERAGE(A1:A1)';
-                  setEditValue(f); startEdit(ri, ci);
-                }}>ø  AVG</button>
-                <button onClick={() => {
-                  setOpenTbMenu(null);
-                  if (!activeCell) return;
-                  const { rowIdx: ri, colIdx: ci } = activeCell;
-                  if (!rows[ri] || !columns[ci]) return;
-                  const a1 = ri >= 1 ? cellRef(ri-1,ci) : cellRef(0,ci);
-                  const a2 = ri >= 2 ? cellRef(ri-2,ci) : cellRef(0,ci);
-                  setEditValue(`=${a1}-${a2}`); startEdit(ri, ci);
-                }}>Δ  DIFF</button>
-                <div className="dp-drop-sep" />
-                <div className="dp-drop-section">Fill</div>
-                <button onClick={() => { fillDown(); setOpenTbMenu(null); }}>Fill ↓</button>
-              </div>
-            )}
-          </div>
+          <button
+            className={`dp-drop-btn${openTbMenu === 'formulas' ? ' active' : ''}`}
+            onPointerDown={e => {
+              e.preventDefault();
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenuPos({ top: r.bottom + 4, left: r.left });
+              setOpenTbMenu(m => m === 'formulas' ? null : 'formulas');
+            }}>
+            Formulas ▾
+          </button>
 
           <div className="dp-tb-sep" />
 
           {/* View ▾ */}
-          <div style={{ position: 'relative', flexShrink: 0 }}>
-            <button
-              className={`dp-drop-btn${openTbMenu === 'view' ? ' active' : ''}`}
-              onPointerDown={e => { e.preventDefault(); setOpenTbMenu(m => m === 'view' ? null : 'view'); }}>
-              View ▾
-            </button>
-            {openTbMenu === 'view' && (
-              <div ref={tbMenuRef} className="dp-drop-panel" style={{ minWidth: 200 }}>
-                <div className="dp-drop-section">Input</div>
-                <button className="dp-drop-toggle" onClick={() => setDmsKeyboard(v => !v)}>
-                  <span>DMS Keyboard</span>
-                  <span className="dp-drop-toggle-pill">
-                    <span className={dmsKeyboard ? 'on' : 'off'}>ON</span>
-                    <span className={dmsKeyboard ? 'off' : 'on'}>OFF</span>
-                  </span>
-                </button>
-              </div>
-            )}
-          </div>
+          <button
+            className={`dp-drop-btn${openTbMenu === 'view' ? ' active' : ''}`}
+            onPointerDown={e => {
+              e.preventDefault();
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenuPos({ top: r.bottom + 4, left: r.left });
+              setOpenTbMenu(m => m === 'view' ? null : 'view');
+            }}>
+            View ▾
+          </button>
+
+          {/* ── Dropdown panels — fixed-position, avoids toolbar overflow clipping ── */}
+          {openTbMenu === 'insert' && (
+            <div ref={tbMenuRef} className="dp-drop-panel" style={{ top: menuPos.top, left: menuPos.left }}>
+              <div className="dp-drop-section">Rows &amp; Columns</div>
+              <button onClick={() => { addRow(); setOpenTbMenu(null); }}>＋ Row</button>
+              <button onClick={() => { addRows(5); setOpenTbMenu(null); }}>＋ 5 Rows</button>
+              <button onClick={() => { addColumn(); setOpenTbMenu(null); }}>＋ Column</button>
+              <div className="dp-drop-sep" />
+              <div className="dp-drop-section">Templates</div>
+              <button onClick={() => { setTemplateModal(true); setOpenTbMenu(null); }}>Apply Template…</button>
+            </div>
+          )}
+          {openTbMenu === 'formulas' && (
+            <div ref={tbMenuRef} className="dp-drop-panel" style={{ top: menuPos.top, left: menuPos.left }}>
+              <div className="dp-drop-section">Insert Formula</div>
+              <button onClick={() => {
+                setOpenTbMenu(null);
+                if (!activeCell) return;
+                const { rowIdx: ri, colIdx: ci } = activeCell;
+                if (!rows[ri] || !columns[ci]) return;
+                const f = ri > 0 ? `=SUM(${cellRef(0,ci)}:${cellRef(ri-1,ci)})` : '=SUM(A1:A1)';
+                setEditValue(f); startEdit(ri, ci);
+              }}>Σ  SUM</button>
+              <button onClick={() => {
+                setOpenTbMenu(null);
+                if (!activeCell) return;
+                const { rowIdx: ri, colIdx: ci } = activeCell;
+                if (!rows[ri] || !columns[ci]) return;
+                const f = ri > 0 ? `=AVERAGE(${cellRef(0,ci)}:${cellRef(ri-1,ci)})` : '=AVERAGE(A1:A1)';
+                setEditValue(f); startEdit(ri, ci);
+              }}>ø  AVG</button>
+              <button onClick={() => {
+                setOpenTbMenu(null);
+                if (!activeCell) return;
+                const { rowIdx: ri, colIdx: ci } = activeCell;
+                if (!rows[ri] || !columns[ci]) return;
+                const a1 = ri >= 1 ? cellRef(ri-1,ci) : cellRef(0,ci);
+                const a2 = ri >= 2 ? cellRef(ri-2,ci) : cellRef(0,ci);
+                setEditValue(`=${a1}-${a2}`); startEdit(ri, ci);
+              }}>Δ  DIFF</button>
+              <div className="dp-drop-sep" />
+              <div className="dp-drop-section">Fill</div>
+              <button onClick={() => { fillDown(); setOpenTbMenu(null); }}>Fill ↓</button>
+            </div>
+          )}
+          {openTbMenu === 'view' && (
+            <div ref={tbMenuRef} className="dp-drop-panel" style={{ top: menuPos.top, left: menuPos.left, minWidth: 200 }}>
+              <div className="dp-drop-section">Input</div>
+              <button className="dp-drop-toggle" onClick={() => setDmsKeyboard(v => !v)}>
+                <span>DMS Keyboard</span>
+                <span className="dp-drop-toggle-pill">
+                  <span className={dmsKeyboard ? 'on' : 'off'}>ON</span>
+                  <span className={dmsKeyboard ? 'off' : 'on'}>OFF</span>
+                </span>
+              </button>
+            </div>
+          )}
 
         </div>
 
