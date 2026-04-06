@@ -2326,6 +2326,25 @@
         });
         pageData = { type: 'data', columns: cols, rows };
       }
+      if (type === 'title') {
+        // Seed new title page from the most recent existing title page in this
+        // project — crew, equipment, datum, etc. are almost always the same
+        // day-to-day; the user just clears anything that changed rather than
+        // re-entering everything from scratch.
+        // Day-specific fields (title, summary, notes) are left blank.
+        const prevTitle = [...(project.pages || [])].reverse().find(p => p.type === 'title');
+        if (prevTitle) {
+          pageData = {
+            type:       'title',
+            location:   prevTitle.location   || '',
+            crew:       prevTitle.crew       || '',
+            equipment:  prevTitle.equipment  || '',
+            datum:      prevTitle.datum      || '',
+            tsSettings: prevTitle.tsSettings || '',
+            hiPrism:    prevTitle.hiPrism    || '',
+          };
+        }
+      }
       const page = DB.addPage(projectId, pageData);
       if (page) { reload(); setAddStep(null); navigate(`#/project/${projectId}/page/${page.id}`); }
     }
