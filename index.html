@@ -236,15 +236,19 @@
       background: #F0EBE0;
       border-bottom: 1.5px solid #DDD6C8;
       display: flex;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      flex-wrap: nowrap;
       align-items: center;
       padding: 4px 8px;
       gap: 4px;
-      flex-wrap: wrap;
       flex-shrink: 0;
     }
+    .dp-toolbar::-webkit-scrollbar { display: none; }
     .dp-toolbar button {
       font-size: 11px;
-      padding: 3px 8px;
+      padding: 3px 10px;
       border-radius: 5px;
       border: 1px solid #DDD6C8;
       background: white;
@@ -253,10 +257,58 @@
       cursor: pointer;
       white-space: nowrap;
       line-height: 1.4;
+      flex-shrink: 0;
     }
     .dp-toolbar button:active { background: #D8F3DC; border-color: #2D6A4F; }
+    .dp-toolbar .dp-drop-btn {
+      display: flex; align-items: center; gap: 4px;
+      background: white; border: 1px solid #DDD6C8; border-radius: 6px;
+      padding: 4px 10px; font-size: 11px; font-family: 'Courier New', monospace;
+      color: #2C2C2C; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+    }
+    .dp-toolbar .dp-drop-btn.active { background: #E8F5E9; border-color: #2D6A4F; color: #2D6A4F; }
+    .dp-toolbar .dp-drop-btn:active { background: #D8F3DC; border-color: #2D6A4F; }
     .dp-toolbar .dp-tb-sep { width: 1px; height: 18px; background: #DDD6C8; margin: 0 2px; flex-shrink: 0; }
-    .dp-toolbar .dp-tb-label { font-size: 10px; color: #9CA3AF; padding: 0 4px; }
+    /* Dropdown panel */
+    .dp-drop-panel {
+      position: absolute; top: calc(100% + 4px); left: 0; z-index: 400;
+      background: white; border-radius: 10px; min-width: 170px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.16); padding: 5px;
+      border: 1px solid #E5E7EB;
+    }
+    .dp-drop-panel button {
+      display: flex; align-items: center; gap: 8px; width: 100%;
+      padding: 8px 12px; border-radius: 7px; text-align: left;
+      font-size: 12.5px; font-family: 'Courier New', monospace;
+      background: none; border: none; color: #1a2e1a; cursor: pointer;
+      white-space: nowrap;
+    }
+    .dp-drop-panel button:active { background: #E8F5E9; }
+    .dp-drop-panel .dp-drop-sep {
+      height: 1px; background: #E5E7EB; margin: 4px 6px;
+    }
+    .dp-drop-panel .dp-drop-section {
+      font-size: 9px; color: #9CA3AF; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; padding: 6px 12px 2px;
+    }
+    .dp-drop-toggle {
+      display: flex; align-items: center; justify-content: space-between;
+      width: 100%; padding: 8px 12px; border-radius: 7px;
+      font-size: 12.5px; font-family: 'Courier New', monospace;
+      background: none; border: none; color: #1a2e1a; cursor: pointer;
+      gap: 12px;
+    }
+    .dp-drop-toggle:active { background: #E8F5E9; }
+    .dp-drop-toggle-pill {
+      display: inline-flex; align-items: center; gap: 0;
+      border-radius: 20px; overflow: hidden; border: 1.5px solid #DDD6C8;
+      flex-shrink: 0; font-size: 9.5px; font-weight: 700;
+    }
+    .dp-drop-toggle-pill span {
+      padding: 2px 8px; transition: background 0.15s, color 0.15s;
+    }
+    .dp-drop-toggle-pill span.on  { background: #2D6A4F; color: white; }
+    .dp-drop-toggle-pill span.off { background: white; color: #9CA3AF; }
     .dp-col-type-badge {
       display: inline-block;
       font-size: 8px;
@@ -3434,6 +3486,8 @@
     const [colModalForm, setColModalForm] = useState({});
     const [templateModal, setTemplateModal] = useState(false);
     const [customTemplates, setCustomTemplates] = useState(() => DB.getCustomTemplates());
+    const [openTbMenu, setOpenTbMenu]   = useState(null); // 'insert' | 'formulas' | 'view' | null
+    const [dmsKeyboard, setDmsKeyboard] = useState(true); // DMS custom numpad enabled
     const [hf, setHf]                   = useState(null);
     const [calcResults, setCalcResults] = useState({});    // { 'r_xxx_cId': displayValue }
     const [selectionAnchor, setSelectionAnchor] = useState(null); // { rowIdx, colIdx }
@@ -3449,6 +3503,7 @@
     const pdfContainerRef = useRef(null);
     const colModalRef     = useRef(null);
     const templateModalRef = useRef(null);
+    const tbMenuRef       = useRef(null); // ref on the open dropdown panel
     const isDraggingSelRef = useRef(false); // true while mouse-drag cell selection is active
     const fbFocusedRef     = useRef(false); // true while formula bar input has focus
     const fillDragRef      = useRef({ active: false, startRow: -1, startCol: -1 });
@@ -3465,6 +3520,18 @@
       document.addEventListener('pointerup', fn);
       return () => document.removeEventListener('pointerup', fn);
     }, []);
+
+    // Close toolbar dropdown on outside click
+    useEffect(() => {
+      if (!openTbMenu) return;
+      const fn = (e) => {
+        if (tbMenuRef.current && !tbMenuRef.current.contains(e.target)) {
+          setOpenTbMenu(null);
+        }
+      };
+      document.addEventListener('pointerdown', fn, true);
+      return () => document.removeEventListener('pointerdown', fn, true);
+    }, [openTbMenu]);
 
     // Initialise / refresh HyperFormula whenever rows or columns change
     useEffect(() => {
@@ -4267,7 +4334,7 @@
     );
 
     // ── DMS numpad visibility ─────────────────────────────────────────
-    const isDMSCell = editingCell !== null &&
+    const isDMSCell = dmsKeyboard && editingCell !== null &&
       getCellType(rows[editingCell.rowIdx], columns[editingCell.colIdx]) === 'dms';
 
     if (columns.length === 0) {
@@ -4311,58 +4378,98 @@
           </span>
         </button>
 
-        {/* ── Toolbar ── */}
+        {/* ── Toolbar ── single scrollable row of dropdown buttons ── */}
         <div className="dp-toolbar">
-          <span className="dp-tb-label">Insert:</span>
-          <button onClick={addRow} title="Add 1 row">+ Row</button>
-          <button onClick={() => addRows(5)} title="Add 5 rows">+5 Rows</button>
-          <button onClick={addColumn} title="Add column">+ Col</button>
+
+          {/* Insert ▾ */}
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <button
+              className={`dp-drop-btn${openTbMenu === 'insert' ? ' active' : ''}`}
+              onPointerDown={e => { e.preventDefault(); setOpenTbMenu(m => m === 'insert' ? null : 'insert'); }}>
+              Insert ▾
+            </button>
+            {openTbMenu === 'insert' && (
+              <div ref={tbMenuRef} className="dp-drop-panel">
+                <div className="dp-drop-section">Rows &amp; Columns</div>
+                <button onClick={() => { addRow(); setOpenTbMenu(null); }}>＋ Row</button>
+                <button onClick={() => { addRows(5); setOpenTbMenu(null); }}>＋ 5 Rows</button>
+                <button onClick={() => { addColumn(); setOpenTbMenu(null); }}>＋ Column</button>
+                <div className="dp-drop-sep" />
+                <div className="dp-drop-section">Templates</div>
+                <button onClick={() => { setTemplateModal(true); setOpenTbMenu(null); }}>
+                  Apply Template…
+                </button>
+              </div>
+            )}
+          </div>
+
           <div className="dp-tb-sep" />
-          <span className="dp-tb-label">Sheet:</span>
-          <button onClick={() => setTemplateModal(true)} title="Apply a surveyor template">Templates</button>
+
+          {/* Formulas ▾ */}
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <button
+              className={`dp-drop-btn${openTbMenu === 'formulas' ? ' active' : ''}`}
+              onPointerDown={e => { e.preventDefault(); setOpenTbMenu(m => m === 'formulas' ? null : 'formulas'); }}>
+              Formulas ▾
+            </button>
+            {openTbMenu === 'formulas' && (
+              <div ref={tbMenuRef} className="dp-drop-panel">
+                <div className="dp-drop-section">Insert Formula</div>
+                <button onClick={() => {
+                  setOpenTbMenu(null);
+                  if (!activeCell) return;
+                  const { rowIdx: ri, colIdx: ci } = activeCell;
+                  if (!rows[ri] || !columns[ci]) return;
+                  const f = ri > 0 ? `=SUM(${cellRef(0,ci)}:${cellRef(ri-1,ci)})` : '=SUM(A1:A1)';
+                  setEditValue(f); startEdit(ri, ci);
+                }}>Σ  SUM</button>
+                <button onClick={() => {
+                  setOpenTbMenu(null);
+                  if (!activeCell) return;
+                  const { rowIdx: ri, colIdx: ci } = activeCell;
+                  if (!rows[ri] || !columns[ci]) return;
+                  const f = ri > 0 ? `=AVERAGE(${cellRef(0,ci)}:${cellRef(ri-1,ci)})` : '=AVERAGE(A1:A1)';
+                  setEditValue(f); startEdit(ri, ci);
+                }}>ø  AVG</button>
+                <button onClick={() => {
+                  setOpenTbMenu(null);
+                  if (!activeCell) return;
+                  const { rowIdx: ri, colIdx: ci } = activeCell;
+                  if (!rows[ri] || !columns[ci]) return;
+                  const a1 = ri >= 1 ? cellRef(ri-1,ci) : cellRef(0,ci);
+                  const a2 = ri >= 2 ? cellRef(ri-2,ci) : cellRef(0,ci);
+                  setEditValue(`=${a1}-${a2}`); startEdit(ri, ci);
+                }}>Δ  DIFF</button>
+                <div className="dp-drop-sep" />
+                <div className="dp-drop-section">Fill</div>
+                <button onClick={() => { fillDown(); setOpenTbMenu(null); }}>Fill ↓</button>
+              </div>
+            )}
+          </div>
+
           <div className="dp-tb-sep" />
-          <span className="dp-tb-label">Formulas:</span>
-          <button onClick={() => {
-            if (!activeCell) return;
-            const { rowIdx: ri, colIdx: ci } = activeCell;
-            const row = rows[ri]; const col = columns[ci];
-            if (!row || !col) return;
-            // Build SUM range for this column, all rows above
-            const startRef = cellRef(0, ci);
-            const endRef   = cellRef(ri - 1, ci);
-            const formula  = ri > 0 ? `=SUM(${startRef}:${endRef})` : '=SUM(A1:A1)';
-            setEditValue(formula);
-            startEdit(ri, ci);
-          }} title="Insert SUM formula for this column">Σ SUM</button>
-          <button onClick={() => {
-            if (!activeCell) return;
-            const { rowIdx: ri, colIdx: ci } = activeCell;
-            const row = rows[ri]; const col = columns[ci];
-            if (!row || !col) return;
-            const startRef = cellRef(0, ci);
-            const endRef   = cellRef(ri - 1, ci);
-            const formula  = ri > 0 ? `=AVERAGE(${startRef}:${endRef})` : '=AVERAGE(A1:A1)';
-            setEditValue(formula);
-            startEdit(ri, ci);
-          }} title="Insert AVERAGE formula">ø AVG</button>
-          <button onClick={() => {
-            if (!activeCell) return;
-            const { rowIdx: ri, colIdx: ci } = activeCell;
-            const row = rows[ri]; const col = columns[ci];
-            if (!row || !col) return;
-            // Difference: current cell = cell above minus cell two above (useful for level checks)
-            const above1 = ri >= 1 ? cellRef(ri - 1, ci) : cellRef(0, ci);
-            const above2 = ri >= 2 ? cellRef(ri - 2, ci) : cellRef(0, ci);
-            const formula = `=${above1}-${above2}`;
-            setEditValue(formula);
-            startEdit(ri, ci);
-          }} title="Insert difference formula (row above minus 2 rows above)">Δ DIFF</button>
-          <div className="dp-tb-sep" />
-          <span className="dp-tb-label">Fill:</span>
-          <button onClick={fillDown}
-            title="Auto-increment active cell value down through all rows below (BM-1 → BM-2 → BM-3…)">
-            Fill ↓
-          </button>
+
+          {/* View ▾ */}
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <button
+              className={`dp-drop-btn${openTbMenu === 'view' ? ' active' : ''}`}
+              onPointerDown={e => { e.preventDefault(); setOpenTbMenu(m => m === 'view' ? null : 'view'); }}>
+              View ▾
+            </button>
+            {openTbMenu === 'view' && (
+              <div ref={tbMenuRef} className="dp-drop-panel" style={{ minWidth: 200 }}>
+                <div className="dp-drop-section">Input</div>
+                <button className="dp-drop-toggle" onClick={() => setDmsKeyboard(v => !v)}>
+                  <span>DMS Keyboard</span>
+                  <span className="dp-drop-toggle-pill">
+                    <span className={dmsKeyboard ? 'on' : 'off'}>ON</span>
+                    <span className={dmsKeyboard ? 'off' : 'on'}>OFF</span>
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+
         </div>
 
         {/* ── Formula bar ── */}
