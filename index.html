@@ -2686,7 +2686,7 @@
     const [project, setProject] = useState(null);
     const [page, setPage]       = useState(null);
     const [exporting, setExporting] = useState(false);
-    const toast = useContext(ToastContext);
+    const toast = useToast();
 
     function reload() {
       const proj = DB.getProject(projectId);
