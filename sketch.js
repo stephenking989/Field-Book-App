@@ -602,6 +602,69 @@ function niceGridInterval(scaleDenom, vbW, containerW, units) {
 // Major gridlines fall every 5th minor interval.
 
 // ─────────────────────────────────────────────────────────────────────────────
+// BEARING DMS HELPERS  —  used by ShapeValueCard bearing field
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Convert azimuth (0–360 decimal degrees, clockwise from North) to a quadrant
+// bearing string like "N57°16'26"E".
+function aziToQBearing(az) {
+  az = ((az % 360) + 360) % 360;
+  let q1, q2, angle;
+  if (az < 90)       { q1 = 'N'; q2 = 'E'; angle = az; }
+  else if (az < 180) { q1 = 'S'; q2 = 'E'; angle = 180 - az; }
+  else if (az < 270) { q1 = 'S'; q2 = 'W'; angle = az - 180; }
+  else               { q1 = 'N'; q2 = 'W'; angle = 360 - az; }
+  const d = Math.floor(angle);
+  const mRaw = (angle - d) * 60;
+  let m = Math.floor(mRaw);
+  let s = Math.round((mRaw - m) * 60);
+  if (s >= 60) { s -= 60; m += 1; }
+  if (m >= 60) { m -= 60; /* d would become 90, still valid */ }
+  return `${q1}${d}°${String(m).padStart(2,'0')}'${String(s).padStart(2,'0')}"${q2}`;
+}
+
+// Parse a bearing string in many formats → azimuth decimal degrees (0–360).
+// Accepts: N57°16'26"E, N 57 16 26 E, N57°16'E, N57E, 57°16'26", 57 16 26, 57.274
+// Returns NaN if the string cannot be parsed.
+function parseQBearing(str) {
+  str = str.trim().toUpperCase();
+
+  // Helper: parse a D, DM, DMS, or DD middle string → decimal degrees.
+  function parseMid(s) {
+    s = s.trim();
+    // DMS: 57°16'26" or 57 16 26 or 57-16-26
+    const m3 = s.match(/^(\d+(?:\.\d+)?)[°\s\-]+(\d+(?:\.\d+)?)['\s\-]+(\d+(?:\.\d+)?)["\s]*$/);
+    if (m3) return +m3[1] + +m3[2] / 60 + +m3[3] / 3600;
+    // DM: 57°16' or 57 16
+    const m2 = s.match(/^(\d+(?:\.\d+)?)[°\s\-]+(\d+(?:\.\d+)?)['\s]*$/);
+    if (m2) return +m2[1] + +m2[2] / 60;
+    // D or DD
+    const dd = parseFloat(s);
+    return isNaN(dd) ? NaN : dd;
+  }
+
+  // Quadrant format: leading N/S and trailing E/W
+  const q1m = str.match(/^([NS])\s*/);
+  const q2m = str.match(/\s*([EW])$/);
+  if (q1m && q2m) {
+    const q1 = q1m[1], q2 = q2m[1];
+    const mid = str.slice(q1m[0].length, str.length - q2m[0].length);
+    const angle = parseMid(mid);
+    if (isNaN(angle)) return NaN;
+    let az;
+    if      (q1 === 'N' && q2 === 'E') az = angle;
+    else if (q1 === 'S' && q2 === 'E') az = 180 - angle;
+    else if (q1 === 'S' && q2 === 'W') az = 180 + angle;
+    else                               az = 360 - angle; // N...W
+    return ((az % 360) + 360) % 360;
+  }
+
+  // No quadrant — treat as plain azimuth DMS or decimal degrees
+  const az = parseMid(str);
+  return isNaN(az) ? NaN : ((az % 360) + 360) % 360;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SHAPE VALUE CARD  —  proper React component with controlled inputs
 // Extracted from the IIFE so it can hold useState/useEffect.
 // Props:
@@ -632,7 +695,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units }) {
       : null;
     return {
       len:    pxToReal(lenPx, scaleDenom, units).toFixed(3),
-      brg:    brg.toFixed(3),
+      brg:    aziToQBearing(brg),
       r:      sh.type === 'circle' ? pxToReal(sh.r, scaleDenom, units).toFixed(3) : '0',
       w:      sh.type === 'rect'   ? pxToReal(Math.abs(sh.w), scaleDenom, units).toFixed(3) : '0',
       h:      sh.type === 'rect'   ? pxToReal(Math.abs(sh.h), scaleDenom, units).toFixed(3) : '0',
@@ -671,7 +734,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units }) {
 
   if (s.type === 'line') {
     const lenPxFallback = () => pxToReal(Math.hypot(s.x2-s.x1, s.y2-s.y1), scaleDenom, units).toFixed(3);
-    const brgFallback   = () => (((Math.atan2(s.x2-s.x1,-(s.y2-s.y1))*180/Math.PI)+360)%360).toFixed(3);
+    const brgFallback   = () => aziToQBearing((((Math.atan2(s.x2-s.x1,-(s.y2-s.y1))*180/Math.PI)+360)%360));
     title = 'Line';
     rows = [
       <div key="len" style={rStyle}>
@@ -693,14 +756,14 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units }) {
         <input
           value={vals.brg}
           onChange={e => setVals(v => ({ ...v, brg: e.target.value }))}
-          onBlur={e  => tryCommit('brg', e.target.value, parseFloat,
+          onBlur={e  => tryCommit('brg', e.target.value, parseQBearing,
                          n => !isNaN(n),
                          (sh, n) => applyLineBearing(sh, n),
                          brgFallback)}
           onKeyDown={e => { if (e.key === 'Enter') e.target.blur();
                             if (e.key === 'Escape') { setVals(v => ({...v, brg: brgFallback()})); e.target.blur(); } }}
-          style={iStyle}
-        />{unit('°')}
+          style={{ ...iStyle, width: 110 }}
+        />
       </div>,
     ];
 
