@@ -543,9 +543,11 @@
         location: '',
         crew: '',
         equipment: '',
-        datum: '',
-        tsSettings: '',
-        hiPrism: '',
+        datum: 'NAD83(CSRS), UTM Zone 20N / CGVD2013',
+        ppm: '',
+        temperature: '',
+        pressure: '',
+        prismConst: '',
         summary: '',
         // sketch page
         shapes: [],
@@ -2335,13 +2337,15 @@
         const prevTitle = [...(project.pages || [])].reverse().find(p => p.type === 'title');
         if (prevTitle) {
           pageData = {
-            type:       'title',
-            location:   prevTitle.location   || '',
-            crew:       prevTitle.crew       || '',
-            equipment:  prevTitle.equipment  || '',
-            datum:      prevTitle.datum      || '',
-            tsSettings: prevTitle.tsSettings || '',
-            hiPrism:    prevTitle.hiPrism    || '',
+            type:        'title',
+            location:    prevTitle.location    || '',
+            crew:        prevTitle.crew        || '',
+            equipment:   prevTitle.equipment   || '',
+            datum:       prevTitle.datum       || 'NAD83(CSRS), UTM Zone 20N / CGVD2013',
+            ppm:         prevTitle.ppm         || '',
+            temperature: prevTitle.temperature || '',
+            pressure:    prevTitle.pressure    || '',
+            prismConst:  prevTitle.prismConst  || '',
           };
         }
       }
@@ -4519,30 +4523,42 @@
 
   function TitlePage({ page, projectId, onReload }) {
     const [form, setForm] = useState({
-      title:      page.title      || '',
-      location:   page.location   || '',
-      crew:       page.crew       || '',
-      equipment:  page.equipment  || '',
-      datum:      page.datum      || '',
-      tsSettings: page.tsSettings || '',
-      hiPrism:    page.hiPrism    || '',
-      summary:    page.summary    || '',
-      notes:      page.notes      || '',
+      title:       page.title       || '',
+      location:    page.location    || '',
+      crew:        page.crew        || '',
+      equipment:   page.equipment   || '',
+      datum:       page.datum       || 'NAD83(CSRS), UTM Zone 20N / CGVD2013',
+      ppm:         page.ppm         || '',
+      temperature: page.temperature || '',
+      pressure:    page.pressure    || '',
+      prismConst:  page.prismConst  || '',
+      summary:     page.summary     || '',
+      notes:       page.notes       || '',
     });
     const [dirty, setDirty] = useState(false);
     const timerRef = useRef(null);
 
+    // Auto-grow all textareas on page load / page change
+    useEffect(() => {
+      document.querySelectorAll('.tp-grow').forEach(el => {
+        el.style.height = 'auto';
+        el.style.height = el.scrollHeight + 'px';
+      });
+    }, [page.id]);
+
     useEffect(() => {
       setForm({
-        title:      page.title      || '',
-        location:   page.location   || '',
-        crew:       page.crew       || '',
-        equipment:  page.equipment  || '',
-        datum:      page.datum      || '',
-        tsSettings: page.tsSettings || '',
-        hiPrism:    page.hiPrism    || '',
-        summary:    page.summary    || '',
-        notes:      page.notes      || '',
+        title:       page.title       || '',
+        location:    page.location    || '',
+        crew:        page.crew        || '',
+        equipment:   page.equipment   || '',
+        datum:       page.datum       || 'NAD83(CSRS), UTM Zone 20N / CGVD2013',
+        ppm:         page.ppm         || '',
+        temperature: page.temperature || '',
+        pressure:    page.pressure    || '',
+        prismConst:  page.prismConst  || '',
+        summary:     page.summary     || '',
+        notes:       page.notes       || '',
       });
     }, [page.id]);
 
@@ -4558,11 +4574,39 @@
       }, 800);
     }
 
+    // Grows a textarea to fit its content — called via onInput and ref
+    function grow(el) {
+      if (!el) return;
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }
+
+    const taClass = 'tp-grow w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed overflow-hidden';
+    const inClass = 'w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300';
+    const lblClass = 'text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5';
+    const secClass = 'py-2.5 border-b border-fb-border';
+    // Small label + input pair used in the instrument-settings grid
+    function InstrRow({ label, fieldKey, placeholder, unit }) {
+      return (
+        <div className="flex items-baseline gap-1.5 min-w-0">
+          <span className="text-[9px] font-bold text-fb-mid uppercase tracking-widest whitespace-nowrap flex-shrink-0">{label}</span>
+          <input
+            type="text"
+            value={form[fieldKey]}
+            onChange={e => handleChange(fieldKey, e.target.value)}
+            placeholder={placeholder}
+            className="flex-1 min-w-0 font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300"
+          />
+          {unit && <span className="text-[10px] text-fb-muted flex-shrink-0">{unit}</span>}
+        </div>
+      );
+    }
+
     return (
       <div style={{ background: '#FDFAF4' }}>
         <div className="page-header-strip px-4 py-2.5 flex items-center justify-between gap-3">
           <div className="flex-1 min-w-0">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Title Page · P.{page.pageNumber}</p>
+            <p className={lblClass}>Title Page · P.{page.pageNumber}</p>
             <input
               type="text"
               value={form.title}
@@ -4580,60 +4624,66 @@
         </div>
         <div className="px-5">
           {/* Project Title / Location */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Project Title / Location</p>
-            <textarea rows={2} value={form.location} onChange={e => handleChange('location', e.target.value)}
+          <div className={secClass}>
+            <p className={lblClass}>Project Title / Location</p>
+            <textarea
+              ref={grow} onInput={e => grow(e.target)}
+              value={form.location} onChange={e => handleChange('location', e.target.value)}
               placeholder="Property address, legal description, project name..."
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
+              className={taClass} rows={1} />
           </div>
           {/* Crew */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Crew &amp; Responsibilities</p>
-            <textarea rows={2} value={form.crew} onChange={e => handleChange('crew', e.target.value)}
+          <div className={secClass}>
+            <p className={lblClass}>Crew &amp; Responsibilities</p>
+            <textarea
+              ref={grow} onInput={e => grow(e.target)}
+              value={form.crew} onChange={e => handleChange('crew', e.target.value)}
               placeholder="Party chief: —   Rod person: —   Note keeper: —"
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
+              className={taClass} rows={1} />
           </div>
           {/* Equipment */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Equipment (Make, Model, S/N)</p>
-            <textarea rows={2} value={form.equipment} onChange={e => handleChange('equipment', e.target.value)}
-              placeholder="Total station: Trimble S7, S/N 12345   Prism: —"
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
+          <div className={secClass}>
+            <p className={lblClass}>Equipment (Make, Model, S/N)</p>
+            <textarea
+              ref={grow} onInput={e => grow(e.target)}
+              value={form.equipment} onChange={e => handleChange('equipment', e.target.value)}
+              placeholder="Total station: —   Level: —   Prism: —"
+              className={taClass} rows={1} />
           </div>
           {/* Datum */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Datum &amp; Projection</p>
+          <div className={secClass}>
+            <p className={lblClass}>Datum &amp; Projection</p>
             <input type="text" value={form.datum} onChange={e => handleChange('datum', e.target.value)}
               placeholder="NAD83(CSRS), UTM Zone 20N / CGVD2013"
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300" />
+              className={inClass} />
           </div>
-          {/* TS Settings */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Total Station Settings (PPM, Temp, Press, Prism Const.)</p>
-            <input type="text" value={form.tsSettings} onChange={e => handleChange('tsSettings', e.target.value)}
-              placeholder="PPM: —   Temp: —°C   Pressure: — hPa   Prism const.: —"
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300" />
-          </div>
-          {/* HI / Prism */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">H.I. / Prism Height</p>
-            <input type="text" value={form.hiPrism} onChange={e => handleChange('hiPrism', e.target.value)}
-              placeholder="H.I.: — m     Prism HT: — m"
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300" />
+          {/* Instrument Settings — 2-column grid */}
+          <div className={secClass}>
+            <p className={lblClass}>Instrument Settings</p>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-0.5">
+              <InstrRow label="PPM"         fieldKey="ppm"         placeholder="—" />
+              <InstrRow label="Temp"        fieldKey="temperature" placeholder="—" unit="°C" />
+              <InstrRow label="Pressure"    fieldKey="pressure"    placeholder="—" unit="hPa" />
+              <InstrRow label="Prism K"     fieldKey="prismConst"  placeholder="—" unit="mm" />
+            </div>
           </div>
           {/* Summary */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Summary of Work</p>
-            <textarea rows={3} value={form.summary} onChange={e => handleChange('summary', e.target.value)}
+          <div className={secClass}>
+            <p className={lblClass}>Summary of Work</p>
+            <textarea
+              ref={grow} onInput={e => grow(e.target)}
+              value={form.summary} onChange={e => handleChange('summary', e.target.value)}
               placeholder="Overview of survey objectives for this session..."
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
+              className={taClass} rows={1} />
           </div>
           {/* Notes */}
-          <div className="py-2.5 border-b border-fb-border">
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Code List / File Names / Additional Notes</p>
-            <textarea rows={3} value={form.notes} onChange={e => handleChange('notes', e.target.value)}
+          <div className={secClass}>
+            <p className={lblClass}>Code List / File Names / Additional Notes</p>
+            <textarea
+              ref={grow} onInput={e => grow(e.target)}
+              value={form.notes} onChange={e => handleChange('notes', e.target.value)}
               placeholder="Feature codes, digital file names, check shots, other notes..."
-              className="w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed" />
+              className={taClass} rows={1} />
           </div>
         </div>
       </div>
