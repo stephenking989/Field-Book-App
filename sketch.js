@@ -671,7 +671,7 @@ function parseQBearing(str) {
 //   shape    — the currently selected shape object (never null when rendered)
 //   onUpdate — fn(transformFn) called with a shape→shape transform to apply
 // ─────────────────────────────────────────────────────────────────────────────
-function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units }) {
+function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: northAz }) {
   // ── Shared styles ───────────────────────────────────────────────────────
   const iStyle = {
     width: 82, background: 'rgba(255,255,255,0.08)',
@@ -693,6 +693,8 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units }) {
       ? (() => { const {px,py} = getCurvePI(sh);
                  return computeArcFromPI(sh.x1,sh.y1,sh.x2,sh.y2,px,py); })()
       : null;
+    const _dbPx = (sh.type==='dim-bearing'&&sh.p1&&sh.p2) ? Math.hypot(sh.p2.x-sh.p1.x,sh.p2.y-sh.p1.y) : 0;
+    const _dbAz = (sh.type==='dim-bearing'&&sh.p1&&sh.p2) ? ((Math.atan2(sh.p2.x-sh.p1.x,-(sh.p2.y-sh.p1.y))*180/Math.PI)+360)%360 : 0;
     return {
       len:    pxToReal(lenPx, scaleDenom, units).toFixed(3),
       brg:    aziToQBearing(brg),
@@ -701,6 +703,8 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units }) {
       h:      sh.type === 'rect'   ? pxToReal(Math.abs(sh.h), scaleDenom, units).toFixed(3) : '0',
       crvR:   cp ? pxToReal(cp.R, scaleDenom, units).toFixed(3) : '0',
       nts:    sh.ntsLabel || '',
+      dimBrg: sh.type==='dim-bearing' ? aziToQBearing((_dbAz-(northAz||0)+360)%360) : '',
+      dimLen: sh.type==='dim-bearing' ? pxToReal(_dbPx, scaleDenom, units).toFixed(3) : '',
     };
   }
 
@@ -709,7 +713,8 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units }) {
   // Re-initialise when shape changes, or when scale/units change so displayed
   // values refresh immediately without needing to re-select the shape.
   useEffect(() => { setVals(initVals(s)); },
-    [s.id, s.x1, s.y1, s.x2, s.y2, s.r, s.w, s.h, s.px, s.py, s.ntsLabel, scaleDenom, units]);
+    [s.id, s.x1, s.y1, s.x2, s.y2, s.r, s.w, s.h, s.px, s.py, s.ntsLabel, scaleDenom, units,
+     s.p1?.x, s.p1?.y, s.p2?.x, s.p2?.y]);
 
   // ── Commit helper ───────────────────────────────────────────────────────
   function tryCommit(key, raw, parse, guard, transform, fallbackFn) {
@@ -859,6 +864,58 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units }) {
       )),
     ];
 
+  } else if (s.type === 'dim-bearing' && s.p1 && s.p2) {
+    title = 'Bearing';
+    const _dbLenFb = () => pxToReal(Math.hypot(s.p2.x-s.p1.x,s.p2.y-s.p1.y),scaleDenom,units).toFixed(3);
+    const _dbBrgFb = () => { const az=((Math.atan2(s.p2.x-s.p1.x,-(s.p2.y-s.p1.y))*180/Math.PI)+360)%360; return aziToQBearing((az-(northAz||0)+360)%360); };
+    rows = [
+      <div key="dimBrg" style={rStyle}>
+        <span style={lStyle}>Bearing</span>
+        <input value={vals.dimBrg}
+          onChange={e => setVals(v=>({...v,dimBrg:e.target.value}))}
+          onBlur={e => {
+            const p = parseQBearing(e.target.value);
+            if (!isNaN(p)) {
+              const rawAz = (p+(northAz||0)+360)%360;
+              const rad = rawAz*Math.PI/180;
+              onUpdate(sh => {
+                const dist = Math.hypot(sh.p2.x-sh.p1.x,sh.p2.y-sh.p1.y)||10;
+                return {...sh, p2:{x:sh.p1.x+Math.sin(rad)*dist, y:sh.p1.y-Math.cos(rad)*dist}};
+              });
+            } else { setVals(v=>({...v,dimBrg:_dbBrgFb()})); }
+          }}
+          onKeyDown={e=>{if(e.key==='Enter')e.target.blur();if(e.key==='Escape'){setVals(v=>({...v,dimBrg:_dbBrgFb()}));e.target.blur();}}}
+          style={iStyle} />
+      </div>,
+      <div key="dimLen" style={rStyle}>
+        <span style={lStyle}>Length</span>
+        <input value={vals.dimLen}
+          onChange={e=>setVals(v=>({...v,dimLen:e.target.value}))}
+          onBlur={e=>{
+            const n=parseFloat(e.target.value);
+            if(!isNaN(n)&&n>0){
+              onUpdate(sh=>{
+                const d=Math.hypot(sh.p2.x-sh.p1.x,sh.p2.y-sh.p1.y)||1;
+                const ux=(sh.p2.x-sh.p1.x)/d, uy=(sh.p2.y-sh.p1.y)/d;
+                const nd=realToPx(n,scaleDenom,units);
+                return {...sh, p2:{x:sh.p1.x+ux*nd, y:sh.p1.y+uy*nd}};
+              });
+            } else { setVals(v=>({...v,dimLen:_dbLenFb()})); }
+          }}
+          onKeyDown={e=>{if(e.key==='Enter')e.target.blur();}}
+          style={iStyle}/>{unit(unitSuffix)}
+      </div>,
+      <div key="arrowOnly" style={rStyle}>
+        <span style={lStyle}>Mode</span>
+        <button onClick={()=>onUpdate(sh=>({...sh,arrowOnly:!sh.arrowOnly}))} style={{
+          height:20,padding:'0 8px',borderRadius:3,cursor:'pointer',outline:'none',
+          fontFamily:'Courier New,monospace',fontSize:9,letterSpacing:'0.03em',
+          background:s.arrowOnly?'rgba(251,191,36,0.15)':'rgba(99,179,237,0.18)',
+          border:`1px solid ${s.arrowOnly?'rgba(251,191,36,0.45)':'rgba(99,179,237,0.55)'}`,
+          color:s.arrowOnly?'#FCD34D':'#90CDF4',
+        }}>{s.arrowOnly?'→ arrow only':'→ N57°E label'}</button>
+      </div>,
+    ];
   } else {
     return null;
   }
@@ -1006,6 +1063,7 @@ function SketchPage({ page, projectId, onReload }) {
   // ── Dimension labels ───────────────────────────────────────────────────────
   // When true, each committed shape shows an inline measurement label (length,
   // radius, arc length, width×height).  Also shown live while drawing.
+  const [defaultStrokeW, setDefaultStrokeW] = useState(1.5);
   const [showDims,      setShowDims]      = useState(true);
   // When true (default), new shapes are committed with dims visible.
   // When false, new shapes are committed with _hideDims:true so dims are hidden by default.
@@ -1041,6 +1099,8 @@ function SketchPage({ page, projectId, onReload }) {
   const [activeLayerId,  setActiveLayerId]  = useState(_initLayers[0].id);
   const [rightPanelOpen,   setRightPanelOpen]   = useState(false);
   const [collapsedLayers,  setCollapsedLayers]  = useState(new Set());
+  const [panelDrag, setPanelDrag]             = useState(null);
+  const panelDragTimerRef = useRef(null);
   const [headerOpen,       setHeaderOpen]       = useState(false);
   const [notesOpen,        setNotesOpen]        = useState(false);
 
@@ -1094,7 +1154,8 @@ function SketchPage({ page, projectId, onReload }) {
   const activePtrsRef = useRef(new Map());     // pointerId → { x, y }
   // lastPinchRef: stores the previous frame's pinch midpoint + distance so we can
   //   compute per-frame zoom factor and pan delta incrementally.
-  const lastPinchRef  = useRef(null);           // { dist, midX, midY }
+  const lastPinchRef       = useRef(null);           // { dist, midX, midY }
+  const pendingDeselectRef = useRef(null);           // setTimeout id — defers touch empty-space deselect
   // midPanRef: anchor data captured at middle-mouse button-down for smooth pan.
   const midPanRef     = useRef(null);           // { startX, startY, vbX, vbY, ps }
   const [isPanActive, setIsPanActive] = useState(false); // drives 'grab' cursor
@@ -1493,7 +1554,7 @@ function SketchPage({ page, projectId, onReload }) {
     commitShapes([...shapes, {
       id: pathId, type: 'path', closed,
       nodes,
-      stroke: STROKE, strokeWidth: STROKE_W,
+      stroke: STROKE, strokeWidth: defaultStrokeW,
       layerId: activeLayerId,
       ...(dimsOnDraw ? {} : { _hideDims: true }),
     }]);
@@ -1639,6 +1700,10 @@ function SketchPage({ page, projectId, onReload }) {
             ...(piv && { _pivot: piv }),
           };
         }
+        case 'dim-bearing':
+          return { ...shape, p1:{x:(shape.p1?.x||0)+dx,y:(shape.p1?.y||0)+dy}, p2:{x:(shape.p2?.x||0)+dx,y:(shape.p2?.y||0)+dy} };
+        case 'dim-linear':
+          return { ...shape, p1:{x:(shape.p1?.x||0)+dx,y:(shape.p1?.y||0)+dy}, p2:{x:(shape.p2?.x||0)+dx,y:(shape.p2?.y||0)+dy} };
         default: return shape;
       }
     }
@@ -1846,10 +1911,15 @@ function SketchPage({ page, projectId, onReload }) {
     // Track every pointer for pinch/pan detection (must happen before any early returns)
     activePtrsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-    // ── Two-finger touch → cancel draw, enter pinch/pan mode ─────────────
+    // ── Two-finger touch → enter pinch/pan mode ───────────────────────────
+    // Do NOT cancel drawState here — active drawings should survive a two-finger pan.
+    // Cancel any pending touch-deselect so selection is preserved during the gesture.
     if (activePtrsRef.current.size >= 2) {
       e.preventDefault();
-      setDrawState(null);
+      if (pendingDeselectRef.current) {
+        clearTimeout(pendingDeselectRef.current);
+        pendingDeselectRef.current = null;
+      }
       setDragNode(null);
       setDragStart(null);
       const pts  = [...activePtrsRef.current.values()];
@@ -1949,7 +2019,14 @@ function SketchPage({ page, projectId, onReload }) {
       // (Double-tap/double-click handling is at the top of this block)
 
       // ── New selection / deselect ─────────────────────────────────────
-      const hit = hitTest(pt, shapes, hitThresh);
+      const _selShapes = shapes.filter(s => {
+        if (s.visible === false) return false;
+        if (s.locked) return false;
+        const _lid = s.layerId || layers[0]?.id;
+        const _layer = layers.find(l => l.id === _lid);
+        return _layer?.visible !== false && !_layer?.locked;
+      });
+      const hit = hitTest(pt, _selShapes, hitThresh);
       setDragNode(null);
       if (hit) {
         if (e.shiftKey) {
@@ -1961,8 +2038,19 @@ function SketchPage({ page, projectId, onReload }) {
           setSelectedIds([hit.id]);
         }
       } else {
-        // Click on empty space
-        if (!e.shiftKey) setSelectedIds([]);
+        // Click on empty space — deselect, but defer for touch so a second finger
+        // arriving within 100ms (two-finger pan/zoom) cancels the deselect.
+        if (!e.shiftKey) {
+          if (e.pointerType === 'touch') {
+            if (pendingDeselectRef.current) clearTimeout(pendingDeselectRef.current);
+            pendingDeselectRef.current = setTimeout(() => {
+              pendingDeselectRef.current = null;
+              if (activePtrsRef.current.size < 2) setSelectedIds([]);
+            }, 100);
+          } else {
+            setSelectedIds([]);
+          }
+        }
         if (prevTool !== null) {
           // Exit post-create handle mode; don't start a marquee on the same click
           setPrevTool(null);
@@ -1978,7 +2066,14 @@ function SketchPage({ page, projectId, onReload }) {
 
     if (tool === 'eraser') {
       const hitThresh = (e.pointerType === 'touch' ? 24 : 8) * ps;
-      const hit = hitTest(pt, shapes, hitThresh);
+      const _erasable = shapes.filter(s => {
+        if (s.visible === false) return false;
+        if (s.locked) return false;
+        const _lid = s.layerId || layers[0]?.id;
+        const _layer = layers.find(l => l.id === _lid);
+        return _layer?.visible !== false && !_layer?.locked;
+      });
+      const hit = hitTest(pt, _erasable, hitThresh);
       if (hit) commitShapes(shapes.filter(s => s.id !== hit.id));
       return;
     }
@@ -2019,7 +2114,7 @@ function SketchPage({ page, projectId, onReload }) {
           p1: { x: drawState.x1, y: drawState.y1 },
           p2: { x: sp.x, y: sp.y },
           offset: defOff,
-          stroke: STROKE, strokeWidth: STROKE_W,
+          stroke: STROKE, strokeWidth: defaultStrokeW,
           layerId: getDimLayerId(),
         }]);
         setSelectedIds([dimId]);
@@ -2048,7 +2143,7 @@ function SketchPage({ page, projectId, onReload }) {
           id: dimId, type: 'dim-angle',
           line1Id: drawState.line1Id, line2Id: drawState.line2Id,
           scale: 1.0, flip: drawState.flip || false,
-          stroke: STROKE, strokeWidth: STROKE_W,
+          stroke: STROKE, strokeWidth: defaultStrokeW,
           layerId: getDimLayerId(),
         }]);
         setSelectedIds([dimId]);
@@ -2069,8 +2164,9 @@ function SketchPage({ page, projectId, onReload }) {
           id: dimId, type: 'dim-bearing',
           p1: { x: drawState.x1, y: drawState.y1 },
           p2: { x: sp.x, y: sp.y },
-          stroke: STROKE, strokeWidth: STROKE_W,
+          stroke: STROKE, strokeWidth: defaultStrokeW,
           layerId: getDimLayerId(),
+          ...(dimsOnDraw ? {} : { _hideDims: true }),
         }]);
         setSelectedIds([dimId]);
         setPrevTool(tool);
@@ -2091,7 +2187,7 @@ function SketchPage({ page, projectId, onReload }) {
         id: dimId, type: 'dim-radius',
         shapeId: hitDR.id,
         offset: { x: defLen * Math.cos(-Math.PI/4), y: defLen * Math.sin(-Math.PI/4) },
-        stroke: STROKE, strokeWidth: STROKE_W,
+        stroke: STROKE, strokeWidth: defaultStrokeW,
         layerId: getDimLayerId(),
       }]);
       setSelectedIds([dimId]);
@@ -2133,7 +2229,7 @@ function SketchPage({ page, projectId, onReload }) {
           x1: drawState.x1, y1: drawState.y1,
           x2: drawState.x2, y2: drawState.y2,
           px: drawState.px,  py: drawState.py,
-          stroke: STROKE, strokeWidth: STROKE_W,
+          stroke: STROKE, strokeWidth: defaultStrokeW,
           layerId: drawState.layerId || activeLayerId,
           ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_crvId]);
@@ -2200,6 +2296,9 @@ function SketchPage({ page, projectId, onReload }) {
     }
     // ── Node Tool ─────────────────────────────────────────────────────────────────────────────────
     if (tool === 'node') {
+      // Ignore secondary touch points (second finger for two-finger scroll/zoom)
+      // so the selected node/shape is preserved during pan gestures.
+      if (!e.isPrimary) return;
       const nodeHitR = 12 * ps; // hit radius in world units
       const cpHitR   = 10 * ps;
 
@@ -2270,7 +2369,8 @@ function SketchPage({ page, projectId, onReload }) {
       // (same behaviour as the select tool — node tool acts as select for non-path shapes)
       if (selectedId && !nodeSelectedId) {
         const sel = shapes.find(s => s.id === selectedId);
-        if (sel && sel.type !== 'path') {
+        const selLayerLocked = sel ? layers.find(l => l.id === (sel.layerId || layers[0]?.id))?.locked : false;
+        if (sel && sel.type !== 'path' && !sel.locked && !selLayerLocked) {
           const isTouch   = e.pointerType === 'touch';
           const nodeThresh = (isTouch ? 28 : NODE_R + 4) * ps;
           const rot = sel._rot || 0;
@@ -2298,7 +2398,12 @@ function SketchPage({ page, projectId, onReload }) {
       }
 
       // Click on a path shape to select it for node editing
-      const pathHit = hitTest(pt, shapes.filter(s => s.type === 'path'), hitThreshN);
+      const _nodeUnlocked = s => {
+        if (s.locked) return false;
+        const _lid = s.layerId || layers[0]?.id;
+        return !layers.find(l => l.id === _lid)?.locked;
+      };
+      const pathHit = hitTest(pt, shapes.filter(s => s.type === 'path' && _nodeUnlocked(s)), hitThreshN);
       if (pathHit) {
         setNodeSelectedId(pathHit.id);
         setNodeSelectedIdx(null);
@@ -2308,18 +2413,30 @@ function SketchPage({ page, projectId, onReload }) {
       }
 
       // Click on a non-path shape — select it and use select-tool handle behaviour
-      const nonPathHit = hitTest(pt, shapes.filter(s => s.type !== 'path'), hitThreshN);
+      const nonPathHit = hitTest(pt, shapes.filter(s => s.type !== 'path' && _nodeUnlocked(s)), hitThreshN);
       if (nonPathHit) {
         setSelectedIds([nonPathHit.id]);
         setNodeSelectedId(null);
         setNodeSelectedIdx(null);
         nodeDragRef.current = null;
       } else {
-        // Click on empty space — deselect everything
-        setSelectedIds([]);
-        setNodeSelectedId(null);
-        setNodeSelectedIdx(null);
+        // Click on empty space — deselect, deferred for touch (same pattern as select tool)
         nodeDragRef.current = null;
+        if (e.pointerType === 'touch') {
+          if (pendingDeselectRef.current) clearTimeout(pendingDeselectRef.current);
+          pendingDeselectRef.current = setTimeout(() => {
+            pendingDeselectRef.current = null;
+            if (activePtrsRef.current.size < 2) {
+              setSelectedIds([]);
+              setNodeSelectedId(null);
+              setNodeSelectedIdx(null);
+            }
+          }, 100);
+        } else {
+          setSelectedIds([]);
+          setNodeSelectedId(null);
+          setNodeSelectedIdx(null);
+        }
       }
     }
   }
@@ -2820,7 +2937,7 @@ function SketchPage({ page, projectId, onReload }) {
         const _lineId = newId();
         commitShapes([...shapes, { id: _lineId, type: 'line',
           x1: drawState.x1, y1: drawState.y1, x2: drawState.x2, y2: drawState.y2,
-          stroke: STROKE, strokeWidth: STROKE_W,
+          stroke: STROKE, strokeWidth: defaultStrokeW,
           layerId: drawState.layerId || activeLayerId,
           ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_lineId]);
@@ -2835,7 +2952,7 @@ function SketchPage({ page, projectId, onReload }) {
         const _rctId = newId();
         commitShapes([...shapes, { id: _rctId, type: 'rect',
           x: drawState.x, y: drawState.y, w: drawState.w, h: drawState.h,
-          stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
+          stroke: STROKE, strokeWidth: defaultStrokeW, fill: 'none',
           layerId: drawState.layerId || activeLayerId,
           ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_rctId]);
@@ -2850,7 +2967,7 @@ function SketchPage({ page, projectId, onReload }) {
         const _cirId = newId();
         commitShapes([...shapes, { id: _cirId, type: 'circle',
           cx: drawState.cx, cy: drawState.cy, r: drawState.r,
-          stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
+          stroke: STROKE, strokeWidth: defaultStrokeW, fill: 'none',
           layerId: drawState.layerId || activeLayerId,
           ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_cirId]);
@@ -2881,7 +2998,7 @@ function SketchPage({ page, projectId, onReload }) {
           commitShapes([...shapes, {
             id: pathId, type: 'path', closed: false,
             nodes,
-            stroke: STROKE, strokeWidth: STROKE_W,
+            stroke: STROKE, strokeWidth: defaultStrokeW,
             layerId: drawState.layerId || activeLayerId,
             ...(dimsOnDraw ? {} : { _hideDims: true }),
           }]);
@@ -3430,6 +3547,75 @@ function SketchPage({ page, projectId, onReload }) {
     persist(undefined, undefined, next);
   }
 
+  function reorderLayer(layerId, fromIdx, toIdx) {
+    if (fromIdx === toIdx) return;
+    const next = [...layers];
+    const [mv] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, mv);
+    setLayers(next);
+    persist(undefined, undefined, next);
+  }
+
+  function reorderShapeInLayer(shapeId, fromIdx, toIdx) {
+    if (fromIdx === toIdx) return;
+    const sh = shapes.find(s => s.id === shapeId);
+    if (!sh) return;
+    const lid = sh.layerId || layers[0]?.id;
+    const lSh = shapes.filter(s => (s.layerId || layers[0]?.id) === lid);
+    if (fromIdx < 0 || fromIdx >= lSh.length || toIdx < 0 || toIdx >= lSh.length) return;
+    const reordered = [...lSh];
+    const [mv] = reordered.splice(fromIdx, 1);
+    reordered.splice(toIdx, 0, mv);
+    let li = 0;
+    commitShapes(shapes.map(s => (s.layerId || layers[0]?.id) === lid ? reordered[li++] : s));
+  }
+
+  function toggleShapeVisible(shapeId) {
+    commitShapes(shapes.map(s => s.id === shapeId
+      ? { ...s, visible: s.visible === false ? undefined : false } : s));
+  }
+
+  function toggleLayerLocked(layerId) {
+    const next = layers.map(l => l.id === layerId ? { ...l, locked: !l.locked } : l);
+    setLayers(next);
+    persist(undefined, undefined, next);
+  }
+
+  function toggleShapeLocked(shapeId) {
+    commitShapes(shapes.map(s => s.id === shapeId
+      ? { ...s, locked: s.locked ? undefined : true } : s));
+  }
+
+  // Panel drag: document-level listeners while a drag is in progress
+  useEffect(() => {
+    if (!panelDrag) return;
+    const ROW_H = panelDrag.type === 'layer' ? 28 : 22;
+    const maxIdx = panelDrag.type === 'layer'
+      ? layers.length - 1 : (panelDrag.layerShapeCount || 1) - 1;
+    const startY = panelDrag.startY;
+    const origIdx = panelDrag.origIdx;
+    function onMove(e) {
+      const dy = e.clientY - startY;
+      const steps = -Math.round(dy / ROW_H);
+      const newTgt = Math.max(0, Math.min(maxIdx, origIdx + steps));
+      setPanelDrag(d => d ? { ...d, targetIdx: newTgt } : null);
+    }
+    function onUp() {
+      setPanelDrag(d => {
+        if (!d) return null;
+        if (d.targetIdx !== d.origIdx) {
+          if (d.type === 'layer') reorderLayer(d.id, d.origIdx, d.targetIdx);
+          else reorderShapeInLayer(d.id, d.origIdx, d.targetIdx);
+        }
+        return null;
+      });
+      if (panelDragTimerRef.current) { clearTimeout(panelDragTimerRef.current); panelDragTimerRef.current = null; }
+    }
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    return () => { document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', onUp); };
+  }, [!!panelDrag, panelDrag?.id]);
+
   // ── Text commit ────────────────────────────────────────────────────────────
   function commitText() {
     if (!textEdit) return;
@@ -3604,21 +3790,21 @@ function SketchPage({ page, projectId, onReload }) {
     switch (s.type) {
       case 'line':
         inner = <line x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2}
-          stroke={s.stroke} strokeWidth={s.strokeWidth} strokeLinecap="round" style={sel} />;
+          stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} strokeLinecap="round" style={sel} />;
         break;
       case 'curve': {
         const { px: rpx, py: rpy } = getCurvePI(s);
         inner = <path d={arcPath(s.x1, s.y1, s.x2, s.y2, rpx, rpy)}
-          stroke={s.stroke} strokeWidth={s.strokeWidth} fill="none" strokeLinecap="round" style={sel} />;
+          stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill="none" strokeLinecap="round" style={sel} />;
         break;
       }
       case 'circle':
         inner = <circle cx={s.cx} cy={s.cy} r={s.r}
-          stroke={s.stroke} strokeWidth={s.strokeWidth} fill={s.fill || 'none'} style={sel} />;
+          stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill={s.fill || 'none'} style={sel} />;
         break;
       case 'rect':
         inner = <rect x={s.x} y={s.y} width={s.w} height={s.h}
-          stroke={s.stroke} strokeWidth={s.strokeWidth} fill={s.fill || 'none'} style={sel} />;
+          stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill={s.fill || 'none'} style={sel} />;
         break;
       case 'text': {
         // Text is rendered as counter-scaled SVG text elements so it stays the
@@ -3725,11 +3911,11 @@ function SketchPage({ page, projectId, onReload }) {
             {/* Dimension line */}
             <line x1={dp1x} y1={dp1y} x2={dp2x} y2={dp2y}
                   stroke={STROKE} strokeWidth={sw} strokeLinecap="round" />
-            {/* Arrowhead at P1 end (pointing toward P2) */}
-            <path d={mkArrow(dp1x, dp1y, udx, udy)}
+            {/* Arrowhead at P1 end (pointing outward, away from P2) */}
+            <path d={mkArrow(dp1x, dp1y, -udx, -udy)}
                   stroke={STROKE} strokeWidth={sw} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            {/* Arrowhead at P2 end (pointing toward P1) */}
-            <path d={mkArrow(dp2x, dp2y, -udx, -udy)}
+            {/* Arrowhead at P2 end (pointing outward, away from P1) */}
+            <path d={mkArrow(dp2x, dp2y, udx, udy)}
                   stroke={STROKE} strokeWidth={sw} fill="none" strokeLinecap="round" strokeLinejoin="round" />
           </g>
         );
@@ -3737,6 +3923,8 @@ function SketchPage({ page, projectId, onReload }) {
       }
       case 'dim-angle': {
         // Angle dimension: arc at intersection of two referenced lines.
+        // Respect both the master Dims toggle and per-shape _hideDims flag.
+        if (!showDims || s._hideDims) return null;
         const l1 = shapes.find(sh => sh.id === s.line1Id && sh.type === 'line');
         const l2 = shapes.find(sh => sh.id === s.line2Id && sh.type === 'line');
         if (!l1 || !l2) return null;
@@ -4018,6 +4206,7 @@ function SketchPage({ page, projectId, onReload }) {
       }
       case 'dim-bearing': {
         if (!s.p1 || !s.p2) return null;
+        if (s.arrowOnly) return null; // arrow-only mode: no bearing label
         const { p1: bp1, p2: bp2 } = s;
         const bLen2 = Math.hypot(bp2.x-bp1.x, bp2.y-bp1.y);
         if (bLen2 < 5*ps) return null;
@@ -4340,9 +4529,9 @@ function SketchPage({ page, projectId, onReload }) {
                   stroke={STROKE} strokeWidth={1.2*ps} strokeLinecap="round" opacity={0.65} />
             <line x1={dp1x} y1={dp1y} x2={dp2x} y2={dp2y}
                   stroke={STROKE} strokeWidth={1.2*ps} strokeLinecap="round" opacity={0.65} />
-            <path d={mkA(dp1x, dp1y, udx, udy)}
+            <path d={mkA(dp1x, dp1y, -udx, -udy)}
                   stroke={STROKE} strokeWidth={1.2*ps} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.65} />
-            <path d={mkA(dp2x, dp2y, -udx, -udy)}
+            <path d={mkA(dp2x, dp2y, udx, udy)}
                   stroke={STROKE} strokeWidth={1.2*ps} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.65} />
             {showDims && len > 5*ps && dimTextEl((dp1x+dp2x)/2, (dp1y+dp2y)/2, normAng(ang), fmtPxAsReal(len, scaleDenom, units), ps)}
           </>}
@@ -4587,6 +4776,83 @@ function SketchPage({ page, projectId, onReload }) {
             </div>
           </div>
         )}
+
+        {openMenu === 'stroke' && (() => {
+          const selShape = selectedId ? shapes.find(s => s.id === selectedId) : null;
+          const currentW = selShape ? (selShape.strokeWidth || 1.5) : defaultStrokeW;
+          const setW = val => {
+            const v = Math.max(0.5, Math.min(10, Number(val) || 1.5));
+            setDefaultStrokeW(v);
+            if (selShape) {
+              commitShapes(shapes.map(s => s.id === selShape.id ? { ...s, strokeWidth: v } : s));
+            }
+          };
+          return (
+            <div style={{
+              position: 'absolute', top: '100%', left: menuPos.x,
+              marginTop: 4, zIndex: 120, minWidth: 220,
+              background: 'rgba(22,28,40,0.97)',
+              border: '1px solid rgba(255,255,255,0.14)',
+              borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+              padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 10,
+            }}>
+              {/* Header */}
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.35)',
+                textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                {selShape ? `Line — ${selShape.type}` : 'Line — default'}
+              </div>
+
+              {/* Thickness row */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)',
+                  fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
+                  THICKNESS
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="range" min="0.5" max="10" step="0.5"
+                    value={currentW}
+                    onChange={e => setW(e.target.value)}
+                    style={{ flex: 1, accentColor: '#3B82F6', cursor: 'pointer' }}
+                  />
+                  <input type="number" min="0.5" max="10" step="0.5"
+                    value={currentW}
+                    onChange={e => setW(e.target.value)}
+                    style={{
+                      width: 44, padding: '2px 4px', borderRadius: 4, textAlign: 'center',
+                      background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.18)',
+                      color: 'rgba(255,255,255,0.85)', fontSize: 11,
+                      fontFamily: 'Courier New, monospace', outline: 'none',
+                    }}
+                  />
+                  <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)',
+                    fontFamily: 'Courier New, monospace' }}>px</span>
+                </div>
+                {/* Live preview line */}
+                <svg width="100%" height={Math.max(currentW * 2 + 6, 14)} style={{ display: 'block' }}>
+                  <line x1="8" y1="50%" x2="calc(100% - 8px)" y2="50%"
+                    stroke="rgba(255,255,255,0.7)" strokeWidth={currentW} strokeLinecap="round" />
+                </svg>
+              </div>
+
+              {/* Line type — deferred */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, opacity: 0.35 }}>
+                <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)',
+                  fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
+                  LINE TYPE &nbsp;<span style={{ fontSize: 9, fontStyle: 'italic' }}>(coming soon)</span>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {['——', '- - -', '·····'].map(t => (
+                    <button key={t} disabled style={{
+                      flex: 1, height: 26, borderRadius: 4, cursor: 'not-allowed',
+                      background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
+                      color: 'rgba(255,255,255,0.3)', fontSize: 12,
+                    }}>{t}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ── Snap dropdown panel ───────────────────────────────────────── */}
         {openMenu === 'snap' && (
@@ -4975,6 +5241,30 @@ function SketchPage({ page, projectId, onReload }) {
             <span style={{ fontSize: 8, opacity: 0.5, marginLeft: 1 }}>▾</span>
           </button>
 
+          {/* ── Line settings button ──────────────────────────────────── */}
+          <button
+            onClick={e => {
+              const btnRect = e.currentTarget.getBoundingClientRect();
+              const barRect = toolbarRef.current ? toolbarRef.current.getBoundingClientRect() : { left: 0 };
+              setMenuPos({ x: btnRect.left - barRect.left });
+              setOpenMenu(m => m === 'stroke' ? null : 'stroke');
+            }}
+            title="Line thickness & style"
+            style={{
+              height: 26, padding: '0 10px', borderRadius: 4, flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 5,
+              background: openMenu === 'stroke' ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.06)',
+              border: `1px solid ${openMenu === 'stroke' ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.14)'}`,
+              color: openMenu === 'stroke' ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.6)',
+              cursor: 'pointer', fontSize: 11,
+              fontFamily: 'Courier New, monospace', outline: 'none',
+            }}
+          >
+            <span style={{ fontSize: 13, lineHeight: 1 }}>—</span>
+            <span style={{ letterSpacing: '0.03em' }}>Line</span>
+            <span style={{ fontSize: 8, opacity: 0.5, marginLeft: 1 }}>▾</span>
+          </button>
+
           {/* Zoom % readout */}
           <span style={{
             fontSize: 10, fontFamily: 'Courier New, monospace', letterSpacing: '0.03em',
@@ -5136,13 +5426,14 @@ function SketchPage({ page, projectId, onReload }) {
             {layers.map(layer => layer.visible && (
               <g key={layer.id}>
                 {shapes
-                  .filter(s => (s.layerId || layers[0]?.id) === layer.id)
+                  .filter(s => (s.layerId || layers[0]?.id) === layer.id && s.visible !== false)
                   .map(s => renderShape(s, selectedIds.includes(s.id)))}
               </g>
             ))}
 
             {/* Dimension labels — rendered above shapes, below handles */}
             {showDims && shapes.map(s => {
+              if (s.visible === false) return null;
               const layer = layers.find(l => l.id === (s.layerId || layers[0]?.id));
               if (!layer?.visible) return null;
               const lbl = renderDimLabel(s);
@@ -5436,6 +5727,7 @@ function SketchPage({ page, projectId, onReload }) {
               onUpdate={handleCardUpdate}
               scaleDenom={scaleDenom}
               units={units}
+              northAzimuth={northAzimuth}
             />
           )}
 
@@ -5528,88 +5820,144 @@ function SketchPage({ page, projectId, onReload }) {
                     (s.layerId || layers[0]?.id) === layer.id);
                   return (
                     <div key={layer.id}>
-                      {/* Layer row */}
-                      <div
-                        onClick={() => setActiveLayerId(layer.id)}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 2,
-                          padding: '4px 3px 4px 4px', minHeight: 28,
-                          background: isActive ? 'rgba(59,130,246,0.18)' : 'transparent',
-                          borderLeft: isActive ? '2px solid #3B82F6' : '2px solid transparent',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {/* Collapse toggle */}
-                        <button
-                          onClick={ev => { ev.stopPropagation(); setCollapsedLayers(prev => { const next = new Set(prev); next.has(layer.id) ? next.delete(layer.id) : next.add(layer.id); return next; }); }}
-                          title={collapsedLayers.has(layer.id) ? 'Expand' : 'Collapse'}
-                          style={{
-                            width: 14, height: 14, flexShrink: 0, display: 'flex',
-                            alignItems: 'center', justifyContent: 'center',
-                            background: 'none', border: 'none', cursor: 'pointer', fontSize: 8,
-                            color: 'rgba(255,255,255,0.35)', outline: 'none', lineHeight: 1,
-                          }}
-                        >{collapsedLayers.has(layer.id) ? '▸' : '▾'}</button>
-
-                        {/* Visibility */}
-                        <button
-                          onClick={ev => { ev.stopPropagation(); toggleLayerVisibility(layer.id); }}
-                          title={layer.visible ? 'Hide' : 'Show'}
-                          style={{
-                            width: 18, height: 18, flexShrink: 0, display: 'flex',
-                            alignItems: 'center', justifyContent: 'center',
-                            background: 'none', border: 'none', cursor: 'pointer', fontSize: 10,
-                            color: layer.visible ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.2)',
-                            outline: 'none',
-                          }}
-                        >{layer.visible ? '👁' : '○'}</button>
-
-                        {/* Name */}
-                        <span style={{
-                          flex: 1, fontSize: 11, overflow: 'hidden',
-                          textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                          color: isActive ? '#93C5FD'
-                            : (layer.visible ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)'),
-                        }}>{layer.name}</span>
-
-                        {/* Up / Down */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0 }}>
-                          {[{ dir: 1, icon: '▲', ttl: 'Move up' }, { dir: -1, icon: '▼', ttl: 'Move down' }].map(({ dir, icon, ttl }) => (
-                            <button key={dir}
-                              onClick={ev => { ev.stopPropagation(); moveLayer(layer.id, dir); }}
-                              title={ttl}
-                              style={{
-                                width: 14, height: 10, display: 'flex', alignItems: 'center',
-                                justifyContent: 'center', background: 'none', border: 'none',
-                                cursor: 'pointer', fontSize: 7, lineHeight: 1, padding: 0,
-                                color: 'rgba(255,255,255,0.35)', outline: 'none',
+                      {/* Layer row — with drag and drop indicator */}
+                      {(()=>{
+                        const _lOrig = layers.findIndex(l=>l.id===layer.id);
+                        const _lDrag = panelDrag?.type==='layer' && panelDrag.id===layer.id;
+                        const _lDrop = panelDrag?.type==='layer' && panelDrag.id!==layer.id && panelDrag.targetIdx===_lOrig;
+                        const _lUp   = panelDrag ? panelDrag.targetIdx > panelDrag.origIdx : false;
+                        return (<>
+                          {_lDrop && _lUp && <div style={{height:2,background:'#3B82F6',margin:'0 4px'}}/>}
+                          <div
+                            onClick={()=>setActiveLayerId(layer.id)}
+                            style={{
+                              display:'flex', alignItems:'center', gap:2,
+                              padding:'4px 3px 4px 4px', minHeight:28,
+                              background: isActive ? 'rgba(59,130,246,0.18)' : 'transparent',
+                              borderLeft: isActive ? '2px solid #3B82F6' : '2px solid transparent',
+                              cursor:'pointer', opacity: _lDrag ? 0.35 : 1,
+                            }}
+                          >
+                            {/* Layer drag handle — long press to reorder */}
+                            <span
+                              style={{fontSize:9,color:'rgba(255,255,255,0.2)',cursor:'grab',
+                                flexShrink:0,padding:'0 1px',userSelect:'none',touchAction:'none'}}
+                              onPointerDown={e=>{
+                                e.stopPropagation();
+                                const _sy=e.clientY;
+                                if(panelDragTimerRef.current) clearTimeout(panelDragTimerRef.current);
+                                panelDragTimerRef.current=setTimeout(()=>{
+                                  panelDragTimerRef.current=null;
+                                  if(navigator.vibrate) navigator.vibrate(40);
+                                  const _i=layers.findIndex(l=>l.id===layer.id);
+                                  setPanelDrag({type:'layer',id:layer.id,origIdx:_i,targetIdx:_i,startY:_sy});
+                                },400);
                               }}
-                            >{icon}</button>
-                          ))}
-                        </div>
-                      </div>
+                              onPointerMove={e=>{
+                                if(panelDragTimerRef.current&&Math.abs(e.clientY-(panelDrag?.startY||e.clientY))>6){
+                                  clearTimeout(panelDragTimerRef.current);panelDragTimerRef.current=null;
+                                }
+                              }}
+                              onPointerUp={()=>{if(panelDragTimerRef.current){clearTimeout(panelDragTimerRef.current);panelDragTimerRef.current=null;}}}
+                            >⣿</span>
+                            {/* Collapse toggle */}
+                            <button
+                              onClick={ev=>{ev.stopPropagation();setCollapsedLayers(prev=>{const next=new Set(prev);next.has(layer.id)?next.delete(layer.id):next.add(layer.id);return next;});}}
+                              title={collapsedLayers.has(layer.id)?'Expand':'Collapse'}
+                              style={{width:14,height:14,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:8,color:'rgba(255,255,255,0.35)',outline:'none',lineHeight:1}}
+                            >{collapsedLayers.has(layer.id)?'▸':'▾'}</button>
+                            {/* Visibility */}
+                            <button
+                              onClick={ev=>{ev.stopPropagation();toggleLayerVisibility(layer.id);}}
+                              title={layer.visible?'Hide':'Show'}
+                              style={{width:18,height:18,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:10,color:layer.visible?'rgba(255,255,255,0.6)':'rgba(255,255,255,0.2)',outline:'none'}}
+                            >{layer.visible?'👁':'○'}</button>
+                            {/* Lock */}
+                            <button
+                              onClick={ev=>{ev.stopPropagation();toggleLayerLocked(layer.id);}}
+                              title={layer.locked?'Unlock layer':'Lock layer'}
+                              style={{width:18,height:18,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:10,color:layer.locked?'#FCD34D':'rgba(255,255,255,0.2)',outline:'none'}}
+                            >{layer.locked?'🔒':'🔓'}</button>
+                            {/* Name */}
+                            <span style={{flex:1,fontSize:11,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+                              color:isActive?'#93C5FD':(layer.visible?'rgba(255,255,255,0.7)':'rgba(255,255,255,0.3)')
+                            }}>{layer.name}{layer.locked && <span style={{marginLeft:3,fontSize:8,opacity:0.6}}>🔒</span>}</span>
+                            {/* Up / Down */}
+                            <div style={{display:'flex',flexDirection:'column',gap:1,flexShrink:0}}>
+                              {[{dir:1,icon:'▲',ttl:'Move up'},{dir:-1,icon:'▼',ttl:'Move down'}].map(({dir,icon,ttl})=>(
+                                <button key={dir} onClick={ev=>{ev.stopPropagation();moveLayer(layer.id,dir);}} title={ttl}
+                                  style={{width:14,height:10,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:7,lineHeight:1,padding:0,color:'rgba(255,255,255,0.35)',outline:'none'}}
+                                >{icon}</button>
+                              ))}
+                            </div>
+                          </div>
+                          {_lDrop && !_lUp && <div style={{height:2,background:'#3B82F6',margin:'0 4px'}}/>}
+                        </>);
+                      })()}
 
                       {/* Objects in this layer — newest first (highest Z) */}
-                      {!collapsedLayers.has(layer.id) && [...layerShapes].reverse().map((s, ri) => (
-                        <div
-                          key={s.id}
-                          onClick={() => { setTool('select'); setSelectedIds([s.id]); setPrevTool(null); }}
-                          style={{
-                            display: 'flex', alignItems: 'center', gap: 4,
-                            padding: '2px 6px 2px 22px',
-                            background: selectedIds.includes(s.id) ? 'rgba(59,130,246,0.12)' : 'transparent',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.2)', flexShrink: 0 }}>—</span>
-                          <span style={{
-                            fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                            color: selectedIds.includes(s.id) ? '#93C5FD' : 'rgba(255,255,255,0.4)',
-                          }}>
-                            {s.type.charAt(0).toUpperCase() + s.type.slice(1)} {layerShapes.length - ri}
-                          </span>
-                        </div>
-                      ))}
+                      {!collapsedLayers.has(layer.id) && (()=>{
+                        const _revS=[...layerShapes].reverse();
+                        return _revS.map((s,ri)=>{
+                          const _sOrig=layerShapes.length-1-ri;
+                          const _sDrag=panelDrag?.type==='shape'&&panelDrag.id===s.id;
+                          const _sDrop=panelDrag?.type==='shape'&&panelDrag.id!==s.id&&panelDrag.targetIdx===_sOrig;
+                          const _sUp=panelDrag?panelDrag.targetIdx>panelDrag.origIdx:false;
+                          return (
+                          <React.Fragment key={s.id}>
+                            {_sDrop&&_sUp&&<div style={{height:2,background:'#3B82F6',margin:'0 14px'}}/>}
+                            <div
+                              onClick={()=>{setTool('select');setSelectedIds([s.id]);setPrevTool(null);}}
+                              style={{display:'flex',alignItems:'center',gap:3,padding:'2px 4px 2px 14px',
+                                background:selectedIds.includes(s.id)?'rgba(59,130,246,0.12)':'transparent',
+                                opacity:_sDrag?0.35:1,cursor:'pointer'}}
+                            >
+                              {/* Shape drag handle */}
+                              <span
+                                style={{fontSize:8,color:'rgba(255,255,255,0.18)',cursor:'grab',
+                                  flexShrink:0,padding:'0 2px',userSelect:'none',touchAction:'none'}}
+                                onPointerDown={e=>{
+                                  e.stopPropagation();
+                                  const _sy=e.clientY;
+                                  if(panelDragTimerRef.current) clearTimeout(panelDragTimerRef.current);
+                                  panelDragTimerRef.current=setTimeout(()=>{
+                                    panelDragTimerRef.current=null;
+                                    if(navigator.vibrate) navigator.vibrate(40);
+                                    setPanelDrag({type:'shape',id:s.id,origIdx:_sOrig,targetIdx:_sOrig,startY:_sy,layerShapeCount:layerShapes.length});
+                                  },400);
+                                }}
+                                onPointerMove={e=>{
+                                  if(panelDragTimerRef.current&&Math.abs(e.clientY-(panelDrag?.startY||e.clientY))>6){
+                                    clearTimeout(panelDragTimerRef.current);panelDragTimerRef.current=null;
+                                  }
+                                }}
+                                onPointerUp={()=>{if(panelDragTimerRef.current){clearTimeout(panelDragTimerRef.current);panelDragTimerRef.current=null;}}}
+                              >⣿</span>
+                              {/* Per-shape visibility toggle */}
+                              <button
+                                onClick={ev=>{ev.stopPropagation();toggleShapeVisible(s.id);}}
+                                title={s.visible===false?'Show':'Hide'}
+                                style={{width:14,height:14,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
+                                  background:'none',border:'none',cursor:'pointer',fontSize:9,outline:'none',
+                                  color:s.visible===false?'rgba(255,255,255,0.15)':'rgba(255,255,255,0.45)'}}
+                              >{s.visible===false?'○':'●'}</button>
+                              {/* Per-shape lock toggle */}
+                              <button
+                                onClick={ev=>{ev.stopPropagation();toggleShapeLocked(s.id);}}
+                                title={s.locked?'Unlock shape':'Lock shape'}
+                                style={{width:14,height:14,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
+                                  background:'none',border:'none',cursor:'pointer',fontSize:8,outline:'none',
+                                  color:s.locked?'#FCD34D':'rgba(255,255,255,0.18)'}}
+                              >{s.locked?'🔒':'🔓'}</button>
+                              <span style={{flex:1,fontSize:10,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+                                color:s.visible===false?'rgba(255,255,255,0.2)':(selectedIds.includes(s.id)?'#93C5FD':'rgba(255,255,255,0.4)')}}>
+                                {s.type.charAt(0).toUpperCase()+s.type.slice(1)} {layerShapes.length-ri}{s.locked&&<span style={{marginLeft:2,fontSize:7,opacity:0.7}}>🔒</span>}
+                              </span>
+                            </div>
+                            {_sDrop&&!_sUp&&<div style={{height:2,background:'#3B82F6',margin:'0 14px'}}/>}
+                          </React.Fragment>);
+                        });
+                      })()}
                     </div>
                   );
                 })}

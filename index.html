@@ -1689,6 +1689,62 @@
         case 'rect':
           return D(s.x+s.w/2,     s.y+s.h+OFF, 0,   _fmt(Math.abs(s.w), sd, un))
                + D(s.x+s.w+OFF,   s.y+s.h/2,   -90, _fmt(Math.abs(s.h), sd, un));
+
+        // ── Dimension shape labels ──────────────────────────────────────────
+        case 'dim-linear': {
+          if (!s.p1||!s.p2) return '';
+          const dlLen=Math.hypot(s.p2.x-s.p1.x,s.p2.y-s.p1.y);
+          if (dlLen<5*ps) return '';
+          const dlOff=s.offset||0;
+          const dlpX=-(s.p2.y-s.p1.y)/dlLen, dlpY=(s.p2.x-s.p1.x)/dlLen;
+          const mx=(s.p1.x+s.p2.x)/2+dlpX*dlOff, my=(s.p1.y+s.p2.y)/2+dlpY*dlOff;
+          const ang=Math.atan2(s.p2.y-s.p1.y,s.p2.x-s.p1.x)*180/Math.PI;
+          return _dimSVG(mx,my,_norm(ang),s.ntsLabel?s.ntsLabel+' *':_fmt(dlLen,sd,un));
+        }
+        case 'dim-angle': {
+          if (!s.line1Id||!s.line2Id) return '';
+          const dal1=(shapes||[]).find(sh=>sh.id===s.line1Id&&sh.type==='line');
+          const dal2=(shapes||[]).find(sh=>sh.id===s.line2Id&&sh.type==='line');
+          if (!dal1||!dal2) return '';
+          const daInt=_liIntersect(dal1.x1,dal1.y1,dal1.x2,dal1.y2,dal2.x1,dal2.y1,dal2.x2,dal2.y2);
+          if (!daInt) return '';
+          let daa1=_dimArmAng(dal1.x1,dal1.y1,dal1.x2,dal1.y2,daInt.x,daInt.y);
+          let daa2=_dimArmAng(dal2.x1,dal2.y1,dal2.x2,dal2.y2,daInt.x,daInt.y);
+          let daDelta=((daa2-daa1)+2*Math.PI)%(2*Math.PI);
+          if (daDelta>Math.PI){const t=daa1;daa1=daa2;daa2=t;daDelta=2*Math.PI-daDelta;}
+          const midAng=(daa1+daDelta/2)+(s.flip?Math.PI:0);
+          const angleDeg=s.flip?(360-daDelta*180/Math.PI):(daDelta*180/Math.PI);
+          const arcRA=(s.scale||1.0)*40*ps;
+          const lx=daInt.x+Math.cos(midAng)*(arcRA+30*ps);
+          const ly=daInt.y+Math.sin(midAng)*(arcRA+30*ps);
+          return _dimSVG(lx,ly,_norm(midAng*180/Math.PI),s.ntsLabel?s.ntsLabel+' *':_toDMS(angleDeg));
+        }
+        case 'dim-bearing': {
+          if (!s.p1||!s.p2||s.arrowOnly) return '';
+          const dbLen=Math.hypot(s.p2.x-s.p1.x,s.p2.y-s.p1.y);
+          if (dbLen<5*ps) return '';
+          const bmx=(s.p1.x+s.p2.x)/2, bmy=(s.p1.y+s.p2.y)/2;
+          const rawAz=((Math.atan2(s.p2.x-s.p1.x,-(s.p2.y-s.p1.y))*180/Math.PI)+360)%360;
+          const lineAng=Math.atan2(s.p2.y-s.p1.y,s.p2.x-s.p1.x)*180/Math.PI;
+          return _dimSVG(bmx,bmy,_norm(lineAng),s.ntsLabel?s.ntsLabel+' *':_toDMS(rawAz));
+        }
+        case 'dim-radius': {
+          const rrRef=(shapes||[]).find(sh=>sh.id===s.shapeId);
+          if (!rrRef) return '';
+          let rrcx,rrcy,rrR;
+          if (rrRef.type==='circle') { rrcx=rrRef.cx;rrcy=rrRef.cy;rrR=rrRef.r; }
+          else if (rrRef.type==='curve') {
+            const rrpx=rrRef.px!==undefined?rrRef.px:(rrRef.x1+rrRef.x2)/2;
+            const rrpy=rrRef.py!==undefined?rrRef.py:(rrRef.y1+rrRef.y2)/2;
+            const rra=_cArc(rrRef.x1,rrRef.y1,rrRef.x2,rrRef.y2,rrpx,rrpy);
+            if (!rra) return '';
+            rrcx=rra.cx;rrcy=rra.cy;rrR=rra.R;
+          } else return '';
+          const rrOff=s.offset||{x:50*ps,y:-50*ps};
+          const rrEx=rrcx+rrOff.x+14*ps, rrEy=rrcy+rrOff.y;
+          return _dimSVG(rrEx,rrEy,0,s.ntsLabel?s.ntsLabel+' *':`R ${_fmt(rrR,sd,un)}`);
+        }
+
         default:
           return '';
       }
@@ -1738,6 +1794,20 @@
       </g>`;
     }
 
+    // ── Geometry helpers for dim shapes (inlined — not in _fbSketchUtils) ───────
+    function _liIntersect(x1,y1,x2,y2,x3,y3,x4,y4) {
+      const dx1=x2-x1,dy1=y2-y1,dx2=x4-x3,dy2=y4-y3;
+      const denom=dx1*dy2-dy1*dx2;
+      if (Math.abs(denom)<1e-10) return null;
+      const t=((x3-x1)*dy2-(y3-y1)*dx2)/denom;
+      return {x:x1+t*dx1,y:y1+t*dy1};
+    }
+    function _dimArmAng(lx1,ly1,lx2,ly2,px,py) {
+      const dx=lx2-lx1,dy=ly2-ly1,lenSq=dx*dx+dy*dy||1;
+      const t=((px-lx1)*dx+(py-ly1)*dy)/lenSq;
+      return t<=0.5 ? Math.atan2(dy,dx) : Math.atan2(-dy,-dx);
+    }
+
     // ── Render shapes ─────────────────────────────────────────────────────────
     let shapesSVG = '';
     let dimsSVG   = '';
@@ -1745,6 +1815,7 @@
     for (const s of (shapes || [])) {
       const lid = s.layerId || defaultLayerId;
       if (lid && !visLayers.has(lid)) continue;
+      if (s.visible === false) continue;  // per-shape visibility
 
       const stroke = s.stroke || '#1C3829';
       const sw     = s.strokeWidth || 1.5;
@@ -1780,6 +1851,83 @@
             `<tspan x="${s.x}" dy="${i === 0 ? 0 : fs*1.3}">${ln.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</tspan>`
           ).join('');
           el = `<text x="${s.x}" y="${s.y}" font-size="${fs}" fill="${stroke}" font-family="Courier New,monospace">${tspans}</text>`;
+          break;
+        }
+        // ── Dimension shapes ────────────────────────────────────────────────
+        case 'dim-linear': {
+          if (!s.p1 || !s.p2) break;
+          const dlOff = s.offset || 0;
+          const dlLen = Math.hypot(s.p2.x-s.p1.x, s.p2.y-s.p1.y);
+          if (dlLen < 1) break;
+          const dlpX = -(s.p2.y-s.p1.y)/dlLen, dlpY = (s.p2.x-s.p1.x)/dlLen;
+          const dd1x = s.p1.x+dlpX*dlOff, dd1y = s.p1.y+dlpY*dlOff;
+          const dd2x = s.p2.x+dlpX*dlOff, dd2y = s.p2.y+dlpY*dlOff;
+          const dlGap=3*ps, dlExt=6*ps, dlAh=8*ps, dlAs=3*ps;
+          const dludx=(s.p2.x-s.p1.x)/dlLen, dludy=(s.p2.y-s.p1.y)/dlLen;
+          const mka=(ax,ay,dx,dy)=>
+            `M ${ax-dx*dlAh*0.5+dy*dlAs} ${ay-dy*dlAh*0.5-dx*dlAs} L ${ax} ${ay} L ${ax-dx*dlAh*0.5-dy*dlAs} ${ay-dy*dlAh*0.5+dx*dlAs}`;
+          el = `<g stroke="${stroke}" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round">`+
+            `<line x1="${s.p1.x+dlpX*dlGap}" y1="${s.p1.y+dlpY*dlGap}" x2="${dd1x+dlpX*dlExt}" y2="${dd1y+dlpY*dlExt}" stroke-width="0.9"/>`+
+            `<line x1="${s.p2.x+dlpX*dlGap}" y1="${s.p2.y+dlpY*dlGap}" x2="${dd2x+dlpX*dlExt}" y2="${dd2y+dlpY*dlExt}" stroke-width="0.9"/>`+
+            `<line x1="${dd1x}" y1="${dd1y}" x2="${dd2x}" y2="${dd2y}"/>`+
+            `<path d="${mka(dd1x,dd1y,-dludx,-dludy)}"/><path d="${mka(dd2x,dd2y,dludx,dludy)}"/>`+
+            `</g>`;
+          break;
+        }
+        case 'dim-angle': {
+          if (!showDims || s._hideDims) break;
+          const dal1 = (shapes||[]).find(sh=>sh.id===s.line1Id&&sh.type==='line');
+          const dal2 = (shapes||[]).find(sh=>sh.id===s.line2Id&&sh.type==='line');
+          if (!dal1||!dal2) break;
+          const daInt = _liIntersect(dal1.x1,dal1.y1,dal1.x2,dal1.y2,dal2.x1,dal2.y1,dal2.x2,dal2.y2);
+          if (!daInt) break;
+          let daa1=_dimArmAng(dal1.x1,dal1.y1,dal1.x2,dal1.y2,daInt.x,daInt.y);
+          let daa2=_dimArmAng(dal2.x1,dal2.y1,dal2.x2,dal2.y2,daInt.x,daInt.y);
+          let daDelta=((daa2-daa1)+2*Math.PI)%(2*Math.PI);
+          if (daDelta>Math.PI){const t=daa1;daa1=daa2;daa2=t;}
+          const daR=(s.scale||1.0)*40*ps;
+          const daLg=s.flip?1:0, daSw=s.flip?0:1;
+          const ax1=daInt.x+Math.cos(daa1)*daR, ay1=daInt.y+Math.sin(daa1)*daR;
+          const ax2=daInt.x+Math.cos(daa2)*daR, ay2=daInt.y+Math.sin(daa2)*daR;
+          el = `<path d="M ${ax1.toFixed(2)} ${ay1.toFixed(2)} A ${daR.toFixed(2)} ${daR.toFixed(2)} 0 ${daLg} ${daSw} ${ax2.toFixed(2)} ${ay2.toFixed(2)}" stroke="${stroke}" stroke-width="1.2" fill="none" stroke-linecap="round"/>`;
+          break;
+        }
+        case 'dim-bearing': {
+          if (!s.p1||!s.p2) break;
+          const dbLen=Math.hypot(s.p2.x-s.p1.x,s.p2.y-s.p1.y);
+          if (dbLen<1) break;
+          const dbUx=(s.p2.x-s.p1.x)/dbLen, dbUy=(s.p2.y-s.p1.y)/dbLen;
+          const dbAh=8*ps, dbAs=3*ps;
+          const mkba=(ax,ay,dx,dy)=>
+            `M ${ax-dx*dbAh*0.5+dy*dbAs} ${ay-dy*dbAh*0.5-dx*dbAs} L ${ax} ${ay} L ${ax-dx*dbAh*0.5-dy*dbAs} ${ay-dy*dbAh*0.5+dx*dbAs}`;
+          el = `<g stroke="${stroke}" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round">`+
+            `<line x1="${s.p1.x}" y1="${s.p1.y}" x2="${s.p2.x}" y2="${s.p2.y}"/>`+
+            `<path d="${mkba(s.p2.x,s.p2.y,dbUx,dbUy)}"/>`+
+            `</g>`;
+          break;
+        }
+        case 'dim-radius': {
+          const rrRef=(shapes||[]).find(sh=>sh.id===s.shapeId);
+          if (!rrRef) break;
+          let rrcx,rrcy,rrR;
+          if (rrRef.type==='circle') {
+            rrcx=rrRef.cx; rrcy=rrRef.cy; rrR=rrRef.r;
+          } else if (rrRef.type==='curve') {
+            const rrpx=rrRef.px!==undefined?rrRef.px:(rrRef.x1+rrRef.x2)/2;
+            const rrpy=rrRef.py!==undefined?rrRef.py:(rrRef.y1+rrRef.y2)/2;
+            const rra=_cArc(rrRef.x1,rrRef.y1,rrRef.x2,rrRef.y2,rrpx,rrpy);
+            if (!rra) break;
+            rrcx=rra.cx; rrcy=rra.cy; rrR=rra.R;
+          } else break;
+          const rrOff=s.offset||{x:50*ps,y:-50*ps};
+          const rrEx=rrcx+rrOff.x, rrEy=rrcy+rrOff.y;
+          const rrLL=Math.hypot(rrOff.x,rrOff.y)||1;
+          const rrUx=rrOff.x/rrLL, rrUy=rrOff.y/rrLL;
+          const rrSx=rrcx+rrUx*rrR, rrSy=rrcy+rrUy*rrR;
+          el = `<g stroke="${stroke}" stroke-width="1.2" fill="none" stroke-linecap="round">`+
+            `<line x1="${rrSx.toFixed(2)}" y1="${rrSy.toFixed(2)}" x2="${rrEx.toFixed(2)}" y2="${rrEy.toFixed(2)}"/>`+
+            `<line x1="${rrEx.toFixed(2)}" y1="${rrEy.toFixed(2)}" x2="${(rrEx+12*ps).toFixed(2)}" y2="${rrEy.toFixed(2)}"/>`+
+            `</g>`;
           break;
         }
       }
