@@ -632,6 +632,25 @@
       projects[pi].pages.forEach((g, i) => { g.pageNumber = i + 1; });
       DB.saveProjects(projects);
     },
+    duplicatePage(projectId, pageId) {
+      const projects = DB.getProjects();
+      const pi = projects.findIndex(p => p.id === projectId);
+      if (pi === -1) return null;
+      const src = projects[pi].pages.find(g => g.id === pageId);
+      if (!src) return null;
+      let n = Date.now();
+      const uid = () => String(++n);
+      // Deep clone, then assign fresh IDs
+      const newPage = JSON.parse(JSON.stringify(src));
+      newPage.id = uid();
+      newPage.pageNumber = projects[pi].pages.length + 1;
+      newPage.title = (src.title?.trim() ? src.title.trim() + ' (Copy)' : '(Copy)');
+      if (newPage.rows)   newPage.rows   = newPage.rows.map(r => ({ ...r, id: uid() }));
+      if (newPage.shapes) newPage.shapes = newPage.shapes.map(s => ({ ...s, id: uid() }));
+      projects[pi].pages.push(newPage);
+      DB.saveProjects(projects);
+      return newPage;
+    },
     deleteProject(id) {
       DB.saveProjects(DB.getProjects().filter(p => p.id !== id));
     },
@@ -1594,7 +1613,7 @@
       const a = angle || 0;
       const rot = a ? ` transform="rotate(${a.toFixed(2)},${lx.toFixed(2)},${ly.toFixed(2)})"` : '';
       const esc = t => t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      return `<text x="${lx.toFixed(2)}" y="${ly.toFixed(2)}"${rot} font-size="${(9.5*ps).toFixed(2)}" font-family="Courier New,monospace" text-anchor="middle" dominant-baseline="middle" fill="#1C3829" stroke="rgba(255,255,255,0.90)" stroke-width="${(2.5*ps).toFixed(2)}" paint-order="stroke fill" style="pointer-events:none;user-select:none;">${esc(text)}</text>`;
+      return `<text x="${lx.toFixed(2)}" y="${ly.toFixed(2)}"${rot} font-size="${(12*ps).toFixed(2)}" font-family="Courier New,monospace" font-weight="bold" text-anchor="middle" dominant-baseline="middle" fill="#000000" stroke="#FFFFFF" stroke-width="${(3.5*ps).toFixed(2)}" style="pointer-events:none;user-select:none;paint-order:stroke fill;">${esc(text)}</text>`;
     }
 
     // ── Rotate a point around a pivot ────────────────────────────────────────
@@ -1793,8 +1812,8 @@
     const CR = _hexRgb('#FDFAF4');
     const GL = _hexRgb('#52B788');
 
-    // Full dark green page background
-    pdf.setFillColor(...GD);
+    // White page background (print-friendly — no dark ink bleed edge)
+    pdf.setFillColor(255, 255, 255);
     pdf.rect(0, 0, W, H, 'F');
 
     // Cream rounded rect — the "paper" inset
@@ -1953,8 +1972,8 @@
 
       // ── PAGE 1: TITLE PAGE ─────────────────────────────────────────────────
 
-      // Full-height dark green left band
-      pdf.setFillColor(...GD);
+      // White page background (print-friendly)
+      pdf.setFillColor(255, 255, 255);
       pdf.rect(0, 0, W, H, 'F');
 
       // Cream content panel (inset)
@@ -2055,22 +2074,23 @@
           // Generate SVG and render via html2canvas
           const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units, page.showDims !== false, true);
           if (svgStr && window.html2canvas) {
-            const vb = page.viewBox || { x: 0, y: 0, w: 800, h: 600 };
-            const outW = 1200, outH = Math.round(1200 * vb.h / vb.w);
+            const availW = W - margin*2;
+            // Render at portrait proportions matching the PDF content area so the
+            // drawing fills the full page height without clipping or tiny strips
+            const pdfOutW = 1600;
+            const pdfOutH = Math.round(pdfOutW * drawH / availW);
+            // Rewrite the SVG's width/height to portrait proportions while keeping
+            // the viewBox so content scales correctly via SVG's own aspect-ratio handling
+            const svgForPDF = svgStr.replace(/width="\d+" height="\d+"/, `width="${pdfOutW}" height="${pdfOutH}"`);
             const tmp = document.createElement('div');
-            tmp.style.cssText = `position:fixed;left:-9999px;top:-9999px;width:${outW}px;height:${outH}px;overflow:hidden;`;
-            tmp.innerHTML = svgStr.replace(`width="${outW}"`, `width="${outW}"`);
+            tmp.style.cssText = `position:fixed;left:-9999px;top:-9999px;width:${pdfOutW}px;height:${pdfOutH}px;overflow:hidden;background:transparent;`;
+            tmp.innerHTML = svgForPDF;
             document.body.appendChild(tmp);
             try {
-              const canvas = await window.html2canvas(tmp, { scale: 1.5, useCORS: true, logging: false, width: outW, height: outH, backgroundColor: null });
+              const canvas = await window.html2canvas(tmp, { scale: 1.5, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
               document.body.removeChild(tmp);
-              const availW = W - margin*2;
-              const aspect = canvas.width / canvas.height;
-              let imgW = availW, imgH = imgW / aspect;
-              if (imgH > drawH) { imgH = drawH; imgW = imgH * aspect; }
-              const imgX = margin + (availW - imgW) / 2;
-              const imgY = contentY + (drawH - imgH) / 2;
-              pdf.addImage(canvas.toDataURL('image/png'), 'PNG', imgX, imgY, imgW, imgH);
+              // Place image filling the entire content area
+              pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH);
               // North arrow and scale bar drawn directly in PDF (on top of sketch)
               if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
               if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin);
@@ -2085,54 +2105,79 @@
           }
 
         } else if (page.type === 'title') {
-          // ── TITLE PAGE ──────────────────────────────────────────────────────
+          // ── TITLE PAGE — professional cover sheet ────────────────────────────
           const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin);
           const BRD2 = _hexRgb('#DDD6C8');
-          let ty = contentY + 4;
+          const GD2 = _hexRgb('#1C3829');
+          const GM2 = _hexRgb('#2D6A4F');
+          const GL2 = _hexRgb('#52B788');
+          let ty = contentY + 6;
 
-          // Instrument settings — always rendered so the section is never missing.
-          // Empty fields show "—" so the surveyor can see what wasn't recorded.
-          const instrLine = [
-            `PPM: ${page.ppm        || '—'}`,
-            `Temp: ${page.temperature || '—'} °C`,
-            `Press: ${page.pressure  || '—'} hPa`,
-            `Prism K: ${page.prismConst || '—'} mm`,
-          ].join('    ');
-
-          const titleFields = [
-            ['LOCATION',                     page.location],
-            ['CREW & RESPONSIBILITIES',       page.crew],
-            ['EQUIPMENT (Make, Model, S/N)',  page.equipment],
-            ['DATUM & PROJECTION',            page.datum],
-            ['INSTRUMENT SETTINGS',           instrLine],
-            ['SUMMARY OF WORK',               page.summary],
-            ['CODE LIST',                     page.codeList],
-            ['DIGITAL FILE NAMES',            page.fileNames],
-          ];
-
-          for (const [lbl, val] of titleFields) {
-            if (!val?.trim()) continue;
-            if (ty > H - margin - 16) break;
-            const lines = pdf.splitTextToSize(val.trim(), W - margin * 2 - 8);
-            const blockH = lines.length * 4.5 + 12;
-
-            // Label
-            pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold');
-            pdf.setTextColor(107, 114, 128);
-            pdf.text(lbl, margin + 4, ty + 4);
-
-            // Value
-            pdf.setFontSize(9); pdf.setFont('helvetica', 'normal');
-            pdf.setTextColor(44, 44, 44);
-            pdf.text(lines, margin + 4, ty + 9.5);
-
-            // Divider
-            pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.3);
-            pdf.line(margin + 4, ty + blockH, W - margin - 4, ty + blockH);
-            ty += blockH + 3;
+          // Helper: draw a titled field block with left accent bar
+          function _titleField(lbl, val, opts = {}) {
+            if (!val?.trim() || ty > H - margin - 16) return;
+            const maxW = W - margin * 2 - 14;
+            const lines = pdf.splitTextToSize(val.trim(), maxW);
+            const lineH = opts.mono ? 5 : 4.8;
+            const blockH = lines.length * lineH + 13;
+            // Left accent bar
+            pdf.setFillColor(...GM2);
+            pdf.rect(margin + 2, ty, 2.5, blockH - 2, 'F');
+            // Section label
+            pdf.setFontSize(6); pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(...GL2);
+            pdf.text(lbl.toUpperCase(), margin + 8, ty + 5);
+            // Value text
+            pdf.setFontSize(opts.mono ? 8.5 : 9.5);
+            pdf.setFont(opts.mono ? 'courier' : 'helvetica', opts.bold ? 'bold' : 'normal');
+            pdf.setTextColor(28, 28, 28);
+            pdf.text(lines, margin + 8, ty + 10.5);
+            // Bottom rule
+            pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.25);
+            pdf.line(margin + 6, ty + blockH, W - margin - 4, ty + blockH);
+            ty += blockH + 4;
           }
 
-          if (ty === contentY + 4) {
+          // Instrument settings — compact 2-column grid
+          function _instrBlock() {
+            const instrItems = [
+              ['PPM',       page.ppm         || '—'],
+              ['Temp',      (page.temperature || '—') + ' °C'],
+              ['Pressure',  (page.pressure    || '—') + ' hPa'],
+              ['Prism K',   (page.prismConst  || '—') + ' mm'],
+            ];
+            if (ty > H - margin - 30) return;
+            const blockH = 20;
+            pdf.setFillColor(...GM2);
+            pdf.rect(margin + 2, ty, 2.5, blockH - 2, 'F');
+            pdf.setFontSize(6); pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(...GL2);
+            pdf.text('INSTRUMENT SETTINGS', margin + 8, ty + 5);
+            const colW = (W - margin * 2 - 14) / 2;
+            instrItems.forEach(([k, v], i) => {
+              const col = i % 2, row = Math.floor(i / 2);
+              const ix = margin + 8 + col * (colW + 2);
+              const iy = ty + 11 + row * 5.5;
+              pdf.setFontSize(6.5); pdf.setFont('courier', 'bold'); pdf.setTextColor(...GM2);
+              pdf.text(k + ':', ix, iy);
+              pdf.setFont('courier', 'normal'); pdf.setTextColor(28, 28, 28);
+              pdf.text(v, ix + 18, iy);
+            });
+            pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.25);
+            pdf.line(margin + 6, ty + blockH, W - margin - 4, ty + blockH);
+            ty += blockH + 4;
+          }
+
+          _titleField('Location',                   page.location);
+          _titleField('Crew & Responsibilities',    page.crew);
+          _titleField('Equipment (Make, Model, S/N)', page.equipment, { mono: true });
+          _titleField('Datum & Projection',         page.datum);
+          _instrBlock();
+          _titleField('Summary of Work',            page.summary);
+          _titleField('Code List',                  page.codeList, { mono: true });
+          _titleField('Digital File Names',         page.fileNames, { mono: true });
+
+          if (ty === contentY + 6) {
             // Nothing was rendered — all fields empty
             pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
             pdf.text('(No data entered)', W/2, contentY + 20, { align: 'center' });
@@ -2216,7 +2261,7 @@
       pdf.setPage(2);
 
       // Header
-      pdf.setFillColor(...GD);
+      pdf.setFillColor(255, 255, 255);
       pdf.rect(0, 0, W, H, 'F');
       pdf.setFillColor(...CR);
       pdf.roundedRect(margin, margin + 10, W - margin*2, H - margin*2 - 20, 4, 4, 'F');
@@ -2273,11 +2318,11 @@
       });
 
       // TOC footer
-      pdf.setFillColor(...GD);
-      pdf.rect(0, H - 10, W, 10, 'F');
-      pdf.setFontSize(6.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(...GL);
-      pdf.text(proj.name, margin, H - 4);
-      pdf.text('2', W - margin, H - 4, { align: 'right' });
+      pdf.setDrawColor(..._hexRgb('#DDD6C8')); pdf.setLineWidth(0.3);
+      pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
+      pdf.setFontSize(6.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(..._hexRgb('#2D6A4F'));
+      pdf.text(proj.name, margin + 4, H - margin - 4);
+      pdf.text('2', W - margin - 4, H - margin - 4, { align: 'right' });
 
       // ── Save ──────────────────────────────────────────────────────────────
       const fname = `${proj.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_fieldbook_${new Date().toISOString().split('T')[0]}.pdf`;
@@ -2323,60 +2368,89 @@
         const drawH = (H - margin - 14) - contentY;
         const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units, page.showDims !== false, true);
         if (svgStr && window.html2canvas) {
-          const vb = page.viewBox || { x: 0, y: 0, w: 800, h: 600 };
-          const outW = 1200, outH = Math.round(1200 * vb.h / vb.w);
+          const availW = W - margin*2;
+          // Render at portrait proportions matching the PDF content area
+          const pdfOutW = 1600;
+          const pdfOutH = Math.round(pdfOutW * drawH / availW);
+          const svgForPDF = svgStr.replace(/width="\d+" height="\d+"/, `width="${pdfOutW}" height="${pdfOutH}"`);
           const tmp = document.createElement('div');
-          tmp.style.cssText = `position:fixed;left:-9999px;top:-9999px;width:${outW}px;height:${outH}px;overflow:hidden;`;
-          tmp.innerHTML = svgStr;
+          tmp.style.cssText = `position:fixed;left:-9999px;top:-9999px;width:${pdfOutW}px;height:${pdfOutH}px;overflow:hidden;background:transparent;`;
+          tmp.innerHTML = svgForPDF;
           document.body.appendChild(tmp);
           try {
-            const canvas = await window.html2canvas(tmp, { scale: 1.5, useCORS: true, logging: false, width: outW, height: outH, backgroundColor: null });
+            const canvas = await window.html2canvas(tmp, { scale: 1.5, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
             document.body.removeChild(tmp);
-            const availW = W - margin*2;
-            const aspect = canvas.width / canvas.height;
-            let imgW = availW, imgH = imgW / aspect;
-            if (imgH > drawH) { imgH = drawH; imgW = imgH * aspect; }
-            pdf.addImage(canvas.toDataURL('image/png'), 'PNG',
-              margin + (availW - imgW) / 2, contentY + (drawH - imgH) / 2, imgW, imgH);
+            // Fill the entire content area
+            pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH);
             // North arrow and scale bar drawn directly in PDF (on top of sketch)
             if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
             if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin);
           } catch (_) { document.body.removeChild(tmp); }
         }
       } else if (page.type === 'title') {
+        // ── TITLE PAGE — professional cover sheet ──────────────────────────────
         const BRD2 = _hexRgb('#DDD6C8');
-        let ty = contentY + 4;
+        const GM2 = _hexRgb('#2D6A4F');
+        const GL2 = _hexRgb('#52B788');
+        let ty = contentY + 6;
 
-        const instrLine = [
-          `PPM: ${page.ppm        || '—'}`,
-          `Temp: ${page.temperature || '—'} °C`,
-          `Press: ${page.pressure  || '—'} hPa`,
-          `Prism K: ${page.prismConst || '—'} mm`,
-        ].join('    ');
-
-        const titleFields = [
-          ['LOCATION',                     page.location],
-          ['CREW & RESPONSIBILITIES',       page.crew],
-          ['EQUIPMENT (Make, Model, S/N)',  page.equipment],
-          ['DATUM & PROJECTION',            page.datum],
-          ['INSTRUMENT SETTINGS',           instrLine],
-          ['SUMMARY OF WORK',               page.summary],
-          ['CODE LIST',                     page.codeList],
-          ['DIGITAL FILE NAMES',            page.fileNames],
-        ];
-
-        for (const [lbl, val] of titleFields) {
-          if (!val?.trim() || ty > H - margin - 16) continue;
-          const lines = pdf.splitTextToSize(val.trim(), W - margin * 2 - 8);
-          const bH = lines.length * 4.5 + 12;
-          pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(107, 114, 128);
-          pdf.text(lbl, margin + 4, ty + 4);
-          pdf.setFontSize(9); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(44, 44, 44);
-          pdf.text(lines, margin + 4, ty + 9.5);
-          pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.3);
-          pdf.line(margin + 4, ty + bH, W - margin - 4, ty + bH);
-          ty += bH + 3;
+        function _titleFieldSP(lbl, val, opts = {}) {
+          if (!val?.trim() || ty > H - margin - 16) return;
+          const maxW = W - margin * 2 - 14;
+          const lines = pdf.splitTextToSize(val.trim(), maxW);
+          const lineH = opts.mono ? 5 : 4.8;
+          const blockH = lines.length * lineH + 13;
+          pdf.setFillColor(...GM2);
+          pdf.rect(margin + 2, ty, 2.5, blockH - 2, 'F');
+          pdf.setFontSize(6); pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(...GL2);
+          pdf.text(lbl.toUpperCase(), margin + 8, ty + 5);
+          pdf.setFontSize(opts.mono ? 8.5 : 9.5);
+          pdf.setFont(opts.mono ? 'courier' : 'helvetica', opts.bold ? 'bold' : 'normal');
+          pdf.setTextColor(28, 28, 28);
+          pdf.text(lines, margin + 8, ty + 10.5);
+          pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.25);
+          pdf.line(margin + 6, ty + blockH, W - margin - 4, ty + blockH);
+          ty += blockH + 4;
         }
+
+        function _instrBlockSP() {
+          const instrItems = [
+            ['PPM',       page.ppm         || '—'],
+            ['Temp',      (page.temperature || '—') + ' °C'],
+            ['Pressure',  (page.pressure    || '—') + ' hPa'],
+            ['Prism K',   (page.prismConst  || '—') + ' mm'],
+          ];
+          if (ty > H - margin - 30) return;
+          const blockH = 20;
+          pdf.setFillColor(...GM2);
+          pdf.rect(margin + 2, ty, 2.5, blockH - 2, 'F');
+          pdf.setFontSize(6); pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(...GL2);
+          pdf.text('INSTRUMENT SETTINGS', margin + 8, ty + 5);
+          const colW = (W - margin * 2 - 14) / 2;
+          instrItems.forEach(([k, v], i) => {
+            const col = i % 2, row = Math.floor(i / 2);
+            const ix = margin + 8 + col * (colW + 2);
+            const iy = ty + 11 + row * 5.5;
+            pdf.setFontSize(6.5); pdf.setFont('courier', 'bold'); pdf.setTextColor(...GM2);
+            pdf.text(k + ':', ix, iy);
+            pdf.setFont('courier', 'normal'); pdf.setTextColor(28, 28, 28);
+            pdf.text(v, ix + 18, iy);
+          });
+          pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.25);
+          pdf.line(margin + 6, ty + blockH, W - margin - 4, ty + blockH);
+          ty += blockH + 4;
+        }
+
+        _titleFieldSP('Location',                    page.location);
+        _titleFieldSP('Crew & Responsibilities',     page.crew);
+        _titleFieldSP('Equipment (Make, Model, S/N)', page.equipment, { mono: true });
+        _titleFieldSP('Datum & Projection',          page.datum);
+        _instrBlockSP();
+        _titleFieldSP('Summary of Work',             page.summary);
+        _titleFieldSP('Code List',                   page.codeList, { mono: true });
+        _titleFieldSP('Digital File Names',          page.fileNames, { mono: true });
       } else {
         const cols = page.columns || [], rows = page.rows || [];
         if (cols.length === 0) {
@@ -2670,6 +2744,7 @@
                     canMoveDown={idx < project.pages.length - 1}
                     onMoveUp={() => { DB.reorderPages(projectId, idx, idx - 1); reload(); }}
                     onMoveDown={() => { DB.reorderPages(projectId, idx, idx + 1); reload(); }}
+                    onDuplicate={() => { DB.duplicatePage(projectId, pg.id); reload(); }}
                   />
                 ))}
               </div>
@@ -2697,13 +2772,13 @@
     );
   }
 
-  function PageListRow({ page, projectId, canMoveUp, canMoveDown, onMoveUp, onMoveDown }) {
+  function PageListRow({ page, projectId, canMoveUp, canMoveDown, onMoveUp, onMoveDown, onDuplicate }) {
     const meta = TYPE_META[page.type] || TYPE_META.data;
     const rowCount = page.rows?.length || 0;
     const displayTitle = page.title && page.title.trim() ? page.title.trim() : null;
     return (
       <div className="flex items-stretch gap-1">
-        {/* Reorder buttons */}
+        {/* Reorder + duplicate buttons */}
         <div className="flex flex-col gap-0.5 flex-shrink-0 justify-center">
           <button
             onClick={canMoveUp ? onMoveUp : undefined}
@@ -2718,6 +2793,13 @@
             className="w-7 h-7 flex items-center justify-center rounded-lg transition-colors"
             style={{ color: canMoveDown ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)' }}>
             <Ico.ChevDown />
+          </button>
+          <button
+            onClick={onDuplicate}
+            title="Duplicate page"
+            className="w-7 h-7 flex items-center justify-center rounded-lg transition-colors"
+            style={{ color: 'rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.05)', fontSize: 13 }}>
+            ⧉
           </button>
         </div>
         {/* Main row */}
@@ -3499,7 +3581,7 @@
     const [dragOverCol,  setDragOverCol]  = useState(null);
     const [dragStartRow, setDragStartRow] = useState(null);
     const [dragOverRow,  setDragOverRow]  = useState(null);
-    const [headerOpen, setHeaderOpen]       = useState(true);
+    const [headerOpen, setHeaderOpen]       = useState(false);
     const [fillDragRow, setFillDragRow]     = useState(null); // row index the fill handle is dragged to
     const inputRef        = useRef(null);
     const fbInputRef      = useRef(null);
@@ -3512,6 +3594,8 @@
     const isDraggingSelRef = useRef(false); // true while mouse-drag cell selection is active
     const fbFocusedRef     = useRef(false); // true while formula bar input has focus
     const fillDragRef      = useRef({ active: false, startRow: -1, startCol: -1 });
+    const lpTimerRef       = useRef(null);  // long-press timer ID (touch only)
+    const lpStartRef       = useRef(null);  // { x, y, ri, ci } at touch pointerdown
     useFocusTrap(colModalRef, !!colModal, () => setColModal(null));
     useFocusTrap(templateModalRef, templateModal, () => setTemplateModal(false));
     const toast = useToast();
@@ -4659,6 +4743,42 @@
 
         {/* ── Table ── */}
         <div ref={tableRef} tabIndex={0} onKeyDown={handleGridKeyDown} onPaste={handleGridPaste}
+          onPointerMove={e => {
+            // Cancel long-press if finger has scrolled (moved > 8px before timer fires)
+            if (e.pointerType === 'touch' && lpStartRef.current && lpTimerRef.current) {
+              const dx = e.clientX - lpStartRef.current.x;
+              const dy = e.clientY - lpStartRef.current.y;
+              if (Math.hypot(dx, dy) > 8) {
+                clearTimeout(lpTimerRef.current);
+                lpTimerRef.current = null;
+                lpStartRef.current = null;
+              }
+            }
+            // Edge-scroll while drag-selecting
+            if (isDraggingSelRef.current && tableRef.current) {
+              const rect = tableRef.current.getBoundingClientRect();
+              const EDGE = 44, SPEED = 10;
+              if (e.clientY < rect.top    + EDGE) tableRef.current.scrollTop  -= SPEED;
+              if (e.clientY > rect.bottom - EDGE) tableRef.current.scrollTop  += SPEED;
+              if (e.clientX < rect.left   + EDGE) tableRef.current.scrollLeft -= SPEED;
+              if (e.clientX > rect.right  - EDGE) tableRef.current.scrollLeft += SPEED;
+            }
+          }}
+          onPointerUp={e => {
+            if (e.pointerType !== 'touch') return;
+            // Short tap (timer still running) = single-cell select, no drag
+            if (lpTimerRef.current) {
+              clearTimeout(lpTimerRef.current);
+              lpTimerRef.current = null;
+              if (lpStartRef.current) {
+                activateCell(lpStartRef.current.ri, lpStartRef.current.ci);
+                lpStartRef.current = null;
+              }
+            } else {
+              lpStartRef.current = null;
+            }
+            isDraggingSelRef.current = false;
+          }}
           style={{ flex: 1, overflowX: 'auto', overflowY: 'auto', background: '#FDFAF4', outline: 'none' }}>
           <table className="fb-table" style={{ tableLayout: 'fixed', width: 'max-content', minWidth: '100%' }}>
             <thead>
@@ -4754,15 +4874,30 @@
                             return;
                           }
 
-                          isDraggingSelRef.current = true;
-                          if (e.shiftKey && activeCell) {
-                            if (!selectionAnchor) setSelectionAnchor(activeCell);
-                            setActiveCell({ rowIdx: ri, colIdx: ci });
-                            const row2 = rows[ri], col2 = columns[ci];
-                            if (row2 && col2) setFormulaBarVal((row2.cells || {})[col2.id] || '');
-                            if (tableRef.current) tableRef.current.focus();
+                          if (e.pointerType === 'touch') {
+                            // Touch: don't select immediately — prevent scroll-while-selecting
+                            // Long press (400ms) activates drag-select with haptic feedback
+                            if (lpTimerRef.current) clearTimeout(lpTimerRef.current);
+                            lpStartRef.current = { x: e.clientX, y: e.clientY, ri, ci };
+                            lpTimerRef.current = setTimeout(() => {
+                              lpTimerRef.current = null;
+                              isDraggingSelRef.current = true;
+                              activateCell(lpStartRef.current.ri, lpStartRef.current.ci);
+                              if (navigator.vibrate) navigator.vibrate(50);
+                            }, 400);
+                            // Don't preventDefault — allows native scroll to work
                           } else {
-                            activateCell(ri, ci);
+                            // Mouse / stylus: existing behavior (immediate selection)
+                            isDraggingSelRef.current = true;
+                            if (e.shiftKey && activeCell) {
+                              if (!selectionAnchor) setSelectionAnchor(activeCell);
+                              setActiveCell({ rowIdx: ri, colIdx: ci });
+                              const row2 = rows[ri], col2 = columns[ci];
+                              if (row2 && col2) setFormulaBarVal((row2.cells || {})[col2.id] || '');
+                              if (tableRef.current) tableRef.current.focus();
+                            } else {
+                              activateCell(ri, ci);
+                            }
                           }
                         }}
                         onPointerEnter={e => {
