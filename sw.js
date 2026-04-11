@@ -4,7 +4,7 @@
 // Bump this string every time you deploy new code.
 // The activate handler deletes any cache with a different name, forcing
 // browsers and installed PWAs to discard stale files and re-fetch everything.
-const CACHE_NAME = 'fieldbook-v97';
+const CACHE_NAME = 'fieldbook-v99';
 
 // Core app shell files to pre-cache on install
 const APP_SHELL = [

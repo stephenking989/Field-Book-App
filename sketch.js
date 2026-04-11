@@ -164,6 +164,14 @@ const SketchIco = {
       <text x="13" y="8" fontSize="5" fill="currentColor" stroke="none" fontFamily="sans-serif" fontWeight="bold">R</text>
     </svg>
   ),
+  // Image — rectangle with mountain scene
+  Image: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="4" width="16" height="12" rx="1.5"/>
+      <circle cx="7" cy="8.5" r="1.5" fill="currentColor" fillOpacity="0.6"/>
+      <path d="M2 14 L7 10 L10 13 L14 9 L18 14" strokeWidth="1.3" opacity="0.7"/>
+    </svg>
+  ),
 };
 
 const TOOLS = [
@@ -182,6 +190,7 @@ const TOOLS = [
   { id: 'dim-angle',   label: 'Angle',   icon: <SketchIco.DimAngle /> },
   { id: 'dim-bearing', label: 'Bearing', icon: <SketchIco.DimBearing /> },
   { id: 'dim-radius',  label: 'Radius',  icon: <SketchIco.DimRadius /> },
+  { id: 'image',       label: 'Image',   icon: <SketchIco.Image />,  action: 'import' },
 ];
 
 function newId() { return 's_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6); }
@@ -196,6 +205,7 @@ function getShapePivot(shape) {
     case 'curve':  return { x: (shape.x1+shape.x2)/2,          y: (shape.y1+shape.y2)/2          };
     case 'circle': return { x: shape.cx,                        y: shape.cy                       };
     case 'rect':   return { x: shape.x + shape.w/2,             y: shape.y + shape.h/2            };
+    case 'image':  return { x: shape.x + shape.w/2,             y: shape.y + shape.h/2            };
     case 'text':   return { x: shape.x,                          y: shape.y                        }; // s.x/y is center
     case 'path': {
       if (!shape.nodes || shape.nodes.length === 0) return { x: 0, y: 0 };
@@ -2526,6 +2536,44 @@ function SketchPage({ page, projectId, onReload }) {
     persist(undefined, val);
   }
 
+  // ── Image import ────────────────────────────────────────────────────────────
+  // Opens a file picker, compresses the chosen image via window._fb.compressImage,
+  // then places it as an 'image' shape centred in the current view.
+  function handleImageImport() {
+    const compress = window._fb?.compressImage;
+    if (!compress) return;
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    inp.onchange = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const dataUrl = await compress(file);
+        const img = new Image();
+        img.onload = () => {
+          const aspect = (img.naturalWidth || 4) / (img.naturalHeight || 3);
+          const w = viewBox.w * 0.5;
+          const h = w / aspect;
+          const x = viewBox.x + viewBox.w / 2 - w / 2;
+          const y = viewBox.y + viewBox.h / 2 - h / 2;
+          const shape = {
+            id: newId(), type: 'image', dataUrl,
+            x, y, w, h,
+            layerId: layers[0]?.id,
+            stroke: 'none', strokeWidth: 0,
+          };
+          commitShapes([...shapes, shape]);
+          setSelectedIds([shape.id]);
+          setTool('select');
+          setPrevTool(null);
+        };
+        img.src = dataUrl;
+      } catch { /* user cancelled or read error */ }
+    };
+    inp.click();
+  }
+
   // ── Node positions per shape type ──────────────────────────────────────────
   // Returns array of {key, x, y, type: 'endpoint'|'control'}
   function getNodes(shape) {
@@ -2549,6 +2597,13 @@ function SketchPage({ page, projectId, onReload }) {
           { key: 'r',  x: shape.cx + shape.r, y: shape.cy, type: 'control'  },
         ];
       case 'rect':
+        return [
+          { key: 'tl', x: shape.x,           y: shape.y,           type: 'endpoint' },
+          { key: 'tr', x: shape.x + shape.w, y: shape.y,           type: 'endpoint' },
+          { key: 'bl', x: shape.x,           y: shape.y + shape.h, type: 'endpoint' },
+          { key: 'br', x: shape.x + shape.w, y: shape.y + shape.h, type: 'endpoint' },
+        ];
+      case 'image':
         return [
           { key: 'tl', x: shape.x,           y: shape.y,           type: 'endpoint' },
           { key: 'tr', x: shape.x + shape.w, y: shape.y,           type: 'endpoint' },
@@ -2633,6 +2688,7 @@ function SketchPage({ page, projectId, onReload }) {
         }
         case 'circle': return { ...shape, cx:shape.cx+dx, cy:shape.cy+dy, ...(piv && {_pivot:piv}) };
         case 'rect':   return { ...shape, x:shape.x+dx, y:shape.y+dy, ...(piv && {_pivot:piv}) };
+        case 'image':  return { ...shape, x:shape.x+dx, y:shape.y+dy, ...(piv && {_pivot:piv}) };
         case 'text':   return { ...shape, x:shape.x+dx, y:shape.y+dy, ...(piv && {_pivot:piv}) };
         case 'path': {
           return {
@@ -2771,6 +2827,44 @@ function SketchPage({ page, projectId, onReload }) {
           const nw = Math.max(10, Math.abs(diagLx));
           const nh = Math.max(10, Math.abs(diagLy));
           // New top-left: new world center is also the new local center (rotation is about center)
+          return { ...shape, x: Ncx - nw / 2, y: Ncy - nh / 2, w: nw, h: nh };
+        }
+        break;
+      }
+      case 'image': {
+        // Image shares the same x,y,w,h geometry as rect — reuse identical corner logic.
+        const rot = shape._rot || 0;
+        if (!rot) {
+          if (nodeKey === 'tl') return { ...shape, x: shape.x+dx, y: shape.y+dy, w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h-dy) };
+          if (nodeKey === 'tr') return { ...shape,                y: shape.y+dy, w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h-dy) };
+          if (nodeKey === 'bl') return { ...shape, x: shape.x+dx,                w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h+dy) };
+          if (nodeKey === 'br') return { ...shape,                                w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h+dy) };
+        } else {
+          const rad = rot * Math.PI / 180;
+          const cos = Math.cos(rad), sin = Math.sin(rad);
+          const wdx = dx * cos - dy * sin;
+          const wdy = dx * sin + dy * cos;
+          const pivot = getShapePivot(shape);
+          const pcx = pivot.x, pcy = pivot.y;
+          const C = {
+            tl: { x: shape.x,           y: shape.y           },
+            tr: { x: shape.x + shape.w, y: shape.y           },
+            bl: { x: shape.x,           y: shape.y + shape.h },
+            br: { x: shape.x + shape.w, y: shape.y + shape.h },
+          };
+          const opp = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' }[nodeKey];
+          if (!opp) break;
+          const Lf = C[opp], Ld = C[nodeKey];
+          const Wfx = pcx + (Lf.x - pcx)*cos - (Lf.y - pcy)*sin;
+          const Wfy = pcy + (Lf.x - pcx)*sin + (Lf.y - pcy)*cos;
+          const Wdx = pcx + (Ld.x - pcx)*cos - (Ld.y - pcy)*sin + wdx;
+          const Wdy = pcy + (Ld.x - pcx)*sin + (Ld.y - pcy)*cos + wdy;
+          const Ncx = (Wfx + Wdx) / 2, Ncy = (Wfy + Wdy) / 2;
+          const diagWx = Wdx - Wfx, diagWy = Wdy - Wfy;
+          const diagLx = diagWx * cos + diagWy * sin;
+          const diagLy = -diagWx * sin + diagWy * cos;
+          const nw = Math.max(10, Math.abs(diagLx));
+          const nh = Math.max(10, Math.abs(diagLy));
           return { ...shape, x: Ncx - nw / 2, y: Ncy - nh / 2, w: nw, h: nh };
         }
         break;
@@ -4210,6 +4304,10 @@ function SketchPage({ page, projectId, onReload }) {
             if (nearLeft || nearRight || nearTop || nearBottom) return s;
           }
         }
+      } else if (s.type === 'image') {
+        // Images are fully filled — hit anywhere inside the bounding box
+        if (tp.x >= s.x - thresh && tp.x <= s.x + s.w + thresh &&
+            tp.y >= s.y - thresh && tp.y <= s.y + s.h + thresh) return s;
       } else if (s.type === 'text') {
         // s.x/y = world center; s.w/h = screen pixels. Convert half-extents to world units.
         const _psHT = viewBox.w / (svgSizeRef.current.w || viewBox.w);
@@ -4313,6 +4411,7 @@ function SketchPage({ page, projectId, onReload }) {
       case 'circle':
         minX=s.cx-s.r; maxX=s.cx+s.r; minY=s.cy-s.r; maxY=s.cy+s.r; break;
       case 'rect':
+      case 'image':
         minX=s.x; maxX=s.x+s.w; minY=s.y; maxY=s.y+s.h; break;
       case 'curve': {
         const { px: cpx, py: cpy } = getCurvePI(s);
@@ -4923,6 +5022,7 @@ function SketchPage({ page, projectId, onReload }) {
           add(s.cx-s.r,s.cy); add(s.cx+s.r,s.cy);
           add(s.cx,s.cy-s.r); add(s.cx,s.cy+s.r); break;
         case 'rect':
+        case 'image':
           add(s.x,s.y); add(s.x+s.w,s.y);
           add(s.x,s.y+s.h); add(s.x+s.w,s.y+s.h); break;
         case 'text': {
@@ -5011,6 +5111,11 @@ function SketchPage({ page, projectId, onReload }) {
       case 'rect':
         inner = <rect x={s.x} y={s.y} width={s.w} height={s.h}
           stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill={s.fill || 'none'} style={sel} />;
+        break;
+      case 'image':
+        if (!s.dataUrl) return null;
+        inner = <image href={s.dataUrl} x={s.x} y={s.y} width={s.w} height={s.h}
+          preserveAspectRatio="none" style={sel} />;
         break;
       case 'text': {
         // Text is rendered as counter-scaled SVG text elements so it stays the
@@ -6677,6 +6782,8 @@ function SketchPage({ page, projectId, onReload }) {
                 <button
                   key={t.id}
                   onClick={() => {
+                    // Image tool: action button — opens file picker, does not set tool state
+                    if (t.action === 'import') { handleImageImport(); return; }
                     // If a pen path is in progress, commit it as an open path before switching
                     if (tool === 'pen' && penNodes.length >= 2) {
                       commitPenPath(false);
