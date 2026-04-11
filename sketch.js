@@ -1917,8 +1917,16 @@ function SketchPage({ page, projectId, onReload }) {
   const [nodeSelectedId,  setNodeSelectedId]  = useState(null);
   // nodeSelectedIdx: index of the selected node within the path (for type conversion)
   const [nodeSelectedIdx, setNodeSelectedIdx] = useState(null);
+  // nodeSelectedIndices: Set of node indices selected for multi-node operations
+  const [nodeSelectedIndices, setNodeSelectedIndices] = useState(new Set());
+  // nodeMarquee: rubber-band selection rect for node tool { ox,oy,x,y,w,h }
+  const [nodeMarquee, setNodeMarquee] = useState(null);
   // nodeDrag: active node/handle drag state for Node tool
   const nodeDragRef       = useRef(null); // { shapeId, type:'node'|'cp1'|'cp2'|'seg', nodeIdx, segIdx, startX, startY, snapshot }
+
+  // ── Layers panel state ───────────────────────────────────────────────────────────────────────────
+  // lastPanelClickId: last shape tile clicked in the layers panel (for shift-click range)
+  const [lastPanelClickId, setLastPanelClickId] = useState(null);
 
   const svgRef      = useRef(null);
   const svgWrapRef  = useRef(null);
@@ -3240,7 +3248,24 @@ function SketchPage({ page, projectId, onReload }) {
         for (let i = 0; i < pathShape.nodes.length; i++) {
           const node = pathShape.nodes[i];
           if (Math.hypot(pt.x - node.x, pt.y - node.y) < nodeHitR) {
+            // Shift+click: toggle this node in multi-selection
+            if (e.shiftKey) {
+              setNodeSelectedIndices(prev => {
+                const next = new Set(prev);
+                next.has(i) ? next.delete(i) : next.add(i);
+                return next;
+              });
+              setNodeSelectedIdx(i);
+              return;
+            }
+            // If clicking a node already in the multi-selection, preserve multi-selection for drag
+            const multiIds = nodeSelectedIndices.size > 1 && nodeSelectedIndices.has(i)
+              ? [...nodeSelectedIndices] : null;
+            if (!multiIds) {
+              setNodeSelectedIndices(new Set([i]));
+            }
             nodeDragRef.current = { shapeId: pathShape.id, type: 'node', nodeIdx: i,
+              multiNodeIndices: multiIds,
               startX: pt.x, startY: pt.y, snapshot: shapes };
             setNodeSelectedIdx(i);
             e.currentTarget.setPointerCapture(e.pointerId);
@@ -3357,22 +3382,29 @@ function SketchPage({ page, projectId, onReload }) {
         setNodeSelectedIdx(null);
         nodeDragRef.current = null;
       } else {
-        // Click on empty space — deselect, deferred for touch (same pattern as select tool)
+        // Click on empty space
         nodeDragRef.current = null;
-        if (e.pointerType === 'touch') {
-          if (pendingDeselectRef.current) clearTimeout(pendingDeselectRef.current);
-          pendingDeselectRef.current = setTimeout(() => {
-            pendingDeselectRef.current = null;
-            if (activePtrsRef.current.size < 2) {
-              setSelectedIds([]);
-              setNodeSelectedId(null);
-              setNodeSelectedIdx(null);
-            }
-          }, 100);
+        if (nodeSelectedId) {
+          // Path is selected — start a node marquee to rubber-band select nodes
+          if (!e.shiftKey) setNodeSelectedIndices(new Set());
+          setNodeMarquee({ ox: pt.x, oy: pt.y, x: pt.x, y: pt.y, w: 0, h: 0, _shift: e.shiftKey });
         } else {
-          setSelectedIds([]);
-          setNodeSelectedId(null);
-          setNodeSelectedIdx(null);
+          // No path selected — deselect, deferred for touch
+          if (e.pointerType === 'touch') {
+            if (pendingDeselectRef.current) clearTimeout(pendingDeselectRef.current);
+            pendingDeselectRef.current = setTimeout(() => {
+              pendingDeselectRef.current = null;
+              if (activePtrsRef.current.size < 2) {
+                setSelectedIds([]);
+                setNodeSelectedId(null);
+                setNodeSelectedIdx(null);
+              }
+            }, 100);
+          } else {
+            setSelectedIds([]);
+            setNodeSelectedId(null);
+            setNodeSelectedIdx(null);
+          }
         }
       }
     }
@@ -3680,6 +3712,16 @@ function SketchPage({ page, projectId, onReload }) {
       }
     }
 
+    // Node tool: update node marquee rubber-band rect
+    if (tool === 'node' && nodeMarquee) {
+      setNodeMarquee(m => m ? {
+        ...m,
+        x: Math.min(m.ox, rawPt.x), y: Math.min(m.oy, rawPt.y),
+        w: Math.abs(rawPt.x - m.ox), h: Math.abs(rawPt.y - m.oy),
+      } : null);
+      return;
+    }
+
     // Node tool: handle active drag
     if (tool === 'node' && nodeDragRef.current) {
       const drag = nodeDragRef.current;
@@ -3691,13 +3733,21 @@ function SketchPage({ page, projectId, onReload }) {
           const node = nodes[drag.nodeIdx];
           const dx = sp.x - node.x;
           const dy = sp.y - node.y;
-          // Move node and its handles together
-          node.x    = sp.x;
-          node.y    = sp.y;
-          node.cp1x = node.cp1x + dx;
-          node.cp1y = node.cp1y + dy;
-          node.cp2x = node.cp2x + dx;
-          node.cp2y = node.cp2y + dy;
+          // Multi-node drag: move all selected nodes by the same delta
+          if (drag.multiNodeIndices) {
+            for (const idx of drag.multiNodeIndices) {
+              if (idx >= 0 && idx < nodes.length) {
+                nodes[idx].x    += dx; nodes[idx].y    += dy;
+                nodes[idx].cp1x += dx; nodes[idx].cp1y += dy;
+                nodes[idx].cp2x += dx; nodes[idx].cp2y += dy;
+              }
+            }
+          } else {
+            // Single node: move it and its handles together
+            node.x    = sp.x; node.y    = sp.y;
+            node.cp1x = node.cp1x + dx; node.cp1y = node.cp1y + dy;
+            node.cp2x = node.cp2x + dx; node.cp2y = node.cp2y + dy;
+          }
         } else if (drag.type === 'cp1') {
           const node = nodes[drag.nodeIdx];
           node.cp1x = sp.x;
@@ -3890,6 +3940,27 @@ function SketchPage({ page, projectId, onReload }) {
       commitShapes(shapes);
       setDragNode(null);
       setDragStart(null);
+      return;
+    }
+
+    // Node tool: commit node marquee selection on pointer up
+    if (tool === 'node' && nodeMarquee) {
+      const { x, y, w, h } = nodeMarquee;
+      setNodeMarquee(null);
+      if (w > 4 && h > 4 && nodeSelectedId) {
+        const _psh = shapes.find(s => s.id === nodeSelectedId);
+        if (_psh && _psh.nodes) {
+          const inRect = new Set();
+          _psh.nodes.forEach((n, i) => {
+            if (n.x >= x && n.x <= x + w && n.y >= y && n.y <= y + h) inRect.add(i);
+          });
+          if (inRect.size > 0) {
+            setNodeSelectedIndices(prev =>
+              nodeMarquee._shift ? new Set([...prev, ...inRect]) : inRect
+            );
+          }
+        }
+      }
       return;
     }
 
@@ -4666,6 +4737,10 @@ function SketchPage({ page, projectId, onReload }) {
         if (d.targetIdx !== d.origIdx) {
           if (d.type === 'layer') reorderLayer(d.id, d.origIdx, d.targetIdx);
           else reorderShapeInLayer(d.id, d.origIdx, d.targetIdx);
+        }
+        // Restore layer collapse state if it was auto-collapsed for drag
+        if (d.type === 'layer' && !d.wasCollapsed) {
+          setCollapsedLayers(prev => { const next = new Set(prev); next.delete(d.id); return next; });
         }
         return null;
       });
@@ -6771,43 +6846,55 @@ function SketchPage({ page, projectId, onReload }) {
               if (!pathShape || !pathShape.nodes) return null;
               const _ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
               return (
-                <g style={{ pointerEvents: 'none' }}>
-                  {pathShape.nodes.map((n, i) => {
-                    const isSelected = i === nodeSelectedIdx;
-                    const hasHandles = n.type !== 'sharp';
-                    return (
-                      <g key={i}>
-                        {/* cp1 handle line + dot */}
-                        {hasHandles && (Math.abs(n.cp1x - n.x) > 0.5 || Math.abs(n.cp1y - n.y) > 0.5) && (
-                          <>
-                            <line x1={n.x} y1={n.y} x2={n.cp1x} y2={n.cp1y}
-                              stroke="rgba(99,102,241,0.6)" strokeWidth={_ps} />
-                            <circle cx={n.cp1x} cy={n.cp1y} r={3.5 * _ps}
-                              fill="rgba(99,102,241,0.8)" stroke="white" strokeWidth={_ps} />
-                          </>
-                        )}
-                        {/* cp2 handle line + dot */}
-                        {hasHandles && (Math.abs(n.cp2x - n.x) > 0.5 || Math.abs(n.cp2y - n.y) > 0.5) && (
-                          <>
-                            <line x1={n.x} y1={n.y} x2={n.cp2x} y2={n.cp2y}
-                              stroke="rgba(99,102,241,0.6)" strokeWidth={_ps} />
-                            <circle cx={n.cp2x} cy={n.cp2y} r={3.5 * _ps}
-                              fill="rgba(99,102,241,0.8)" stroke="white" strokeWidth={_ps} />
-                          </>
-                        )}
-                        {/* On-curve node */}
-                        <rect
-                          x={n.x - 4 * _ps} y={n.y - 4 * _ps}
-                          width={8 * _ps} height={8 * _ps}
-                          fill={isSelected ? '#3B82F6' : 'white'}
-                          stroke={isSelected ? 'white' : '#3B82F6'}
-                          strokeWidth={1.5 * _ps}
-                          style={{ pointerEvents: 'all', cursor: 'move' }}
-                        />
-                      </g>
-                    );
-                  })}
-                </g>
+                <>
+                  <g style={{ pointerEvents: 'none' }}>
+                    {pathShape.nodes.map((n, i) => {
+                      // A node is "selected" if it's the active single node OR in the multi-selection set
+                      const isSelected = i === nodeSelectedIdx || nodeSelectedIndices.has(i);
+                      const hasHandles = n.type !== 'sharp';
+                      return (
+                        <g key={i}>
+                          {/* Show cp handles only for the active single-selected node */}
+                          {hasHandles && i === nodeSelectedIdx && (Math.abs(n.cp1x - n.x) > 0.5 || Math.abs(n.cp1y - n.y) > 0.5) && (
+                            <>
+                              <line x1={n.x} y1={n.y} x2={n.cp1x} y2={n.cp1y}
+                                stroke="rgba(99,102,241,0.6)" strokeWidth={_ps} />
+                              <circle cx={n.cp1x} cy={n.cp1y} r={3.5 * _ps}
+                                fill="rgba(99,102,241,0.8)" stroke="white" strokeWidth={_ps} />
+                            </>
+                          )}
+                          {hasHandles && i === nodeSelectedIdx && (Math.abs(n.cp2x - n.x) > 0.5 || Math.abs(n.cp2y - n.y) > 0.5) && (
+                            <>
+                              <line x1={n.x} y1={n.y} x2={n.cp2x} y2={n.cp2y}
+                                stroke="rgba(99,102,241,0.6)" strokeWidth={_ps} />
+                              <circle cx={n.cp2x} cy={n.cp2y} r={3.5 * _ps}
+                                fill="rgba(99,102,241,0.8)" stroke="white" strokeWidth={_ps} />
+                            </>
+                          )}
+                          {/* On-curve node: blue when selected, white when unselected */}
+                          <rect
+                            x={n.x - 4 * _ps} y={n.y - 4 * _ps}
+                            width={8 * _ps} height={8 * _ps}
+                            fill={isSelected ? '#3B82F6' : 'white'}
+                            stroke={isSelected ? 'white' : '#6366F1'}
+                            strokeWidth={1.5 * _ps}
+                            style={{ pointerEvents: 'all', cursor: 'move' }}
+                          />
+                        </g>
+                      );
+                    })}
+                  </g>
+                  {/* Node marquee rubber-band selection rect */}
+                  {nodeMarquee && nodeMarquee.w > 2 && nodeMarquee.h > 2 && (
+                    <rect
+                      x={nodeMarquee.x} y={nodeMarquee.y}
+                      width={nodeMarquee.w} height={nodeMarquee.h}
+                      fill="rgba(99,102,241,0.08)" stroke="#6366F1"
+                      strokeWidth={_ps} strokeDasharray={`${4*_ps},${3*_ps}`}
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  )}
+                </>
               );
             })()}
 
@@ -7049,6 +7136,38 @@ function SketchPage({ page, projectId, onReload }) {
                 }}>+</button>
               </div>
 
+              {/* Move-to-layer strip — visible when 2+ shapes are selected */}
+              {selectedIds.length >= 2 && (
+                <div style={{
+                  padding: '4px 6px', borderBottom: '1px solid rgba(255,255,255,0.08)',
+                  display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+                }}>
+                  <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', flexShrink: 0 }}>
+                    {selectedIds.length} selected →
+                  </span>
+                  <select
+                    onChange={e => {
+                      const targetLayerId = e.target.value;
+                      if (!targetLayerId) return;
+                      commitShapes(shapes.map(s =>
+                        selectedIds.includes(s.id) ? { ...s, layerId: targetLayerId } : s
+                      ));
+                    }}
+                    defaultValue=""
+                    style={{
+                      flex: 1, fontSize: 9, background: 'rgba(255,255,255,0.07)',
+                      border: '1px solid rgba(255,255,255,0.18)', borderRadius: 3,
+                      color: 'rgba(255,255,255,0.65)', padding: '1px 3px', outline: 'none',
+                    }}
+                  >
+                    <option value="" disabled>Move to layer…</option>
+                    {layers.map(l => (
+                      <option key={l.id} value={l.id}>{l.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {/* Layer list — reversed so top of list = topmost render layer */}
               <div style={{ flex: 1, overflowY: 'auto' }}>
                 {[...layers].reverse().map((layer) => {
@@ -7075,7 +7194,7 @@ function SketchPage({ page, projectId, onReload }) {
                               cursor:'pointer', opacity: _lDrag ? 0.35 : 1,
                             }}
                           >
-                            {/* Layer drag handle — long press to reorder */}
+                            {/* Layer drag handle — hold to reorder (mouse: 150ms, touch: 400ms+vibrate) */}
                             <span
                               style={{fontSize:9,color:'rgba(255,255,255,0.2)',cursor:'grab',
                                 flexShrink:0,padding:'0 1px',userSelect:'none',touchAction:'none'}}
@@ -7083,15 +7202,18 @@ function SketchPage({ page, projectId, onReload }) {
                                 e.stopPropagation();
                                 const _sy=e.clientY;
                                 if(panelDragTimerRef.current) clearTimeout(panelDragTimerRef.current);
-                                panelDragTimerRef.current=setTimeout(()=>{
+                                const _startLayerDrag=()=>{
                                   panelDragTimerRef.current=null;
-                                  if(navigator.vibrate) navigator.vibrate(40);
+                                  if(e.pointerType==='touch'&&navigator.vibrate) navigator.vibrate(40);
                                   const _i=layers.findIndex(l=>l.id===layer.id);
-                                  setPanelDrag({type:'layer',id:layer.id,origIdx:_i,targetIdx:_i,startY:_sy});
-                                },400);
+                                  const _wasC=collapsedLayers.has(layer.id);
+                                  setCollapsedLayers(prev=>new Set([...prev,layer.id]));
+                                  setPanelDrag({type:'layer',id:layer.id,origIdx:_i,targetIdx:_i,startY:_sy,wasCollapsed:_wasC});
+                                };
+                                panelDragTimerRef.current=setTimeout(_startLayerDrag, e.pointerType==='touch'?400:150);
                               }}
                               onPointerMove={e=>{
-                                if(panelDragTimerRef.current&&Math.abs(e.clientY-(panelDrag?.startY||e.clientY))>6){
+                                if(panelDragTimerRef.current&&Math.abs(e.clientY-(panelDrag?.startY||e.clientY))>8){
                                   clearTimeout(panelDragTimerRef.current);panelDragTimerRef.current=null;
                                 }
                               }}
@@ -7144,12 +7266,35 @@ function SketchPage({ page, projectId, onReload }) {
                           <React.Fragment key={s.id}>
                             {_sDrop&&_sUp&&<div style={{height:2,background:'#3B82F6',margin:'0 14px'}}/>}
                             <div
-                              onClick={()=>{setTool('select');setSelectedIds([s.id]);setPrevTool(null);}}
+                              onClick={e=>{
+                                // Ctrl/Cmd+click: toggle this shape in selection
+                                if(e.ctrlKey||e.metaKey){
+                                  e.stopPropagation();
+                                  setTool('select');setPrevTool(null);
+                                  setSelectedIds(prev=>prev.includes(s.id)?prev.filter(id=>id!==s.id):[...prev,s.id]);
+                                  setLastPanelClickId(s.id);
+                                // Shift+click: range-select from last click to this one
+                                } else if(e.shiftKey&&lastPanelClickId){
+                                  e.stopPropagation();
+                                  setTool('select');setPrevTool(null);
+                                  const _allS=[...layers].reverse().flatMap(l=>[...shapes.filter(sh=>(sh.layerId||layers[0]?.id)===l.id)].reverse());
+                                  const _ci=_allS.findIndex(sh=>sh.id===s.id);
+                                  const _li=_allS.findIndex(sh=>sh.id===lastPanelClickId);
+                                  if(_ci>=0&&_li>=0){
+                                    const [_f,_t]=_ci<_li?[_ci,_li]:[_li,_ci];
+                                    const _rng=_allS.slice(_f,_t+1).map(sh=>sh.id);
+                                    setSelectedIds(prev=>[...new Set([...prev,..._rng])]);
+                                  }
+                                } else {
+                                  setTool('select');setSelectedIds([s.id]);setPrevTool(null);
+                                  setLastPanelClickId(s.id);
+                                }
+                              }}
                               style={{display:'flex',alignItems:'center',gap:3,padding:'2px 4px 2px 14px',
                                 background:selectedIds.includes(s.id)?'rgba(59,130,246,0.12)':'transparent',
                                 opacity:_sDrag?0.35:1,cursor:'pointer'}}
                             >
-                              {/* Shape drag handle */}
+                              {/* Shape drag handle — hold to reorder (mouse: 150ms, touch: 400ms+vibrate) */}
                               <span
                                 style={{fontSize:8,color:'rgba(255,255,255,0.18)',cursor:'grab',
                                   flexShrink:0,padding:'0 2px',userSelect:'none',touchAction:'none'}}
@@ -7159,12 +7304,12 @@ function SketchPage({ page, projectId, onReload }) {
                                   if(panelDragTimerRef.current) clearTimeout(panelDragTimerRef.current);
                                   panelDragTimerRef.current=setTimeout(()=>{
                                     panelDragTimerRef.current=null;
-                                    if(navigator.vibrate) navigator.vibrate(40);
+                                    if(e.pointerType==='touch'&&navigator.vibrate) navigator.vibrate(40);
                                     setPanelDrag({type:'shape',id:s.id,origIdx:_sOrig,targetIdx:_sOrig,startY:_sy,layerShapeCount:layerShapes.length});
-                                  },400);
+                                  },e.pointerType==='touch'?400:150);
                                 }}
                                 onPointerMove={e=>{
-                                  if(panelDragTimerRef.current&&Math.abs(e.clientY-(panelDrag?.startY||e.clientY))>6){
+                                  if(panelDragTimerRef.current&&Math.abs(e.clientY-(panelDrag?.startY||e.clientY))>8){
                                     clearTimeout(panelDragTimerRef.current);panelDragTimerRef.current=null;
                                   }
                                 }}
