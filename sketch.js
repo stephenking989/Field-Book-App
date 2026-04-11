@@ -1901,7 +1901,8 @@ function SketchPage({ page, projectId, onReload }) {
   const [pencilPreview,   setPencilPreview] = useState(null); // [{x,y}] for live polyline
 
   // ── Pen tool state ────────────────────────────────────────────────────────────────────────────────
-  // penMode: 'bezier' | 'smart'
+  // penMode: 'bezier' | 'smart' | 'corner'
+  // 'corner' places only sharp nodes (no handle phase) — produces straight-line segments.
   const [penMode,         setPenMode]         = useState('bezier');
   // penNodes: placed nodes for in-progress pen path
   const [penNodes,        setPenNodes]        = useState([]);
@@ -2774,6 +2775,95 @@ function SketchPage({ page, projectId, onReload }) {
         lastTapRef.current = { time: now, x: e.clientX, y: e.clientY };
       }
 
+      // ── Multi-select: group controls take priority over single-shape handling ──
+      if (selectedIds.length >= 2) {
+        const selShapes = shapes.filter(s => selectedIds.includes(s.id));
+        const bb = getBoundingBox(selShapes);
+
+        if (bb) {
+          const PAD     = 10 * ps;
+          const cx      = (bb.minX + bb.maxX) / 2;
+          const cy      = (bb.minY + bb.maxY) / 2;
+          const rotDist = ROT_HANDLE_DIST * ps;
+          const rhPos   = { x: cx, y: bb.minY - PAD - rotDist };
+
+          // Check group rotate handle
+          if (Math.hypot(pt.x - rhPos.x, pt.y - rhPos.y) < Math.max(nodeThresh, (ROT_R + 4) * ps)) {
+            setDragNode({ shapeId: null, nodeKey: 'group-rotate' });
+            setDragStart({
+              svgX: pt.x, svgY: pt.y, snapshot: shapes,
+              pivX: cx, pivY: cy,
+              multiIds: selectedIds.slice(),
+            });
+            return;
+          }
+        }
+
+        // Check individual shape nodes for each selected shape
+        for (const shape of selShapes) {
+          if (shape.type.startsWith('dim-')) continue;
+          const rot  = shape._rot || 0;
+          const piv  = getShapePivot(shape);
+          const nodes = getNodes(shape);
+          for (const node of nodes) {
+            const np = rot ? rotatePoint(node.x, node.y, piv.x, piv.y, rot) : node;
+            if (Math.hypot(pt.x - np.x, pt.y - np.y) < nodeThresh) {
+              setDragNode({ shapeId: shape.id, nodeKey: node.key });
+              setDragStart({ svgX: pt.x, svgY: pt.y, snapshot: shapes });
+              return;
+            }
+          }
+        }
+
+        // Check body hit on any selected shape → multi-body drag
+        const bodyHit = hitTest(pt, selShapes, hitThresh);
+        if (bodyHit) {
+          setDragNode({ shapeId: bodyHit.id, nodeKey: 'body' });
+          setDragStart({
+            svgX: pt.x, svgY: pt.y, snapshot: shapes,
+            multiIds: selectedIds.slice(),
+          });
+          return;
+        }
+
+        // Fell through — clicked outside selection; run new-selection / deselect
+        const _msSelShapes = shapes.filter(s => {
+          if (s.visible === false) return false;
+          if (s.locked) return false;
+          const _lid = s.layerId || layers[0]?.id;
+          const _layer = layers.find(l => l.id === _lid);
+          return _layer?.visible !== false && !_layer?.locked;
+        });
+        const msHit = hitTest(pt, _msSelShapes, hitThresh);
+        setDragNode(null);
+        if (msHit) {
+          if (e.shiftKey) {
+            setSelectedIds(prev =>
+              prev.includes(msHit.id) ? prev.filter(id => id !== msHit.id) : [...prev, msHit.id]
+            );
+          } else {
+            setSelectedIds([msHit.id]);
+          }
+        } else {
+          if (!e.shiftKey) {
+            if (e.pointerType === 'touch') {
+              if (pendingDeselectRef.current) clearTimeout(pendingDeselectRef.current);
+              pendingDeselectRef.current = setTimeout(() => {
+                pendingDeselectRef.current = null;
+                if (activePtrsRef.current.size < 2) setSelectedIds([]);
+              }, 100);
+            } else {
+              setSelectedIds([]);
+            }
+          }
+          if (prevTool !== null) { setPrevTool(null); return; }
+          if (tool === 'select') {
+            setMarquee({ ox: pt.x, oy: pt.y, x: pt.x, y: pt.y, w: 0, h: 0 });
+          }
+        }
+        return;
+      }
+
       if (selectedId) {
         const sel = shapes.find(s => s.id === selectedId);
         if (sel) {
@@ -3130,8 +3220,8 @@ function SketchPage({ page, projectId, onReload }) {
       const newNode = { x: sp.x, y: sp.y, type: 'sharp',
         cp1x: sp.x, cp1y: sp.y, cp2x: sp.x, cp2y: sp.y };
       setPenNodes(prev => [...prev, newNode]);
-      // After the first node there's a segment to shape → enter handle phase
-      if (penNodes.length >= 1) setPenPhase('handle');
+      // Enter handle phase only in bézier mode — corner + smart skip it
+      if (penNodes.length >= 1 && penMode === 'bezier') setPenPhase('handle');
     }
     // ── Node Tool ─────────────────────────────────────────────────────────────────────────────────
     if (tool === 'node') {
@@ -3236,7 +3326,8 @@ function SketchPage({ page, projectId, onReload }) {
         }
       }
 
-      // Click on a path shape to select it for node editing
+      // Click on a path shape to select it for node editing,
+      // or body-drag it if it was already selected.
       const _nodeUnlocked = s => {
         if (s.locked) return false;
         const _lid = s.layerId || layers[0]?.id;
@@ -3244,10 +3335,17 @@ function SketchPage({ page, projectId, onReload }) {
       };
       const pathHit = hitTest(pt, shapes.filter(s => s.type === 'path' && _nodeUnlocked(s)), hitThreshN);
       if (pathHit) {
-        setNodeSelectedId(pathHit.id);
-        setNodeSelectedIdx(null);
-        setSelectedIds([]);
-        nodeDragRef.current = null;
+        if (pathHit.id === nodeSelectedId) {
+          // Already selected — start body drag (moves all nodes together)
+          nodeDragRef.current = { shapeId: pathHit.id, type: 'body-path',
+            startX: pt.x, startY: pt.y, snapshot: shapes };
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } else {
+          setNodeSelectedId(pathHit.id);
+          setNodeSelectedIdx(null);
+          setSelectedIds([]);
+          nodeDragRef.current = null;
+        }
         return;
       }
 
@@ -3340,6 +3438,26 @@ function SketchPage({ page, projectId, onReload }) {
     // ── Node / handle drag ────────────────────────────────────────────────────
     if (dragNode && dragStart) {
       setSnapPoint(null);
+
+      // Group rotate: rotate all selected shapes around group bounding-box centre
+      if (dragNode.nodeKey === 'group-rotate') {
+        const piv        = { x: dragStart.pivX, y: dragStart.pivY };
+        const startAngle = Math.atan2(dragStart.svgY - piv.y, dragStart.svgX - piv.x);
+        const curAngle   = Math.atan2(rawPt.y - piv.y, rawPt.x - piv.x);
+        const deltaDeg   = (curAngle - startAngle) * 180 / Math.PI;
+
+        setShapes(dragStart.snapshot.map(s => {
+          if (!dragStart.multiIds || !dragStart.multiIds.includes(s.id)) return s;
+          const snap     = dragStart.snapshot.find(ss => ss.id === s.id);
+          const shapePiv = getShapePivot(snap);
+          const newPos   = rotatePoint(shapePiv.x, shapePiv.y, piv.x, piv.y, deltaDeg);
+          const dx       = newPos.x - shapePiv.x;
+          const dy       = newPos.y - shapePiv.y;
+          const moved    = applyNodeDrag(snap, 'body', dx, dy);
+          return { ...moved, _rot: (((snap._rot || 0) + deltaDeg) % 360 + 360) % 360 };
+        }));
+        return;
+      }
 
       // Rotate handle: compute angle change from pivot using atan2
       if (dragNode.nodeKey === 'rotate') {
@@ -3472,9 +3590,13 @@ function SketchPage({ page, projectId, onReload }) {
           setSnapPoint(null);
         }
 
-        setShapes(dragStart.snapshot.map(s =>
-          s.id === dragNode.shapeId ? applyNodeDrag(s, 'body', dx, dy) : s
-        ));
+        setShapes(dragStart.snapshot.map(s => {
+          // Multi-body drag: move all shapes in the selection by the same offset
+          if (dragStart.multiIds && dragStart.multiIds.includes(s.id)) {
+            return applyNodeDrag(s, 'body', dx, dy);
+          }
+          return s.id === dragNode.shapeId ? applyNodeDrag(s, 'body', dx, dy) : s;
+        }));
         return;
       }
 
@@ -3615,6 +3737,17 @@ function SketchPage({ page, projectId, onReload }) {
             n1.cp1y += dy * t * 2;
             drag.startX = sp.x;
             drag.startY = sp.y;
+          }
+        } else if (drag.type === 'body-path') {
+          // Move the entire path shape — translate all nodes and handles
+          const dx = sp.x - drag.startX;
+          const dy = sp.y - drag.startY;
+          drag.startX = sp.x;
+          drag.startY = sp.y;
+          for (const n of nodes) {
+            n.x    += dx; n.y    += dy;
+            n.cp1x += dx; n.cp1y += dy;
+            n.cp2x += dx; n.cp2y += dy;
           }
         }
         return { ...s, nodes };
@@ -3922,10 +4055,24 @@ function SketchPage({ page, projectId, onReload }) {
         }
       } else if (s.type === 'circle') {
         const d = Math.hypot(tp.x-s.cx, tp.y-s.cy);
-        if (Math.abs(d - s.r) < thresh || d < s.r + thresh) return s;
+        const hasFillC = s.fill && s.fill !== 'none';
+        if (hasFillC ? d < s.r + thresh : Math.abs(d - s.r) < thresh) return s;
       } else if (s.type === 'rect') {
-        if (tp.x >= s.x-thresh && tp.x <= s.x+s.w+thresh &&
-            tp.y >= s.y-thresh && tp.y <= s.y+s.h+thresh) return s;
+        const hasFillR = s.fill && s.fill !== 'none';
+        const inX = tp.x >= s.x - thresh && tp.x <= s.x + s.w + thresh;
+        const inY = tp.y >= s.y - thresh && tp.y <= s.y + s.h + thresh;
+        if (inX && inY) {
+          if (hasFillR) {
+            return s;
+          } else {
+            // Only hit near the border lines
+            const nearLeft   = tp.x <= s.x + thresh;
+            const nearRight  = tp.x >= s.x + s.w - thresh;
+            const nearTop    = tp.y <= s.y + thresh;
+            const nearBottom = tp.y >= s.y + s.h - thresh;
+            if (nearLeft || nearRight || nearTop || nearBottom) return s;
+          }
+        }
       } else if (s.type === 'text') {
         // s.x/y = world center; s.w/h = screen pixels. Convert half-extents to world units.
         const _psHT = viewBox.w / (svgSizeRef.current.w || viewBox.w);
@@ -4098,6 +4245,11 @@ function SketchPage({ page, projectId, onReload }) {
         ];
         break;
       }
+      case 'path': {
+        // Every node of the path is a snap endpoint
+        raw = (shape.nodes || []).map(n => ({ x: n.x, y: n.y }));
+        break;
+      }
     }
     if (!rot) return raw;
     return raw.map(p => rotatePoint(p.x, p.y, piv.x, piv.y, rot));
@@ -4118,6 +4270,20 @@ function SketchPage({ page, projectId, onReload }) {
           { a: rp(x+w, y+h), b: rp(x,   y+h) },
           { a: rp(x,   y+h), b: rp(x,   y) },
         ];
+      }
+      case 'path': {
+        // Approximate each bezier segment as a straight node-to-node line for
+        // perpendicular and intersection snapping. Good enough for field use.
+        if (!s.nodes || s.nodes.length < 2) return [];
+        const segs = [];
+        const nodes = s.nodes;
+        for (let i = 0; i < nodes.length - 1; i++) {
+          segs.push({ a: rp(nodes[i].x, nodes[i].y), b: rp(nodes[i+1].x, nodes[i+1].y) });
+        }
+        if (s.closed && nodes.length >= 2) {
+          segs.push({ a: rp(nodes[nodes.length-1].x, nodes[nodes.length-1].y), b: rp(nodes[0].x, nodes[0].y) });
+        }
+        return segs;
       }
       default: return [];
     }
@@ -4240,6 +4406,25 @@ function SketchPage({ page, projectId, onReload }) {
           if (nP <= nB + 1e-6) pts.push(projected);
         }
       }
+    } else if (s.type === 'path') {
+      // Find nearest point on each cubic bezier segment of the path
+      if (s.nodes && s.nodes.length >= 2) {
+        const nodes = s.nodes;
+        const nearestOnSeg = (n0, n1) => {
+          // Rotate node coords into world space (same transform applied to path group)
+          const a0 = rp(n0.x, n0.y);
+          const c0 = rp(n0.cp2x !== undefined ? n0.cp2x : n0.x, n0.cp2y !== undefined ? n0.cp2y : n0.y);
+          const c1 = rp(n1.cp1x !== undefined ? n1.cp1x : n1.x, n1.cp1y !== undefined ? n1.cp1y : n1.y);
+          const a1 = rp(n1.x, n1.y);
+          return nearestOnCubic(a0, c0, c1, a1, pt);
+        };
+        for (let i = 0; i < nodes.length - 1; i++) {
+          pts.push(nearestOnSeg(nodes[i], nodes[i+1]));
+        }
+        if (s.closed && nodes.length >= 2) {
+          pts.push(nearestOnSeg(nodes[nodes.length-1], nodes[0]));
+        }
+      }
     }
     return pts;
   }
@@ -4301,6 +4486,26 @@ function SketchPage({ page, projectId, onReload }) {
         } else if (s.type === 'rect') {
           const { x, y, w, h } = s;
           mids = [rp(x+w/2,y), rp(x+w,y+h/2), rp(x+w/2,y+h), rp(x,y+h/2)];
+        } else if (s.type === 'path' && s.nodes && s.nodes.length >= 2) {
+          // Midpoint of each bezier segment at t=0.5
+          const nodes = s.nodes;
+          const cubicMid = (n0, n1) => {
+            const cp2x = n0.cp2x !== undefined ? n0.cp2x : n0.x;
+            const cp2y = n0.cp2y !== undefined ? n0.cp2y : n0.y;
+            const cp1x = n1.cp1x !== undefined ? n1.cp1x : n1.x;
+            const cp1y = n1.cp1y !== undefined ? n1.cp1y : n1.y;
+            // Cubic bezier at t=0.5
+            return rp(
+              0.125*n0.x + 0.375*cp2x + 0.375*cp1x + 0.125*n1.x,
+              0.125*n0.y + 0.375*cp2y + 0.375*cp1y + 0.125*n1.y
+            );
+          };
+          for (let i = 0; i < nodes.length - 1; i++) {
+            mids.push(cubicMid(nodes[i], nodes[i+1]));
+          }
+          if (s.closed && nodes.length >= 2) {
+            mids.push(cubicMid(nodes[nodes.length-1], nodes[0]));
+          }
         }
         for (const m of mids) {
           const d = Math.hypot(pt.x-m.x, pt.y-m.y);
@@ -4501,9 +4706,19 @@ function SketchPage({ page, projectId, onReload }) {
       return;
     }
 
-    // Node tool: double-click on a path segment inserts a node
-    if (tool === 'node' && nodeSelectedId) {
-      const pathShape = shapes.find(s => s.id === nodeSelectedId);
+    // Node tool: double-click on a path segment inserts a node.
+    // Works whether the path is already selected or not (first double-click on a path).
+    if (tool === 'node') {
+      let pathShape = nodeSelectedId ? shapes.find(s => s.id === nodeSelectedId) : null;
+      // Hit-test fallback for first double-click on an unselected path
+      if (!pathShape) {
+        const hitThreshDbl = (e.pointerType === 'touch' ? 24 : 8) * ps;
+        pathShape = hitTest(pt, shapes.filter(s => s.type === 'path'), hitThreshDbl) || null;
+        if (pathShape) {
+          setNodeSelectedId(pathShape.id);
+          setNodeSelectedIdx(null);
+        }
+      }
       if (pathShape && pathShape.nodes) {
         const nodes = pathShape.nodes;
         for (let i = 0; i < nodes.length - 1; i++) {
@@ -4516,8 +4731,6 @@ function SketchPage({ page, projectId, onReload }) {
             pt
           );
           if (Math.hypot(nearest.x - pt.x, nearest.y - pt.y) < 12 * ps) {
-            // Insert a new smooth node at the nearest point
-            const t = nearest.t;
             const newNode = {
               x: nearest.x, y: nearest.y, type: 'smooth',
               cp1x: nearest.x, cp1y: nearest.y,
@@ -4528,10 +4741,9 @@ function SketchPage({ page, projectId, onReload }) {
               newNode,
               ...nodes.slice(i + 1),
             ];
-            // Re-apply smooth handles to the affected region
             applySmartHandles(newNodes);
             commitShapes(shapes.map(s =>
-              s.id === nodeSelectedId ? { ...s, nodes: newNodes } : s
+              s.id === pathShape.id ? { ...s, nodes: newNodes } : s
             ));
             setNodeSelectedIdx(i + 1);
             return;
@@ -5099,7 +5311,8 @@ function SketchPage({ page, projectId, onReload }) {
   // Handles appear at their visually rotated positions in SVG space.
   // The pivot (⊕) and rotate (↻) handles are rendered outside the shape <g>
   // so they're always accessible regardless of shape rotation.
-  function renderNodes(shape) {
+  function renderNodes(shape, opts = {}) {
+    const { suppressPivotRotate = false } = opts;
     const rot = shape._rot || 0;
     const piv = getShapePivot(shape);
     // Counter-scale all fixed-screen-size handles so they stay the same visual
@@ -5177,13 +5390,13 @@ function SketchPage({ page, projectId, onReload }) {
           );
         })}
 
-        {/* Pivot + rotate handles are suppressed for dimension shapes — they don't rotate */}
-        {!shape.type.startsWith('dim-') && <line x1={piv.x} y1={piv.y} x2={rhPos.x} y2={rhPos.y}
+        {/* Pivot + rotate handles are suppressed for dimension shapes and multi-select */}
+        {!suppressPivotRotate && !shape.type.startsWith('dim-') && <line x1={piv.x} y1={piv.y} x2={rhPos.x} y2={rhPos.y}
           stroke="rgba(245,158,11,0.45)" strokeWidth={ps} strokeDasharray={`${3*ps},${3*ps}`}
           style={{ pointerEvents: 'none' }} />}
 
-        {/* Pivot handle — amber crosshair circle (not shown for dim shapes) */}
-        {!shape.type.startsWith('dim-') && <g key="pivot" style={{ cursor: 'move' }}
+        {/* Pivot handle — amber crosshair circle (not shown for dim shapes or multi-select) */}
+        {!suppressPivotRotate && !shape.type.startsWith('dim-') && <g key="pivot" style={{ cursor: 'move' }}
           onPointerDown={ev => {
             ev.stopPropagation();
             setDragNode({ shapeId: shape.id, nodeKey: 'pivot' });
@@ -5199,8 +5412,8 @@ function SketchPage({ page, projectId, onReload }) {
             stroke="#F59E0B" strokeWidth={1.5 * ps} />
         </g>}
 
-        {/* Rotate handle — amber ↻ circle (not shown for dim shapes) */}
-        {!shape.type.startsWith('dim-') && <g key="rotate" style={{ cursor: 'grab' }}
+        {/* Rotate handle — amber ↻ circle (not shown for dim shapes or multi-select) */}
+        {!suppressPivotRotate && !shape.type.startsWith('dim-') && <g key="rotate" style={{ cursor: 'grab' }}
           onPointerDown={ev => {
             ev.stopPropagation();
             const svgPt = screenToWorld(ev);
@@ -5219,6 +5432,61 @@ function SketchPage({ page, projectId, onReload }) {
             ↻
           </text>
         </g>}
+      </>
+    );
+  }
+
+  // ── Multi-select bounding box + group rotate handle ───────────────────────
+  function renderGroupControls(selShapes) {
+    if (!selShapes || selShapes.length < 2) return null;
+    const bb = getBoundingBox(selShapes);
+    if (!bb) return null;
+    const ps      = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+    const PAD     = 10 * ps;
+    const bx      = bb.minX - PAD;
+    const by      = bb.minY - PAD;
+    const bw      = (bb.maxX - bb.minX) + PAD * 2;
+    const bh      = (bb.maxY - bb.minY) + PAD * 2;
+    const cx      = (bb.minX + bb.maxX) / 2;
+    const cy      = (bb.minY + bb.maxY) / 2;
+    const rotDist = ROT_HANDLE_DIST * ps;
+    const rotR    = ROT_R * ps;
+    const rhPos   = { x: cx, y: bb.minY - PAD - rotDist };
+
+    return (
+      <>
+        {/* Selection bounding box */}
+        <rect x={bx} y={by} width={bw} height={bh}
+          fill="rgba(59,130,246,0.05)" stroke="rgba(59,130,246,0.55)"
+          strokeWidth={ps} strokeDasharray={`${5*ps},${3*ps}`}
+          style={{ pointerEvents: 'none' }} />
+
+        {/* Dashed stem from top-center to group rotate handle */}
+        <line x1={cx} y1={bb.minY - PAD} x2={rhPos.x} y2={rhPos.y}
+          stroke="rgba(245,158,11,0.45)" strokeWidth={ps}
+          strokeDasharray={`${3*ps},${3*ps}`}
+          style={{ pointerEvents: 'none' }} />
+
+        {/* Group rotate handle */}
+        <g style={{ cursor: 'grab' }}
+          onPointerDown={ev => {
+            ev.stopPropagation();
+            const svgPt = screenToWorld(ev);
+            setDragNode({ shapeId: null, nodeKey: 'group-rotate' });
+            setDragStart({
+              svgX: svgPt.x, svgY: svgPt.y, snapshot: shapes,
+              pivX: cx, pivY: cy,
+              multiIds: selShapes.map(s => s.id),
+            });
+          }}>
+          <circle cx={rhPos.x} cy={rhPos.y} r={rotR + 4 * ps}
+            fill="transparent" stroke="none" />
+          <circle cx={rhPos.x} cy={rhPos.y} r={rotR}
+            fill="rgba(245,158,11,0.2)" stroke="#F59E0B" strokeWidth={1.5 * ps} />
+          <text x={rhPos.x} y={rhPos.y} textAnchor="middle" dominantBaseline="central"
+            fontSize={11 * ps} fill="#F59E0B"
+            style={{ pointerEvents: 'none', userSelect: 'none' }}>↻</text>
+        </g>
       </>
     );
   }
@@ -5914,8 +6182,9 @@ function SketchPage({ page, projectId, onReload }) {
           {/* ── Pen tool context controls ───────────────────────────────────── */}
           {tool === 'pen' && (
             <>
-              {[{ id: 'bezier', label: 'Bézier', title: 'Click to place sharp node; click+drag to pull smooth handles' },
-                { id: 'smart', label: 'Smart', title: 'Click to place nodes; handles auto-calculated for smooth curves' }].map(m => (
+              {[{ id: 'bezier', label: 'Bézier', title: 'Click to place node; click+drag to pull smooth handles' },
+                { id: 'smart',  label: 'Smart',  title: 'Click to place nodes; handles auto-calculated for smooth curves' },
+                { id: 'corner', label: 'Corner', title: 'Click to place sharp corner nodes — produces straight line segments' }].map(m => (
                 <button key={m.id}
                   onClick={() => setPenMode(m.id)}
                   title={m.title}
@@ -6257,7 +6526,26 @@ function SketchPage({ page, projectId, onReload }) {
                     } else if (tool === 'pen') {
                       setPenNodes([]); setPenCursor(null); setPenPhase('point');
                     }
-                    setTool(t.id); setSelectedIds([]); setDrawState(null); setPrevTool(null);
+                    // Preserve selection when toggling between select ↔ node tools
+                    const togglingSelectNode =
+                      (tool === 'select' && t.id === 'node') ||
+                      (tool === 'node'   && t.id === 'select');
+                    if (togglingSelectNode) {
+                      // select → node: if a path shape is selected, enter node editing
+                      if (t.id === 'node') {
+                        const selPath = shapes.find(s => selectedIds.includes(s.id) && s.type === 'path');
+                        if (selPath) { setNodeSelectedId(selPath.id); setNodeSelectedIdx(null); }
+                      }
+                      // node → select: carry nodeSelectedId into selectedIds so the shape stays highlighted
+                      if (t.id === 'select' && nodeSelectedId) {
+                        setSelectedIds(prev => prev.includes(nodeSelectedId) ? prev : [nodeSelectedId, ...prev]);
+                        setNodeSelectedId(null);
+                      }
+                      setTool(t.id); setDrawState(null); setPrevTool(null);
+                    } else {
+                      setTool(t.id); setSelectedIds([]); setDrawState(null); setPrevTool(null);
+                      setNodeSelectedId(null); setNodeSelectedIdx(null);
+                    }
                   }}
                   title={t.label}
                   style={{
@@ -6345,7 +6633,7 @@ function SketchPage({ page, projectId, onReload }) {
             onPointerUp={onPointerUp}
             onPointerLeave={onPointerUp}
             onPointerCancel={onPointerUp}
-            onDblClick={onDblClick}
+            onDoubleClick={onDblClick}
           >
             {/* Background color — rendered below grid and shapes */}
             {bgColor && (
@@ -6388,7 +6676,20 @@ function SketchPage({ page, projectId, onReload }) {
             {/* Node handles for selected shape.
                 Shows in select mode OR when prevTool is set (shape just created —
                 tool hasn't switched, but we need handles immediately). */}
-            {selectedShape && (tool === 'select' || tool === 'text' || prevTool !== null || (tool === 'node' && selectedShape.type !== 'path')) && renderNodes(selectedShape)}
+            {/* Multi-select: group bounding box + group rotate handle + per-shape handles */}
+            {(tool === 'select' || prevTool !== null) && selectedIds.length >= 2 && (() => {
+              const selShapes = shapes.filter(s => selectedIds.includes(s.id));
+              return <>
+                {renderGroupControls(selShapes)}
+                {selShapes.map(s =>
+                  <React.Fragment key={s.id}>
+                    {renderNodes(s, { suppressPivotRotate: true })}
+                  </React.Fragment>
+                )}
+              </>;
+            })()}
+            {/* Single-select: full handles (geometry + pivot + rotate) */}
+            {selectedShape && selectedIds.length <= 1 && (tool === 'select' || tool === 'text' || prevTool !== null || (tool === 'node' && selectedShape.type !== 'path')) && renderNodes(selectedShape)}
 
             {/* Preview shape while drawing */}
             {renderPreview()}
