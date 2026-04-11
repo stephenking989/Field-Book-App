@@ -40,6 +40,7 @@ const TOOLS = [
   { id: 'rect',      label: 'Rect',      icon: '□' },
   { id: 'text',      label: 'Text',      icon: 'T' },
   { id: 'eraser',    label: 'Eraser',    icon: '⌫' },
+  { id: 'fill',      label: 'Fill',      icon: '⬧' },
   { id: 'dim-linear',  label: 'Dist',    icon: '↔' },
   { id: 'dim-angle',   label: 'Angle',   icon: '∠' },
   { id: 'dim-bearing', label: 'Bearing', icon: '↗' },
@@ -1005,6 +1006,756 @@ function offsetShape(s, dx, dy) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// COLOR UTILITIES
+// ─────────────────────────────────────────────────────────────────────────────
+
+function hexToHsv(hex) {
+  let h = (hex || '#000000').replace('#', '');
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  if (h.length !== 6) return { h: 0, s: 1, v: 1 };
+  const r = parseInt(h.slice(0, 2), 16) / 255;
+  const g = parseInt(h.slice(2, 4), 16) / 255;
+  const b = parseInt(h.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  let hue = 0;
+  if (d > 0) {
+    if      (max === r) hue = ((g - b) / d + 6) % 6;
+    else if (max === g) hue = (b - r) / d + 2;
+    else                hue = (r - g) / d + 4;
+    hue *= 60;
+  }
+  return { h: hue, s: max > 0 ? d / max : 0, v: max };
+}
+
+function hsvToHex(h, s, v) {
+  const f = n => {
+    const k = (n + h / 60) % 6;
+    const val = v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+    return Math.round(val * 255).toString(16).padStart(2, '0');
+  };
+  return '#' + f(5) + f(3) + f(1);
+}
+
+function hsvToRgb255(h, s, v) {
+  const f = n => {
+    const k = (n + h / 60) % 6;
+    return Math.round((v - v * s * Math.max(0, Math.min(k, 4 - k, 1))) * 255);
+  };
+  return { r: f(5), g: f(3), b: f(1) };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COLOR WHEEL COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ColorWheel({ color, onChange, onCommit }) {
+  const SIZE    = 154;
+  const RING_W  = 18;
+  const CENTER  = SIZE / 2;
+  const OUTER_R = CENTER - 2;
+  const INNER_R = OUTER_R - RING_W;
+
+  const canvasRef = useRef(null);
+  const dragging  = useRef(null);
+
+  const parseColor = c => {
+    if (!c || c === 'none') return { h: 0, s: 1, v: 1 };
+    try { return hexToHsv(c); } catch { return { h: 0, s: 1, v: 1 }; }
+  };
+
+  const [hsv, setHsv] = useState(() => parseColor(color));
+  useEffect(() => { setHsv(parseColor(color)); }, [color]);
+
+  // Triangle vertices in canvas-space.
+  // A = pure hue (S=1, V=1), B = black (V=0), C = white (S=0, V=1)
+  // All three vertices sit exactly on INNER_R, so they touch the ring.
+  function triVerts(h) {
+    const base = (h - 90) * Math.PI / 180;
+    const T = 2 * Math.PI / 3;
+    return {
+      Ax: CENTER + INNER_R * Math.cos(base),
+      Ay: CENTER + INNER_R * Math.sin(base),
+      Bx: CENTER + INNER_R * Math.cos(base + T),
+      By: CENTER + INNER_R * Math.sin(base + T),
+      Cx: CENTER + INNER_R * Math.cos(base - T),
+      Cy: CENTER + INNER_R * Math.sin(base - T),
+    };
+  }
+
+  // Barycentric coords of canvas point (px, py) relative to triangle A/B/C
+  function bary({ Ax, Ay, Bx, By, Cx, Cy }, px, py) {
+    const d = (By - Cy) * (Ax - Cx) + (Cx - Bx) * (Ay - Cy);
+    if (Math.abs(d) < 1e-10) return { lA: 1/3, lB: 1/3, lC: 1/3 };
+    const lA = ((By - Cy) * (px - Cx) + (Cx - Bx) * (py - Cy)) / d;
+    const lB = ((Cy - Ay) * (px - Cx) + (Ax - Cx) * (py - Cy)) / d;
+    return { lA, lB, lC: 1 - lA - lB };
+  }
+
+  // S/V from barycentric: λA=hue vertex, λB=black vertex, λC=white vertex
+  function baryToSV(lA, lB, lC) {
+    const V = Math.max(0, Math.min(1, lA + lC));
+    const S = V > 0.001 ? Math.max(0, Math.min(1, lA / V)) : 0;
+    return { S, V };
+  }
+
+  // Canvas position from S/V
+  function svToXY(s, v, verts) {
+    const { Ax, Ay, Bx, By, Cx, Cy } = verts;
+    const lA = s * v, lC = (1 - s) * v, lB = 1 - v;
+    return { x: lA * Ax + lB * Bx + lC * Cx, y: lA * Ay + lB * By + lC * Cy };
+  }
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, SIZE, SIZE);
+
+    // ── Hue ring ──
+    for (let i = 0; i < 360; i++) {
+      const a0 = (i - 90.5) * Math.PI / 180;
+      const a1 = (i - 89.5) * Math.PI / 180;
+      ctx.beginPath();
+      ctx.moveTo(CENTER, CENTER);
+      ctx.arc(CENTER, CENTER, OUTER_R, a0, a1);
+      ctx.closePath();
+      ctx.fillStyle = `hsl(${i},100%,50%)`;
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.beginPath();
+    ctx.arc(CENTER, CENTER, INNER_R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+
+    // ── HSV triangle ──
+    const verts = triVerts(hsv.h);
+    const { Ax, Ay, Bx, By, Cx, Cy } = verts;
+    const { r, g, b } = hsvToRgb255(hsv.h, 1, 1);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(Ax, Ay); ctx.lineTo(Bx, By); ctx.lineTo(Cx, Cy);
+    ctx.closePath();
+    ctx.clip();
+
+    const minX = Math.min(Ax, Bx, Cx) - 1, minY = Math.min(Ay, By, Cy) - 1;
+    const bw   = Math.max(Ax, Bx, Cx) - minX + 2;
+    const bh   = Math.max(Ay, By, Cy) - minY + 2;
+
+    // Pure hue base
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(minX, minY, bw, bh);
+
+    // White overlay: from white vertex C toward midpoint of AB
+    const wg = ctx.createLinearGradient(Cx, Cy, (Ax + Bx) / 2, (Ay + By) / 2);
+    wg.addColorStop(0, 'rgba(255,255,255,1)');
+    wg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = wg;
+    ctx.fillRect(minX, minY, bw, bh);
+
+    // Black overlay: from black vertex B toward midpoint of AC
+    const bg = ctx.createLinearGradient(Bx, By, (Ax + Cx) / 2, (Ay + Cy) / 2);
+    bg.addColorStop(0, 'rgba(0,0,0,1)');
+    bg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = bg;
+    ctx.fillRect(minX, minY, bw, bh);
+
+    ctx.restore();
+
+    // ── Hue ring indicator ──
+    const hAngle = (hsv.h - 90) * Math.PI / 180;
+    const ir = INNER_R + RING_W / 2;
+    const ix = CENTER + ir * Math.cos(hAngle), iy = CENTER + ir * Math.sin(hAngle);
+    ctx.beginPath(); ctx.arc(ix, iy, 6, 0, Math.PI * 2);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke();
+
+    // ── SV triangle indicator ──
+    const { x: svX, y: svY } = svToXY(hsv.s, hsv.v, verts);
+    ctx.beginPath(); ctx.arc(svX, svY, 5, 0, Math.PI * 2);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke();
+  }, [hsv.h, hsv.s, hsv.v]);
+
+  function getXY(e) {
+    const rect = canvasRef.current.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (SIZE / rect.width),
+      y: (e.clientY - rect.top)  * (SIZE / rect.height),
+    };
+  }
+
+  function hitZone(x, y) {
+    const dx = x - CENTER, dy = y - CENTER;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d >= INNER_R && d <= OUTER_R) return 'ring';
+    const { lA, lB, lC } = bary(triVerts(hsv.h), x, y);
+    if (lA >= -0.02 && lB >= -0.02 && lC >= -0.02) return 'sv';
+    return 'none';
+  }
+
+  // lastHex: tracks current hex during drag so onCommit can fire it on pointerUp
+  const lastHexRef = useRef(null);
+
+  function applyXYFull(zone, x, y) {
+    if (zone === 'ring') {
+      const h = ((Math.atan2(y - CENTER, x - CENTER) * 180 / Math.PI) + 90 + 360) % 360;
+      const next = { ...hsv, h };
+      setHsv(next);
+      const hex = hsvToHex(next.h, next.s, next.v);
+      lastHexRef.current = hex;
+      onChange(hex);
+    } else if (zone === 'sv') {
+      let { lA, lB, lC } = bary(triVerts(hsv.h), x, y);
+      lA = Math.max(0, lA); lB = Math.max(0, lB); lC = Math.max(0, lC);
+      const sum = lA + lB + lC || 1;
+      const { S, V } = baryToSV(lA / sum, lB / sum, lC / sum);
+      const next = { ...hsv, s: S, v: V };
+      setHsv(next);
+      const hex = hsvToHex(next.h, next.s, next.v);
+      lastHexRef.current = hex;
+      onChange(hex);
+    }
+  }
+
+  return (
+    <canvas ref={canvasRef} width={SIZE} height={SIZE}
+      style={{ width: '100%', maxWidth: SIZE, display: 'block', margin: '0 auto',
+        cursor: 'crosshair', touchAction: 'none' }}
+      onPointerDown={e => {
+        const { x, y } = getXY(e);
+        const zone = hitZone(x, y);
+        if (zone === 'none') return;
+        dragging.current = zone;
+        lastHexRef.current = null;
+        canvasRef.current.setPointerCapture(e.pointerId);
+        applyXYFull(zone, x, y);
+      }}
+      onPointerMove={e => {
+        if (!dragging.current) return;
+        const { x, y } = getXY(e);
+        applyXYFull(dragging.current, x, y);
+      }}
+      onPointerUp={() => {
+        if (dragging.current && lastHexRef.current && onCommit) {
+          onCommit(lastHexRef.current);
+        }
+        dragging.current = null;
+        lastHexRef.current = null;
+      }}
+    />
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COLOR PANEL COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ColorPanel({ colorTarget, onTargetChange, activeColor, recentColors, onColorChange, onColorCommit }) {
+  const [hexInput, setHexInput] = useState(activeColor === 'none' ? '' : (activeColor || ''));
+
+  useEffect(() => {
+    setHexInput(activeColor === 'none' ? '' : (activeColor || ''));
+  }, [activeColor]);
+
+  function handleHexCommit(val) {
+    const clean = val.trim();
+    const hex = clean.startsWith('#') ? clean : '#' + clean;
+    if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+      (onColorCommit || onColorChange)(colorTarget, hex);
+    }
+  }
+
+  const btnBase = {
+    height: 24, borderRadius: 4, fontSize: 10, fontWeight: 700,
+    cursor: 'pointer', fontFamily: 'Courier New, monospace', outline: 'none',
+    textTransform: 'uppercase', letterSpacing: '0.06em',
+  };
+
+  return (
+    <div style={{ padding: '8px 8px 6px', fontFamily: 'Courier New, monospace' }}>
+      {/* Stroke / Fill / None toggle */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+        {['stroke', 'fill'].map(t => (
+          <button key={t} onClick={() => onTargetChange(t)} style={{
+            ...btnBase, flex: 1,
+            background: colorTarget === t ? 'rgba(59,130,246,0.3)' : 'rgba(255,255,255,0.06)',
+            border: colorTarget === t ? '1px solid #3B82F6' : '1px solid rgba(255,255,255,0.12)',
+            color: colorTarget === t ? '#93C5FD' : 'rgba(255,255,255,0.4)',
+          }}>{t}</button>
+        ))}
+        <button title="Set to none (invisible)" onClick={() => (onColorCommit || onColorChange)(colorTarget, 'none')} style={{
+          ...btnBase, width: 30,
+          background: activeColor === 'none' ? 'rgba(239,68,68,0.25)' : 'rgba(255,255,255,0.06)',
+          border: activeColor === 'none' ? '1px solid #EF4444' : '1px solid rgba(255,255,255,0.12)',
+          color: activeColor === 'none' ? '#FCA5A5' : 'rgba(255,255,255,0.35)',
+        }}>∅</button>
+      </div>
+
+      {/* Color wheel */}
+      <ColorWheel
+        color={!activeColor || activeColor === 'none' ? '#1a1a2e' : activeColor}
+        onChange={c => onColorChange(colorTarget, c)}
+        onCommit={c => onColorCommit && onColorCommit(colorTarget, c)}
+      />
+
+      {/* Hex input row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 8 }}>
+        <div style={{
+          width: 20, height: 20, borderRadius: 3, flexShrink: 0,
+          border: '1px solid rgba(255,255,255,0.25)',
+          background: activeColor === 'none'
+            ? 'repeating-conic-gradient(#555 0% 25%, #333 0% 50%) 0 0 / 6px 6px'
+            : (activeColor || '#1a1a2e'),
+        }} />
+        <input type="text" value={hexInput}
+          onChange={e => setHexInput(e.target.value)}
+          onBlur={e  => handleHexCommit(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { handleHexCommit(hexInput); e.target.blur(); } }}
+          placeholder="#1a1a2e"
+          style={{
+            flex: 1, height: 22, borderRadius: 3, fontSize: 10, padding: '0 6px',
+            background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)',
+            color: 'rgba(255,255,255,0.75)', fontFamily: 'Courier New, monospace', outline: 'none',
+          }}
+        />
+      </div>
+
+      {/* Recent colors — 2 rows of 10 */}
+      {recentColors.length > 0 && (
+        <div style={{ marginTop: 8, borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: 6 }}>
+          <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase',
+            letterSpacing: '0.08em', marginBottom: 5 }}>Recent</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 3 }}>
+            {Array.from({ length: 20 }).map((_, i) => {
+              const c = recentColors[i];
+              if (!c) return <div key={i} style={{ width: '100%', aspectRatio: '1', borderRadius: 3,
+                background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }} />;
+              return (
+                <button key={i} title={c} onClick={() => onColorCommit ? onColorCommit(colorTarget, c) : onColorChange(colorTarget, c)} style={{
+                  width: '100%', aspectRatio: '1', borderRadius: 3, background: c, cursor: 'pointer',
+                  padding: 0, outline: 'none',
+                  border: activeColor === c ? '2px solid #fff' : '1px solid rgba(255,255,255,0.2)',
+                }} />
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAPER.JS BOOLEAN JOIN UTILITIES
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Initialize paper.js in headless mode (no canvas needed for boolean ops)
+(function initPaper() {
+  if (typeof paper === 'undefined') return;
+  try {
+    const _c = document.createElement('canvas');
+    _c.width = 1; _c.height = 1;
+    paper.setup(_c);
+  } catch (e) { /* paper not available — join tools will be disabled */ }
+})();
+
+// Convert our shape schema to a paper.js Path object
+function paperPathFromShape(s) {
+  if (typeof paper === 'undefined') return null;
+  try {
+    switch (s.type) {
+      case 'line': {
+        const p = new paper.Path();
+        p.add(new paper.Point(s.x1, s.y1));
+        p.add(new paper.Point(s.x2, s.y2));
+        return p;
+      }
+      case 'rect':
+        return new paper.Path.Rectangle(new paper.Rectangle(s.x, s.y, s.w, s.h));
+      case 'circle':
+        return new paper.Path.Circle(new paper.Point(s.cx, s.cy), s.r);
+      case 'curve': {
+        const arc = computeArcFromPI(s.x1, s.y1, s.x2, s.y2, s.px, s.py);
+        if (!arc) {
+          const p = new paper.Path();
+          p.add(new paper.Point(s.x1, s.y1));
+          p.add(new paper.Point(s.x2, s.y2));
+          return p;
+        }
+        const { cx, cy, R, delta } = arc;
+        const angA = Math.atan2(s.y1 - cy, s.x1 - cx);
+        const cross = (s.px - s.x1) * (s.y2 - s.y1) - (s.py - s.y1) * (s.x2 - s.x1);
+        const sweepCW = cross > 0;
+        const midAng = angA + (sweepCW ? 1 : -1) * delta / 2;
+        const tx = cx + R * Math.cos(midAng), ty = cy + R * Math.sin(midAng);
+        return new paper.Path.Arc(
+          new paper.Point(s.x1, s.y1),
+          new paper.Point(tx, ty),
+          new paper.Point(s.x2, s.y2)
+        );
+      }
+      case 'path': {
+        if (!s.nodes || s.nodes.length < 2) return null;
+        const p = new paper.Path();
+        s.nodes.forEach(n => {
+          p.add(new paper.Segment(
+            new paper.Point(n.x, n.y),
+            new paper.Point((n.cp1x || n.x) - n.x, (n.cp1y || n.y) - n.y),
+            new paper.Point((n.cp2x || n.x) - n.x, (n.cp2y || n.y) - n.y)
+          ));
+        });
+        if (s.closed) p.closePath();
+        return p;
+      }
+      default: return null;
+    }
+  } catch { return null; }
+}
+
+// Convert a paper.js path back to our path shape schema
+function paperPathToOurShape(pp, ref) {
+  if (!pp || !pp.segments) return null;
+  try {
+    // Handle compound paths (result of some boolean ops)
+    const segs = pp.children ? pp.children.flatMap(c => c.segments || []) : pp.segments;
+    if (!segs || segs.length < 2) return null;
+    const nodes = segs.map(seg => ({
+      x: seg.point.x, y: seg.point.y,
+      type: (Math.abs(seg.handleIn.x) < 0.01 && Math.abs(seg.handleIn.y) < 0.01 &&
+             Math.abs(seg.handleOut.x) < 0.01 && Math.abs(seg.handleOut.y) < 0.01) ? 'sharp' : 'smooth',
+      cp1x: seg.point.x + seg.handleIn.x,  cp1y: seg.point.y + seg.handleIn.y,
+      cp2x: seg.point.x + seg.handleOut.x, cp2y: seg.point.y + seg.handleOut.y,
+    }));
+    return {
+      id: newId(), type: 'path',
+      closed: pp.closed || (pp.children && pp.children[0]?.closed) || false,
+      nodes,
+      stroke: ref.stroke || STROKE, fill: ref.fill || 'none',
+      strokeWidth: ref.strokeWidth || STROKE_W,
+      layerId: ref.layerId,
+    };
+  } catch { return null; }
+}
+
+// Perform a boolean join operation on an array of shapes.
+// Returns an array of new shapes (usually 1, more for divide).
+function performJoin(op, selectedShapes) {
+  if (typeof paper === 'undefined') return null;
+  if (selectedShapes.length < 2) return null;
+  const paths = selectedShapes.map(paperPathFromShape).filter(Boolean);
+  if (paths.length < 2) return null;
+  const ref = selectedShapes[0];
+  try {
+    if (op === 'divide') {
+      // Divide: split each shape at intersections with others
+      const results = [];
+      let base = paths[0];
+      for (let i = 1; i < paths.length; i++) {
+        const divided = base.divide(paths[i]);
+        if (divided) { results.push(divided); }
+        base = base.subtract(paths[i]);
+        if (base) results.push(base);
+      }
+      return results.map(r => paperPathToOurShape(r, ref)).filter(Boolean);
+    }
+    let result = paths[0];
+    for (let i = 1; i < paths.length; i++) {
+      switch (op) {
+        case 'add':       result = result.unite(paths[i]); break;
+        case 'subtract':  result = result.subtract(paths[i]); break;
+        case 'intersect': result = result.intersect(paths[i]); break;
+        case 'xor':       result = result.exclude(paths[i]); break;
+      }
+      if (!result) return null;
+    }
+    const shape = paperPathToOurShape(result, ref);
+    return shape ? [shape] : null;
+  } catch (err) {
+    console.warn('Join op failed:', err);
+    return null;
+  }
+}
+
+// ─── Closed-region detection ────────────────────────────────────────────────
+// Given a click point and an array of shapes, finds the smallest closed polygon
+// formed by connected line segments that contains the click point.
+// Uses planar DCEL (half-edge) face traversal.
+// Returns an array of path nodes (sharp corners) or null if no region found.
+function detectClosedRegionFromSegments(clickPt, shapes, snapTol) {
+  // ── 1. Closed path/pen/pencil shapes: check directly via PIP ─────────────
+  // A closed path with a click inside it → return its nodes as-is.
+  for (let si = shapes.length - 1; si >= 0; si--) {
+    const s = shapes[si];
+    if (s.type !== 'path' || !s.closed || !s.nodes || s.nodes.length < 3) continue;
+    let inside = false;
+    const nv = s.nodes.length;
+    for (let ci = 0, cj = nv - 1; ci < nv; cj = ci++) {
+      const xi = s.nodes[ci].x, yi = s.nodes[ci].y;
+      const xj = s.nodes[cj].x, yj = s.nodes[cj].y;
+      if (((yi > clickPt.y) !== (yj > clickPt.y)) &&
+          clickPt.x < (xj - xi) * (clickPt.y - yi) / (yj - yi) + xi)
+        inside = !inside;
+    }
+    if (inside) {
+      return s.nodes.map(n => ({
+        x: n.x, y: n.y,
+        type: n.type || 'sharp',
+        cp1x: n.cp1x ?? n.x, cp1y: n.cp1y ?? n.y,
+        cp2x: n.cp2x ?? n.x, cp2y: n.cp2y ?? n.y,
+      }));
+    }
+  }
+
+  // ── 2. Collect raw polyline segments from all shape types ─────────────────
+  // Curves are approximated as 20-step polylines so arc intersections work.
+  const rawSegs = []; // each: [x1, y1, x2, y2]
+
+  shapes.forEach(s => {
+    if (s.visible === false) return;
+    if (s.type === 'line') {
+      rawSegs.push([s.x1, s.y1, s.x2, s.y2]);
+    } else if (s.type === 'rect') {
+      const { x, y, w, h } = s;
+      rawSegs.push([x, y, x+w, y], [x+w, y, x+w, y+h],
+                   [x+w, y+h, x, y+h], [x, y+h, x, y]);
+    } else if (s.type === 'curve') {
+      const cpx = s.px !== undefined ? s.px : (s.x1+s.x2)/2;
+      const cpy = s.py !== undefined ? s.py : (s.y1+s.y2)/2;
+      const arc = computeArcFromPI(s.x1, s.y1, s.x2, s.y2, cpx, cpy);
+      if (arc) {
+        const { cx, cy, R, delta } = arc;
+        const angA = Math.atan2(s.y1 - cy, s.x1 - cx);
+        const cross = (cpx - s.x1) * (s.y2 - s.y1) - (cpy - s.y1) * (s.x2 - s.x1);
+        const sweepDir = cross > 0 ? 1 : -1;
+        const STEPS = 20;
+        let prev = { x: s.x1, y: s.y1 };
+        for (let i = 1; i <= STEPS; i++) {
+          const a = angA + sweepDir * (delta * i / STEPS);
+          const cur = { x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) };
+          rawSegs.push([prev.x, prev.y, cur.x, cur.y]);
+          prev = cur;
+        }
+      } else {
+        rawSegs.push([s.x1, s.y1, s.x2, s.y2]);
+      }
+    } else if (s.type === 'circle') {
+      const STEPS = 48;
+      for (let i = 0; i < STEPS; i++) {
+        const a0 = (i / STEPS) * 2 * Math.PI;
+        const a1 = ((i + 1) / STEPS) * 2 * Math.PI;
+        rawSegs.push([
+          s.cx + s.r * Math.cos(a0), s.cy + s.r * Math.sin(a0),
+          s.cx + s.r * Math.cos(a1), s.cy + s.r * Math.sin(a1),
+        ]);
+      }
+    } else if (s.type === 'path' && s.nodes && s.nodes.length >= 2) {
+      const nodes = s.nodes;
+      for (let i = 0; i < nodes.length - 1; i++)
+        rawSegs.push([nodes[i].x, nodes[i].y, nodes[i+1].x, nodes[i+1].y]);
+      if (s.closed)
+        rawSegs.push([nodes[nodes.length-1].x, nodes[nodes.length-1].y, nodes[0].x, nodes[0].y]);
+    }
+  });
+
+  if (rawSegs.length < 2) return null;
+
+  // ── 3. Split segments at all pairwise intersections ───────────────────────
+  // This lets crossing lines (non-endpoint-connected) form closed regions.
+  function segSplit(ax, ay, bx, by, cx, cy, dx, dy) {
+    const d1x = bx-ax, d1y = by-ay, d2x = dx-cx, d2y = dy-cy;
+    const denom = d1x*d2y - d1y*d2x;
+    if (Math.abs(denom) < 1e-10) return null;
+    const t = ((cx-ax)*d2y - (cy-ay)*d2x) / denom;
+    const u = ((cx-ax)*d1y - (cy-ay)*d1x) / denom;
+    const EPS = 1e-6;
+    if (t > EPS && t < 1-EPS && u > EPS && u < 1-EPS)
+      return { x: ax + t*d1x, y: ay + t*d1y, t, u };
+    return null;
+  }
+
+  // Collect intersection t-values per segment
+  const splitTs = rawSegs.map(() => []);
+  for (let i = 0; i < rawSegs.length; i++) {
+    for (let j = i+1; j < rawSegs.length; j++) {
+      const [ax,ay,bx,by] = rawSegs[i], [cx,cy,dx,dy] = rawSegs[j];
+      const p = segSplit(ax,ay,bx,by,cx,cy,dx,dy);
+      if (p) {
+        splitTs[i].push(p.t);
+        splitTs[j].push(p.u);
+      }
+    }
+  }
+
+  // Build final segment list after splitting
+  const finalSegs = [];
+  for (let i = 0; i < rawSegs.length; i++) {
+    const [ax,ay,bx,by] = rawSegs[i];
+    const ts = [...new Set(splitTs[i])].sort((a,b)=>a-b);
+    const pts = [0, ...ts, 1].map(t => ({ x: ax+t*(bx-ax), y: ay+t*(by-ay) }));
+    for (let k = 0; k < pts.length-1; k++) {
+      const dx = pts[k+1].x-pts[k].x, dy = pts[k+1].y-pts[k].y;
+      if (dx*dx+dy*dy > 0.0001)
+        finalSegs.push([pts[k].x, pts[k].y, pts[k+1].x, pts[k+1].y]);
+    }
+  }
+
+  if (finalSegs.length < 3) return null;
+
+  // ── 3.5 Build vertex set + prune dangling segments ────────────────────────
+  // IMPORTANT: build the vertex set first (with float-safe dedup), then use
+  // vertex *indices* for degree counting.  Using Math.round string keys was
+  // unreliable: intersection points computed from two different segment pairs
+  // may differ by a fraction of a pixel, rounding to different keys and
+  // leaving dangling line-tails alive, which breaks the DCEL face traversal.
+  const DEDUP = 0.5;
+  const tol2 = DEDUP * DEDUP;
+  const verts = [];
+  function findOrAdd(x, y) {
+    for (let i = 0; i < verts.length; i++) {
+      const dx = verts[i][0]-x, dy = verts[i][1]-y;
+      if (dx*dx+dy*dy < tol2) return i;
+    }
+    verts.push([x, y]);
+    return verts.length - 1;
+  }
+
+  // Map every final sub-segment to a pair of vertex indices
+  let viSegs = finalSegs.map(([x1,y1,x2,y2]) => [findOrAdd(x1,y1), findOrAdd(x2,y2)]);
+  viSegs = viSegs.filter(([a,b]) => a !== b); // drop zero-length
+
+  // Iteratively remove segments whose either endpoint has degree < 2.
+  // A degree-1 tip can never be part of a closed face.
+  {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const deg = new Array(verts.length).fill(0);
+      viSegs.forEach(([a,b]) => { deg[a]++; deg[b]++; });
+      const next = viSegs.filter(([a,b]) => deg[a] >= 2 && deg[b] >= 2);
+      if (next.length < viSegs.length) { viSegs = next; changed = true; }
+    }
+  }
+
+  if (viSegs.length < 3) return null;
+
+  // ── 4. DCEL face detection on the pruned graph ────────────────────────────
+  // Deduplicate parallel edges (same vertex pair in either direction) to avoid
+  // phantom half-edges that corrupt the face traversal.
+  const edgeSet = new Set();
+  const edges = [];
+  viSegs.forEach(([a, b]) => {
+    const key = a < b ? `${a},${b}` : `${b},${a}`;
+    if (!edgeSet.has(key)) { edgeSet.add(key); edges.push([a, b]); }
+  });
+  if (edges.length < 3) return null;
+
+  const nv = verts.length;
+  const hFrom=[], hTo=[], hTwin=[], hNext=[];
+  const outgoing = Array.from({ length: nv }, () => []);
+
+  edges.forEach(([a, b]) => {
+    const h1 = hFrom.length, h2 = h1+1;
+    hFrom.push(a); hTo.push(b); hTwin.push(h2); hNext.push(-1);
+    hFrom.push(b); hTo.push(a); hTwin.push(h1); hNext.push(-1);
+    outgoing[a].push(h1);
+    outgoing[b].push(h2);
+  });
+
+  for (let v = 0; v < nv; v++) {
+    const vx = verts[v][0], vy = verts[v][1];
+    outgoing[v].sort((ia, ib) => {
+      const aA = Math.atan2(verts[hTo[ia]][1]-vy, verts[hTo[ia]][0]-vx);
+      const aB = Math.atan2(verts[hTo[ib]][1]-vy, verts[hTo[ib]][0]-vx);
+      return aA - aB;
+    });
+  }
+
+  const numHE = hFrom.length;
+  for (let idx = 0; idx < numHE; idx++) {
+    const v = hTo[idx], deg = outgoing[v].length;
+    if (!deg) continue;
+    const pos = outgoing[v].indexOf(hTwin[idx]);
+    if (pos !== -1) hNext[idx] = outgoing[v][(pos-1+deg)%deg];
+  }
+
+  const visited = new Uint8Array(numHE);
+  const faces = [];
+  for (let s = 0; s < numHE; s++) {
+    if (visited[s] || hNext[s] === -1) continue;
+    const fv = [];
+    let idx = s, cnt = 0;
+    while (!visited[idx] && cnt < numHE) {
+      visited[idx] = 1; fv.push(hFrom[idx]); idx = hNext[idx]; cnt++;
+    }
+    if (fv.length >= 3) faces.push(fv);
+  }
+
+  function signedArea(fv) {
+    let a = 0, nf = fv.length;
+    for (let i=0, j=nf-1; i<nf; j=i++) {
+      const xi=verts[fv[i]][0], yi=verts[fv[i]][1];
+      const xj=verts[fv[j]][0], yj=verts[fv[j]][1];
+      a += (xi-xj)*(yi+yj);
+    }
+    return a/2;
+  }
+
+  function pip(pt, fv) {
+    let inside = false, nf = fv.length;
+    for (let i=0, j=nf-1; i<nf; j=i++) {
+      const xi=verts[fv[i]][0], yi=verts[fv[i]][1];
+      const xj=verts[fv[j]][0], yj=verts[fv[j]][1];
+      if (((yi>pt.y)!==(yj>pt.y)) && pt.x<(xj-xi)*(pt.y-yi)/(yj-yi)+xi)
+        inside = !inside;
+    }
+    return inside;
+  }
+
+  let bestFace = null, bestArea = Infinity;
+  faces.forEach(fv => {
+    // Use absolute area — DCEL winding depends on traversal order, not guaranteed CW.
+    const sa = Math.abs(signedArea(fv));
+    if (sa > 1 && pip(clickPt, fv) && sa < bestArea) {
+      bestArea = sa; bestFace = fv;
+    }
+  });
+
+  if (!bestFace) return null;
+
+  // Build raw node list from face vertex indices
+  let faceNodes = bestFace.map(vi => ({ x: verts[vi][0], y: verts[vi][1] }));
+
+  // Remove collinear / near-collinear nodes: if a node lies within 0.5 px of
+  // the line through its two neighbours, it adds no geometric information and
+  // is just floating-point noise from segment-splitting.  Iterate until stable.
+  {
+    let changed = true;
+    while (changed && faceNodes.length > 3) {
+      changed = false;
+      for (let i = faceNodes.length - 1; i >= 0 && faceNodes.length > 3; i--) {
+        const prev = faceNodes[(i - 1 + faceNodes.length) % faceNodes.length];
+        const curr = faceNodes[i];
+        const nx   = faceNodes[(i + 1) % faceNodes.length];
+        const dx = nx.x - prev.x, dy = nx.y - prev.y;
+        const len2 = dx*dx + dy*dy;
+        const dist = len2 < 1e-10 ? 0
+          : Math.abs((curr.x - prev.x)*dy - (curr.y - prev.y)*dx) / Math.sqrt(len2);
+        if (dist < 0.5) { faceNodes.splice(i, 1); changed = true; }
+      }
+    }
+  }
+
+  return faceNodes.map(n => ({
+    x: n.x, y: n.y,
+    type: 'sharp',
+    cp1x: n.x, cp1y: n.y,
+    cp2x: n.x, cp2y: n.y,
+  }));
+}
+
 function SketchPage({ page, projectId, onReload }) {
   // Sanitize shapes on load: remove any path shapes with corrupted (NaN/null/undefined)
   // node coordinates that would crash pathToSVGD on render.
@@ -1064,6 +1815,38 @@ function SketchPage({ page, projectId, onReload }) {
   // When true, each committed shape shows an inline measurement label (length,
   // radius, arc length, width×height).  Also shown live while drawing.
   const [defaultStrokeW, setDefaultStrokeW] = useState(1.5);
+  // ── Active color state ─────────────────────────────────────────────────────
+  const [activeStrokeColor, setActiveStrokeColor] = useState(STROKE);
+  const [activeFillColor,   setActiveFillColor]   = useState('none');
+  const [colorTarget,       setColorTarget]       = useState('stroke'); // 'stroke' | 'fill'
+  const [recentColors,      setRecentColors]      = useState([]);       // up to 10
+  const [colorPanelOpen,    setColorPanelOpen]    = useState(true);
+  const [bgColor,           setBgColor]           = useState(page.bgColor || null);
+
+  // Add a color to the recent history (prepend, deduplicate, cap at 20)
+  function pushRecentColor(hex) {
+    if (!hex || hex === 'none') return;
+    setRecentColors(prev => [hex, ...prev.filter(c => c !== hex)].slice(0, 20));
+  }
+
+  // Live update — called on every drag move. Sets the active color and updates
+  // selected shapes immediately, but does NOT push to recent history.
+  function applyColorToSelection(target, color) {
+    if (target === 'stroke') setActiveStrokeColor(color);
+    else setActiveFillColor(color);
+    if (selectedIds.length > 0) {
+      commitShapes(shapes.map(s =>
+        selectedIds.includes(s.id) ? { ...s, [target]: color } : s
+      ));
+    }
+  }
+
+  // Commit — called on pointer release. Same as above but also pushes to history.
+  function commitColorToSelection(target, color) {
+    pushRecentColor(color);
+    applyColorToSelection(target, color);
+  }
+
   const [showDims,      setShowDims]      = useState(true);
   // When true (default), new shapes are committed with dims visible.
   // When false, new shapes are committed with _hideDims:true so dims are hidden by default.
@@ -1454,6 +2237,29 @@ function SketchPage({ page, projectId, onReload }) {
           return;
         }
       }
+
+      // ── Tool shortcut keys ────────────────────────────────────────────────
+      // Single-key shortcuts (no modifier). Skip if text tool is actively drawing.
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        const TOOL_KEYS = {
+          v: 'select', l: 'line', c: 'curve', b: 'pencil', p: 'pen',
+          a: 'node',   r: 'rect', o: 'circle', t: 'text', e: 'eraser', f: 'fill',
+          m: 'dim-linear', g: 'dim-angle', k: 'dim-bearing', q: 'dim-radius',
+        };
+        const newTool = TOOL_KEYS[e.key.toLowerCase()];
+        if (newTool) {
+          // Don't hijack 't' or 'f' etc. while text tool is placing a shape
+          if (tool === 'text' && drawState) return;
+          e.preventDefault();
+          setTool(newTool);
+          setPrevTool(null);
+          setDrawState(null);
+          setPenNodes([]);
+          setPenPhase('point');
+          setPenCursor(null);
+          return;
+        }
+      }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -1496,9 +2302,10 @@ function SketchPage({ page, projectId, onReload }) {
     const sd = (patch && patch.scaleDenom  !== undefined) ? patch.scaleDenom  : scaleDenom;
     const u  = (patch && patch.units       !== undefined) ? patch.units       : units;
     const na = (patch && patch.northAzimuth !== undefined) ? patch.northAzimuth : northAzimuth;
+    const bg = (patch && patch.bgColor     !== undefined) ? patch.bgColor     : bgColor;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      DB.updatePage(projectId, page.id, { shapes: s, notes: n, layers: l, scaleDenom: sd, units: u, northAzimuth: na });
+      DB.updatePage(projectId, page.id, { shapes: s, notes: n, layers: l, scaleDenom: sd, units: u, northAzimuth: na, bgColor: bg });
     }, 600);
   }
 
@@ -1554,7 +2361,7 @@ function SketchPage({ page, projectId, onReload }) {
     commitShapes([...shapes, {
       id: pathId, type: 'path', closed,
       nodes,
-      stroke: STROKE, strokeWidth: defaultStrokeW,
+      stroke: activeStrokeColor, fill: activeFillColor, strokeWidth: defaultStrokeW,
       layerId: activeLayerId,
       ...(dimsOnDraw ? {} : { _hideDims: true }),
     }]);
@@ -2078,6 +2885,37 @@ function SketchPage({ page, projectId, onReload }) {
       return;
     }
 
+    // ── Fill tool ─────────────────────────────────────────────────────────────
+    // Never modifies existing shapes. Detects closed regions formed by connected
+    // line segments and creates a new, independent filled path shape.
+    if (tool === 'fill') {
+      const regionSnapTol = Math.max(12 * ps, 2);
+      const regionNodes = detectClosedRegionFromSegments(pt, shapes.filter(s => s.visible !== false), regionSnapTol);
+      if (regionNodes && regionNodes.length >= 3) {
+        const fillColor = activeFillColor === 'none' ? activeStrokeColor : activeFillColor;
+        pushRecentColor(fillColor);
+        const regionId = newId();
+        // Insert BEFORE existing shapes so the fill renders below the boundary lines
+        const regionShape = {
+          id: regionId, type: 'path', closed: true,
+          nodes: regionNodes,
+          stroke: 'none', fill: fillColor,
+          strokeWidth: defaultStrokeW,
+          layerId: activeLayerId,
+          ...(dimsOnDraw ? {} : { _hideDims: true }),
+        };
+        commitShapes([regionShape, ...shapes]);
+        setSelectedIds([regionId]);
+      } else {
+        // No closed region found — set background color
+        const newBg = activeFillColor === 'none' ? null : activeFillColor;
+        setBgColor(newBg);
+        pushRecentColor(activeFillColor);
+        persist(undefined, undefined, undefined, { bgColor: newBg });
+      }
+      return;
+    }
+
     if (tool === 'text') {
       // Click on any text shape with text tool → immediately open for editing.
       // (If a text shape is already selected, the textToolWithSelection branch above
@@ -2229,7 +3067,7 @@ function SketchPage({ page, projectId, onReload }) {
           x1: drawState.x1, y1: drawState.y1,
           x2: drawState.x2, y2: drawState.y2,
           px: drawState.px,  py: drawState.py,
-          stroke: STROKE, strokeWidth: defaultStrokeW,
+          stroke: activeStrokeColor, fill: activeFillColor, strokeWidth: defaultStrokeW,
           layerId: drawState.layerId || activeLayerId,
           ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_crvId]);
@@ -2937,7 +3775,7 @@ function SketchPage({ page, projectId, onReload }) {
         const _lineId = newId();
         commitShapes([...shapes, { id: _lineId, type: 'line',
           x1: drawState.x1, y1: drawState.y1, x2: drawState.x2, y2: drawState.y2,
-          stroke: STROKE, strokeWidth: defaultStrokeW,
+          stroke: activeStrokeColor, fill: activeFillColor, strokeWidth: defaultStrokeW,
           layerId: drawState.layerId || activeLayerId,
           ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_lineId]);
@@ -2952,7 +3790,7 @@ function SketchPage({ page, projectId, onReload }) {
         const _rctId = newId();
         commitShapes([...shapes, { id: _rctId, type: 'rect',
           x: drawState.x, y: drawState.y, w: drawState.w, h: drawState.h,
-          stroke: STROKE, strokeWidth: defaultStrokeW, fill: 'none',
+          stroke: activeStrokeColor, fill: activeFillColor, strokeWidth: defaultStrokeW,
           layerId: drawState.layerId || activeLayerId,
           ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_rctId]);
@@ -2967,7 +3805,7 @@ function SketchPage({ page, projectId, onReload }) {
         const _cirId = newId();
         commitShapes([...shapes, { id: _cirId, type: 'circle',
           cx: drawState.cx, cy: drawState.cy, r: drawState.r,
-          stroke: STROKE, strokeWidth: defaultStrokeW, fill: 'none',
+          stroke: activeStrokeColor, fill: activeFillColor, strokeWidth: defaultStrokeW,
           layerId: drawState.layerId || activeLayerId,
           ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_cirId]);
@@ -2998,7 +3836,7 @@ function SketchPage({ page, projectId, onReload }) {
           commitShapes([...shapes, {
             id: pathId, type: 'path', closed: false,
             nodes,
-            stroke: STROKE, strokeWidth: defaultStrokeW,
+            stroke: activeStrokeColor, fill: activeFillColor, strokeWidth: defaultStrokeW,
             layerId: drawState.layerId || activeLayerId,
             ...(dimsOnDraw ? {} : { _hideDims: true }),
           }]);
@@ -3119,6 +3957,22 @@ function SketchPage({ page, projectId, onReload }) {
             tp
           );
           if (Math.hypot(nearest.x - tp.x, nearest.y - tp.y) < thresh) return s;
+        }
+        // For closed paths with a visible fill, also hit-test the interior area.
+        // Uses ray-casting against the node polygon (ignores Bezier bulge, which is
+        // fine for selection — the visual and interactive areas are essentially the same).
+        if (s.closed && s.fill && s.fill !== 'none' && nodes.length >= 3) {
+          let inside = false;
+          const nv = nodes.length;
+          for (let ci = 0, cj = nv - 1; ci < nv; cj = ci++) {
+            const xi = nodes[ci].x, yi = nodes[ci].y;
+            const xj = nodes[cj].x, yj = nodes[cj].y;
+            if (((yi > tp.y) !== (yj > tp.y)) &&
+                tp.x < (xj - xi) * (tp.y - yi) / (yj - yi) + xi) {
+              inside = !inside;
+            }
+          }
+          if (inside) return s;
         }
       } else if (s.type === 'dim-linear') {
         // Hit the dimension line (the offset line parallel to P1→P2)
@@ -3623,7 +4477,7 @@ function SketchPage({ page, projectId, onReload }) {
       commitShapes([...shapes, { id: textEdit.id, type: 'text',
         x: textEdit.x, y: textEdit.y,
         w: textEdit.w || 180, h: textEdit.h || 80,
-        content: textEdit.content, stroke: STROKE,
+        content: textEdit.content, stroke: activeStrokeColor,
         layerId: textEdit.layerId || activeLayerId }]);
     }
     setTextEdit(null);
@@ -4578,7 +5432,7 @@ function SketchPage({ page, projectId, onReload }) {
   const cursorMap = {
     select: 'default', line: 'crosshair', curve: 'crosshair',
     pencil: 'crosshair', pen: 'crosshair', node: 'default',
-    circle: 'crosshair', rect: 'crosshair', text: 'text', eraser: 'pointer',
+    circle: 'crosshair', rect: 'crosshair', text: 'text', eraser: 'pointer', fill: 'cell',
     'dim-linear': 'crosshair', 'dim-angle': 'pointer',
     'dim-bearing': 'crosshair', 'dim-radius': 'pointer',
   };
@@ -4639,6 +5493,7 @@ function SketchPage({ page, projectId, onReload }) {
               { label: 'Card',         icon: '▤', state: showValueCard, set: () => setShowValueCard(v => !v), activeCol: '#C4B5FD', activeBg: 'rgba(167,139,250,0.18)' },
               { label: 'Scale Bar',    icon: '⊟', state: showScaleBar,  set: () => setShowScaleBar(v => !v),  activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
               { label: 'N Arrow',      icon: '↑', state: showNorthArrow, set: () => setShowNorthArrow(v => !v), activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
+              { label: 'Bg Color',     icon: '◩', state: !!bgColor,     set: () => { setBgColor(null); persist(undefined, undefined, undefined, { bgColor: null }); }, activeCol: '#F9A8D4', activeBg: 'rgba(249,168,212,0.15)' },
             ].map(({ label, icon, state, set, activeCol, activeBg }) => (
               <button key={label}
                 onClick={set}
@@ -4897,6 +5752,52 @@ function SketchPage({ page, projectId, onReload }) {
           </div>
         )}
 
+        {/* ── Join dropdown panel ───────────────────────────────────────── */}
+        {openMenu === 'join' && (
+          <div style={{
+            position: 'absolute', top: 36, left: menuPos.x, zIndex: 100,
+            background: 'rgba(16,22,48,0.98)', backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
+            boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+            minWidth: 170, padding: '4px 0',
+            fontFamily: 'Courier New, monospace',
+          }}>
+            {[
+              { op: 'add',       label: 'Add',       icon: '∪', desc: 'Union of all shapes',         col: '#4ADE80', bg: 'rgba(34,197,94,0.15)'    },
+              { op: 'subtract',  label: 'Subtract',  icon: '∖', desc: 'Subtract from first shape',   col: '#FB923C', bg: 'rgba(251,146,60,0.15)'   },
+              { op: 'intersect', label: 'Intersect', icon: '∩', desc: 'Keep overlapping area only',  col: '#60A5FA', bg: 'rgba(96,165,250,0.15)'   },
+              { op: 'xor',       label: 'XOR',       icon: '⊕', desc: 'Keep non-overlapping parts',  col: '#C084FC', bg: 'rgba(192,132,252,0.15)'  },
+              { op: 'divide',    label: 'Divide',    icon: '÷', desc: 'Split at intersections',      col: '#F9A8D4', bg: 'rgba(249,168,212,0.15)'  },
+            ].map(({ op, label, icon, desc, col, bg }) => (
+              <button key={op}
+                onClick={() => {
+                  setOpenMenu(null);
+                  const sel = shapes.filter(s => selectedIds.includes(s.id));
+                  const results = performJoin(op, sel);
+                  if (results && results.length > 0) {
+                    const remaining = shapes.filter(s => !selectedIds.includes(s.id));
+                    const next = [...remaining, ...results];
+                    commitShapes(next);
+                    setSelectedIds(results.map(r => r.id));
+                  }
+                }}
+                style={{
+                  width: '100%', height: 38, display: 'flex', alignItems: 'center',
+                  gap: 10, padding: '0 14px', background: 'transparent',
+                  border: 'none', cursor: 'pointer', textAlign: 'left',
+                  color: 'rgba(255,255,255,0.65)', fontSize: 11,
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = bg; e.currentTarget.style.color = col; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(255,255,255,0.65)'; }}
+              >
+                <span style={{ fontSize: 15, lineHeight: 1, width: 18, textAlign: 'center' }}>{icon}</span>
+                <span style={{ flex: 1 }}>{label}</span>
+                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)' }}>{desc}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* ── Scrollable inner button row ──────────────────────────────── */}
         <div style={{
           height: '100%', display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px',
@@ -4930,6 +5831,32 @@ function SketchPage({ page, projectId, onReload }) {
           </button>
           {/* Separator */}
           <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
+
+          {/* Join ▾ dropdown button — only visible when 2+ shapes selected */}
+          {selectedIds.length >= 2 && (
+            <button
+              onClick={e => {
+                const btnRect = e.currentTarget.getBoundingClientRect();
+                const barRect = toolbarRef.current ? toolbarRef.current.getBoundingClientRect() : { left: 0 };
+                setMenuPos({ x: btnRect.left - barRect.left });
+                setOpenMenu(m => m === 'join' ? null : 'join');
+              }}
+              title="Boolean join operations"
+              style={{
+                height: 26, padding: '0 8px', borderRadius: 4, flexShrink: 0,
+                display: 'flex', alignItems: 'center', gap: 4,
+                background: openMenu === 'join' ? 'rgba(249,168,212,0.2)' : 'rgba(255,255,255,0.06)',
+                border: `1px solid ${openMenu === 'join' ? 'rgba(249,168,212,0.6)' : 'rgba(255,255,255,0.14)'}`,
+                color: openMenu === 'join' ? '#F9A8D4' : 'rgba(255,255,255,0.55)',
+                cursor: 'pointer', fontSize: 11,
+                fontFamily: 'Courier New, monospace', outline: 'none',
+              }}
+            >
+              <span style={{ fontSize: 12, lineHeight: 1 }}>∪</span>
+              <span style={{ letterSpacing: '0.03em' }}>Join</span>
+              <span style={{ fontSize: 8, opacity: 0.5, marginLeft: 1 }}>▾</span>
+            </button>
+          )}
 
           {/* ── Pencil tool context controls ────────────────────────────────── */}
           {tool === 'pencil' && (
@@ -5419,6 +6346,12 @@ function SketchPage({ page, projectId, onReload }) {
             onPointerCancel={onPointerUp}
             onDblClick={onDblClick}
           >
+            {/* Background color — rendered below grid and shapes */}
+            {bgColor && (
+              <rect x={viewBox.x} y={viewBox.y} width={viewBox.w} height={viewBox.h}
+                fill={bgColor} style={{ pointerEvents: 'none' }} />
+            )}
+
             {/* Dynamic grid — rendered below everything */}
             {showGrid && renderGrid()}
 
@@ -5961,6 +6894,34 @@ function SketchPage({ page, projectId, onReload }) {
                     </div>
                   );
                 })}
+              </div>
+
+              {/* ── Color Panel ─────────────────────────────────────────── */}
+              <div style={{ flexShrink: 0, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+                {/* Color section header */}
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '4px 6px 4px 8px', cursor: 'pointer',
+                  borderBottom: colorPanelOpen ? '1px solid rgba(255,255,255,0.07)' : 'none',
+                }} onClick={() => setColorPanelOpen(o => !o)}>
+                  <span style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.35)',
+                    textTransform: 'uppercase', letterSpacing: '0.08em' }}>Colors</span>
+                  <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)' }}>
+                    {colorPanelOpen ? '▾' : '▸'}
+                  </span>
+                </div>
+                {colorPanelOpen && (
+                  <ColorPanel
+                    colorTarget={colorTarget}
+                    onTargetChange={t => {
+                      setColorTarget(t);
+                    }}
+                    activeColor={colorTarget === 'stroke' ? activeStrokeColor : activeFillColor}
+                    recentColors={recentColors}
+                    onColorChange={(target, color) => applyColorToSelection(target, color)}
+                    onColorCommit={(target, color) => commitColorToSelection(target, color)}
+                  />
+                )}
               </div>
             </>
           )}
