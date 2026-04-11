@@ -1805,9 +1805,9 @@ function SketchPage({ page, projectId, onReload }) {
   // ── Scale & Units (Phase 3) ────────────────────────────────────────────────
   const [scaleDenom,    setScaleDenom]    = useState(page.scaleDenom  || 1);
   const [units,         setUnits]         = useState(page.units       || 'm');
-  const [showScaleBar,  setShowScaleBar]  = useState(true);
+  const [showScaleBar,  setShowScaleBar]  = useState(page.showScaleBar  !== false);
   const [showNorthArrow, setShowNorthArrow] = useState(page.showNorthArrow !== false);
-  const [showGrid,      setShowGrid]      = useState(true);
+  const [showGrid,      setShowGrid]      = useState(page.showGrid      !== false);
   // Tracks the live text-input value while the user is typing a new denominator
   const [scaleInput,    setScaleInput]    = useState(String(page.scaleDenom || 1));
 
@@ -1847,11 +1847,11 @@ function SketchPage({ page, projectId, onReload }) {
     applyColorToSelection(target, color);
   }
 
-  const [showDims,      setShowDims]      = useState(true);
+  const [showDims,      setShowDims]      = useState(page.showDims      !== false);
   // When true (default), new shapes are committed with dims visible.
   // When false, new shapes are committed with _hideDims:true so dims are hidden by default.
-  const [dimsOnDraw,    setDimsOnDraw]    = useState(true);
-  const [showValueCard, setShowValueCard] = useState(true);
+  const [dimsOnDraw,    setDimsOnDraw]    = useState(page.dimsOnDraw   !== false);
+  const [showValueCard, setShowValueCard] = useState(page.showValueCard !== false);
 
   // ── North direction (Phase 7) ──────────────────────────────────────────────
   // northAzimuth: clockwise degrees from screen-up that true North points.
@@ -1999,15 +1999,16 @@ function SketchPage({ page, projectId, onReload }) {
     return () => clearTimeout(vbSaveRef.current);
   }, [viewBox.x, viewBox.y, viewBox.w, viewBox.h]);
 
-  // Persist visual toggle states so PDF export respects show/hide settings
+  // Persist visual toggle states so they survive reload and so PDF export
+  // respects show/hide settings.
   useEffect(() => {
     const t = setTimeout(() => {
       window._fb.DB.updatePage(projectId, page.id, {
-        showGrid, showDims, showScaleBar, showNorthArrow,
+        showGrid, showDims, dimsOnDraw, showValueCard, showScaleBar, showNorthArrow,
       });
     }, 400);
     return () => clearTimeout(t);
-  }, [showGrid, showDims, showScaleBar, showNorthArrow]);
+  }, [showGrid, showDims, dimsOnDraw, showValueCard, showScaleBar, showNorthArrow]);
 
   // ── Native canvas input handlers (wheel zoom, middle-mouse pan, context menu) ──
   // All three are attached as native DOM listeners on svgWrapRef rather than as

@@ -2713,6 +2713,25 @@
 
     function handleTypeSelect(type) {
       let pageData = { type };
+      if (type === 'sketch') {
+        // Inherit view settings from the most recent sketch page in this project
+        // so new pages start with the same configuration as the last one worked on.
+        // A brand-new project has no prior sketch pages, so defaults (all true, 1:1) apply.
+        const prevSketch = [...(project.pages || [])].reverse().find(p => p.type === 'sketch');
+        if (prevSketch) {
+          pageData = {
+            type: 'sketch',
+            showGrid:      prevSketch.showGrid      !== false,
+            showDims:      prevSketch.showDims      !== false,
+            dimsOnDraw:    prevSketch.dimsOnDraw    !== false,
+            showValueCard: prevSketch.showValueCard !== false,
+            showScaleBar:  prevSketch.showScaleBar  !== false,
+            showNorthArrow:prevSketch.showNorthArrow !== false,
+            scaleDenom:    prevSketch.scaleDenom    || 1,
+            units:         prevSketch.units         || 'm',
+          };
+        }
+      }
       if (type === 'data') {
         // Each column now carries: id, label, colType ('text'|'num'|'dms'), width
         const cols = [
