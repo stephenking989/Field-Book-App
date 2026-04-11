@@ -29,22 +29,159 @@ const ROT_R   = 9;          // rotate handle hit radius
 // Node keys that snap (excludes bezier handle 'cp' and body/pivot/rotate pseudo-keys)
 const SNAP_NODES = new Set(['p1', 'p2', 'c', 'r', 'tl', 'tr', 'bl', 'br']);
 
+// ── Sketch tool SVG icons — 20×20 viewBox, stroke="currentColor" ──────────────
+const SketchIco = {
+  // Arrow cursor with a subtle tail
+  Select: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 2 L3 14 L7 10 L10 17 L12 16 L9 9 L14 9 Z" fill="currentColor" fillOpacity="0.25" strokeWidth="1.3"/>
+    </svg>
+  ),
+  // Straight diagonal line with endpoint dots
+  Line: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <line x1="3" y1="17" x2="17" y2="3"/>
+      <circle cx="3" cy="17" r="1.5" fill="currentColor"/>
+      <circle cx="17" cy="3" r="1.5" fill="currentColor"/>
+    </svg>
+  ),
+  // Smooth arc with endpoint dots
+  Curve: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <path d="M3 16 C5 4, 15 4, 17 16"/>
+      <circle cx="3" cy="16" r="1.5" fill="currentColor"/>
+      <circle cx="17" cy="16" r="1.5" fill="currentColor"/>
+    </svg>
+  ),
+  // Pencil with eraser end
+  Pencil: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14.5 2.5 a2 2 0 0 1 2.83 2.83 L6 16.5 l-4 1 1-4 Z"/>
+      <line x1="12" y1="5" x2="15" y2="8" strokeWidth="1.2" opacity="0.6"/>
+    </svg>
+  ),
+  // Fountain pen nib
+  Pen: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10 17 L3 10 L10 2 L17 10 Z" fillOpacity="0.15" fill="currentColor"/>
+      <path d="M10 17 L3 10 L10 2 L17 10 Z"/>
+      <line x1="10" y1="2" x2="10" y2="17"/>
+      <circle cx="10" cy="17" r="1.3" fill="currentColor"/>
+    </svg>
+  ),
+  // Node edit — path with visible bezier handles
+  Node: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+      <path d="M3 15 C5 5, 15 5, 17 15" strokeWidth="1.6"/>
+      <circle cx="3" cy="15" r="2" fill="currentColor" fillOpacity="0.9"/>
+      <circle cx="17" cy="15" r="2" fill="currentColor" fillOpacity="0.9"/>
+      <circle cx="10" cy="5" r="1.5" fill="none" strokeWidth="1.3"/>
+      <line x1="3" y1="15" x2="6" y2="7" strokeDasharray="1.5 1.5" opacity="0.55"/>
+      <line x1="17" y1="15" x2="14" y2="7" strokeDasharray="1.5 1.5" opacity="0.55"/>
+    </svg>
+  ),
+  // Circle with centre crosshair
+  Circle: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <circle cx="10" cy="10" r="7"/>
+      <line x1="10" y1="7" x2="10" y2="13" strokeWidth="1.2" opacity="0.5"/>
+      <line x1="7" y1="10" x2="13" y2="10" strokeWidth="1.2" opacity="0.5"/>
+      <circle cx="10" cy="10" r="1.2" fill="currentColor"/>
+    </svg>
+  ),
+  // Rectangle with corner marks
+  Rect: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="5" width="14" height="10" rx="1.5"/>
+      <circle cx="3" cy="5" r="1.2" fill="currentColor" fillOpacity="0.6"/>
+      <circle cx="17" cy="15" r="1.2" fill="currentColor" fillOpacity="0.6"/>
+    </svg>
+  ),
+  // Text cursor T
+  Text: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="4" y1="5" x2="16" y2="5"/>
+      <line x1="10" y1="5" x2="10" y2="16"/>
+      <line x1="7" y1="16" x2="13" y2="16" strokeWidth="1.2" opacity="0.6"/>
+    </svg>
+  ),
+  // Eraser block
+  Eraser: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 15 L9 4 L17 8 L11 19 Z" fillOpacity="0.15" fill="currentColor"/>
+      <path d="M3 15 L9 4 L17 8 L11 19 Z"/>
+      <line x1="3" y1="15" x2="11" y2="19"/>
+      <line x1="6" y1="9.5" x2="14" y2="13.5" strokeWidth="1" opacity="0.5"/>
+    </svg>
+  ),
+  // Paint bucket with drip
+  Fill: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 13 L10 3 L14 7 L7 17 Z" fillOpacity="0.2" fill="currentColor"/>
+      <path d="M3 13 L10 3 L14 7 L7 17 Z"/>
+      <line x1="10" y1="3" x2="7" y2="17" strokeWidth="1" opacity="0.4"/>
+      <circle cx="16" cy="15" r="2.5" fillOpacity="0.3" fill="currentColor"/>
+      <circle cx="16" cy="15" r="2.5"/>
+      <line x1="16" y1="11" x2="16" y2="12.5" strokeWidth="1.3"/>
+    </svg>
+  ),
+  // Linear dimension — two endpoints with extension lines and arrow
+  DimLinear: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+      <line x1="3" y1="13" x2="17" y2="13"/>
+      <line x1="3" y1="10" x2="3" y2="16" strokeWidth="1.2"/>
+      <line x1="17" y1="10" x2="17" y2="16" strokeWidth="1.2"/>
+      <polyline points="6 11 3 13 6 15" strokeWidth="1.2"/>
+      <polyline points="14 11 17 13 14 15" strokeWidth="1.2"/>
+      <line x1="7" y1="7" x2="13" y2="7" strokeWidth="1" strokeDasharray="2 1.5" opacity="0.5"/>
+    </svg>
+  ),
+  // Angle arc between two lines
+  DimAngle: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+      <line x1="4" y1="16" x2="16" y2="4"/>
+      <line x1="4" y1="16" x2="17" y2="16"/>
+      <path d="M14 16 A10 10 0 0 0 10.5 9.5" strokeWidth="1.3"/>
+      <text x="11" y="17" fontSize="5" fill="currentColor" stroke="none" fontFamily="sans-serif">°</text>
+    </svg>
+  ),
+  // Bearing — north arrow with compass rose hint
+  DimBearing: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="10" cy="10" r="7" strokeWidth="1.1" opacity="0.35"/>
+      <line x1="10" y1="3" x2="10" y2="17" strokeWidth="1" opacity="0.3"/>
+      <line x1="3" y1="10" x2="17" y2="10" strokeWidth="1" opacity="0.3"/>
+      <path d="M10 3 L12.5 10 L10 9 L7.5 10 Z" fill="currentColor" fillOpacity="0.85" strokeWidth="1"/>
+      <text x="8.5" y="7" fontSize="4.5" fill="currentColor" stroke="none" fontFamily="sans-serif" fontWeight="bold">N</text>
+    </svg>
+  ),
+  // Radius — circle with radius line and R label
+  DimRadius: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+      <circle cx="10" cy="11" r="7"/>
+      <line x1="10" y1="11" x2="15.5" y2="5.5"/>
+      <circle cx="10" cy="11" r="1.2" fill="currentColor"/>
+      <text x="13" y="8" fontSize="5" fill="currentColor" stroke="none" fontFamily="sans-serif" fontWeight="bold">R</text>
+    </svg>
+  ),
+};
+
 const TOOLS = [
-  { id: 'select',    label: 'Select',    icon: '↖' },
-  { id: 'line',      label: 'Line',      icon: '╱' },
-  { id: 'curve',     label: 'Curve',     icon: '⌒' },
-  { id: 'pencil',    label: 'Pencil',    icon: '✏' },
-  { id: 'pen',       label: 'Pen',       icon: '✒' },
-  { id: 'node',      label: 'Node',      icon: '◈' },
-  { id: 'circle',    label: 'Circle',    icon: '○' },
-  { id: 'rect',      label: 'Rect',      icon: '□' },
-  { id: 'text',      label: 'Text',      icon: 'T' },
-  { id: 'eraser',    label: 'Eraser',    icon: '⌫' },
-  { id: 'fill',      label: 'Fill',      icon: '⬧' },
-  { id: 'dim-linear',  label: 'Dist',    icon: '↔' },
-  { id: 'dim-angle',   label: 'Angle',   icon: '∠' },
-  { id: 'dim-bearing', label: 'Bearing', icon: '↗' },
-  { id: 'dim-radius',  label: 'Radius',  icon: '⌀' },
+  { id: 'select',    label: 'Select',    icon: <SketchIco.Select /> },
+  { id: 'line',      label: 'Line',      icon: <SketchIco.Line /> },
+  { id: 'curve',     label: 'Curve',     icon: <SketchIco.Curve /> },
+  { id: 'pencil',    label: 'Pencil',    icon: <SketchIco.Pencil /> },
+  { id: 'pen',       label: 'Pen',       icon: <SketchIco.Pen /> },
+  { id: 'node',      label: 'Node',      icon: <SketchIco.Node /> },
+  { id: 'circle',    label: 'Circle',    icon: <SketchIco.Circle /> },
+  { id: 'rect',      label: 'Rect',      icon: <SketchIco.Rect /> },
+  { id: 'text',      label: 'Text',      icon: <SketchIco.Text /> },
+  { id: 'eraser',    label: 'Eraser',    icon: <SketchIco.Eraser /> },
+  { id: 'fill',      label: 'Fill',      icon: <SketchIco.Fill /> },
+  { id: 'dim-linear',  label: 'Dist',    icon: <SketchIco.DimLinear /> },
+  { id: 'dim-angle',   label: 'Angle',   icon: <SketchIco.DimAngle /> },
+  { id: 'dim-bearing', label: 'Bearing', icon: <SketchIco.DimBearing /> },
+  { id: 'dim-radius',  label: 'Radius',  icon: <SketchIco.DimRadius /> },
 ];
 
 function newId() { return 's_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6); }
@@ -5810,7 +5947,11 @@ function SketchPage({ page, projectId, onReload }) {
           {page.title || (headerOpen ? '' : 'tap to show page info')}
         </span>
         <span style={{ fontSize: 9, color: 'rgba(60,50,30,0.4)', flexShrink: 0, marginLeft: 6 }}>
-          {headerOpen ? '▲' : '▼'}
+          {headerOpen ? (
+            <svg width="9" height="7" viewBox="0 0 9 7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 5.5 4.5 1.5 8 5.5"/></svg>
+          ) : (
+            <svg width="9" height="7" viewBox="0 0 9 7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 1.5 4.5 5.5 8 1.5"/></svg>
+          )}
         </span>
       </button>
 
@@ -5833,13 +5974,13 @@ function SketchPage({ page, projectId, onReload }) {
             fontFamily: 'Courier New, monospace',
           }}>
             {[
-              { label: 'Grid',         icon: '⊞', state: showGrid,      set: () => setShowGrid(v => !v),      activeCol: '#6EE7B7', activeBg: 'rgba(52,211,153,0.15)' },
-              { label: 'Dims',         icon: '◫', state: showDims,      set: () => setShowDims(v => !v),      activeCol: '#90CDF4', activeBg: 'rgba(99,179,237,0.18)' },
-              { label: 'Dims on Draw', icon: '✦', state: dimsOnDraw,    set: () => setDimsOnDraw(v => !v),    activeCol: '#90CDF4', activeBg: 'rgba(99,179,237,0.12)' },
-              { label: 'Card',         icon: '▤', state: showValueCard, set: () => setShowValueCard(v => !v), activeCol: '#C4B5FD', activeBg: 'rgba(167,139,250,0.18)' },
-              { label: 'Scale Bar',    icon: '⊟', state: showScaleBar,  set: () => setShowScaleBar(v => !v),  activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
-              { label: 'N Arrow',      icon: '↑', state: showNorthArrow, set: () => setShowNorthArrow(v => !v), activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
-              { label: 'Bg Color',     icon: '◩', state: !!bgColor,     set: () => { setBgColor(null); persist(undefined, undefined, undefined, { bgColor: null }); }, activeCol: '#F9A8D4', activeBg: 'rgba(249,168,212,0.15)' },
+              { label: 'Grid',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3"><line x1="0" y1="4.7" x2="14" y2="4.7"/><line x1="0" y1="9.3" x2="14" y2="9.3"/><line x1="4.7" y1="0" x2="4.7" y2="14"/><line x1="9.3" y1="0" x2="9.3" y2="14"/></svg>, state: showGrid,      set: () => setShowGrid(v => !v),      activeCol: '#6EE7B7', activeBg: 'rgba(52,211,153,0.15)' },
+              { label: 'Dims',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><line x1="2" y1="9" x2="12" y2="9"/><line x1="2" y1="7" x2="2" y2="11"/><line x1="12" y1="7" x2="12" y2="11"/><polyline points="4 7.5 2 9 4 10.5" strokeWidth="1.1"/><polyline points="10 7.5 12 9 10 10.5" strokeWidth="1.1"/><line x1="4" y1="4" x2="10" y2="4" strokeWidth="1" strokeDasharray="1.5 1" opacity="0.6"/></svg>, state: showDims,      set: () => setShowDims(v => !v),      activeCol: '#90CDF4', activeBg: 'rgba(99,179,237,0.18)' },
+              { label: 'Dims on Draw', icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><path d="M2 12 L7 2 L12 12"/><line x1="4.5" y1="8" x2="9.5" y2="8" strokeWidth="1"/></svg>, state: dimsOnDraw,    set: () => setDimsOnDraw(v => !v),    activeCol: '#90CDF4', activeBg: 'rgba(99,179,237,0.12)' },
+              { label: 'Card',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><rect x="1" y="2" width="12" height="10" rx="1.5"/><line x1="1" y1="5.5" x2="13" y2="5.5" strokeWidth="1.2"/><line x1="3" y1="8" x2="8" y2="8" strokeWidth="1"/><line x1="3" y1="10" x2="6" y2="10" strokeWidth="1"/></svg>, state: showValueCard, set: () => setShowValueCard(v => !v), activeCol: '#C4B5FD', activeBg: 'rgba(167,139,250,0.18)' },
+              { label: 'Scale Bar',    icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><rect x="1" y="5" width="12" height="4" rx="0.5"/><line x1="4.3" y1="5" x2="4.3" y2="9" strokeWidth="1"/><line x1="7.7" y1="5" x2="7.7" y2="9" strokeWidth="1"/></svg>, state: showScaleBar,  set: () => setShowScaleBar(v => !v),  activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
+              { label: 'N Arrow',      icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><line x1="7" y1="12" x2="7" y2="2"/><polyline points="4 5 7 2 10 5"/><text x="5.5" y="11" fontSize="4" fill="currentColor" stroke="none" fontFamily="sans-serif" fontWeight="bold">N</text></svg>, state: showNorthArrow, set: () => setShowNorthArrow(v => !v), activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
+              { label: 'Bg Color',     icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><rect x="1" y="1" width="12" height="12" rx="2"/><path d="M4 10 L7 4 L10 10" strokeWidth="1.2"/><line x1="5.5" y1="8" x2="8.5" y2="8" strokeWidth="1"/></svg>, state: !!bgColor,     set: () => { setBgColor(null); persist(undefined, undefined, undefined, { bgColor: null }); }, activeCol: '#F9A8D4', activeBg: 'rgba(249,168,212,0.15)' },
             ].map(({ label, icon, state, set, activeCol, activeBg }) => (
               <button key={label}
                 onClick={set}
@@ -5852,7 +5993,7 @@ function SketchPage({ page, projectId, onReload }) {
                   fontSize: 11,
                 }}
               >
-                <span style={{ fontSize: 14, lineHeight: 1, width: 16 }}>{icon}</span>
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, flexShrink: 0 }}>{icon}</span>
                 <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>{label}</span>
                 <span style={{ fontSize: 10, color: state ? activeCol : 'rgba(255,255,255,0.22)', marginLeft: 8 }}>
                   {state ? 'on' : 'off'}
@@ -5887,7 +6028,7 @@ function SketchPage({ page, projectId, onReload }) {
                   color: 'rgba(255,255,255,0.65)', cursor: 'pointer', fontSize: 11, outline: 'none',
                 }}
               >
-                <span style={{ fontSize: 13 }}>⊡</span>
+                <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 1 13 1 13 5"/><polyline points="5 13 1 13 1 9"/><line x1="13" y1="1" x2="8" y2="6"/><line x1="1" y1="13" x2="6" y2="8"/></svg>
                 <span>Fit</span>
               </button>
               <button
@@ -6066,12 +6207,12 @@ function SketchPage({ page, projectId, onReload }) {
             fontFamily: 'Courier New, monospace',
           }}>
             {[
-              { key: 'endpoint',     label: 'Endpoint',      icon: '◉', col: '#4ADE80', bg: 'rgba(34,197,94,0.15)',   desc: 'Line & curve endpoints' },
-              { key: 'midpoint',     label: 'Midpoint',       icon: '◈', col: '#22D3EE', bg: 'rgba(34,211,238,0.15)',  desc: 'Segment midpoints' },
-              { key: 'intersection', label: 'On Object',      icon: '◎', col: '#FB923C', bg: 'rgba(251,146,60,0.15)',  desc: 'Nearest pt on shape' },
-              { key: 'perpendicular',label: 'Perpendicular',  icon: '⊾', col: '#C084FC', bg: 'rgba(192,132,252,0.15)', desc: 'Perpendicular foot' },
-              { key: 'tangent',      label: 'Tangent',        icon: '⌒', col: '#A78BFA', bg: 'rgba(167,139,250,0.15)', desc: 'Tangent to circle' },
-              { key: 'grid',         label: 'Grid',           icon: '⊞', col: '#FCD34D', bg: 'rgba(251,191,36,0.15)',  desc: 'Grid intersections' },
+              { key: 'endpoint',     label: 'Endpoint',      icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="7" cy="7" r="5"/><circle cx="7" cy="7" r="2" fill="currentColor"/></svg>, col: '#4ADE80', bg: 'rgba(34,197,94,0.15)',   desc: 'Line & curve endpoints' },
+              { key: 'midpoint',     label: 'Midpoint',       icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><line x1="1" y1="13" x2="13" y2="1"/><circle cx="7" cy="7" r="2.2" fill="currentColor" fillOpacity="0.85"/></svg>, col: '#22D3EE', bg: 'rgba(34,211,238,0.15)',  desc: 'Segment midpoints' },
+              { key: 'intersection', label: 'On Object',      icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><line x1="1" y1="1" x2="13" y2="13"/><line x1="13" y1="1" x2="1" y2="13"/><circle cx="7" cy="7" r="2" fill="currentColor" fillOpacity="0.7"/></svg>, col: '#FB923C', bg: 'rgba(251,146,60,0.15)',  desc: 'Nearest pt on shape' },
+              { key: 'perpendicular',label: 'Perpendicular',  icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><line x1="2" y1="12" x2="12" y2="12"/><line x1="7" y1="12" x2="7" y2="2"/><rect x="7" y="9" width="3" height="3" strokeWidth="1"/></svg>, col: '#C084FC', bg: 'rgba(192,132,252,0.15)', desc: 'Perpendicular foot' },
+              { key: 'tangent',      label: 'Tangent',        icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><circle cx="7" cy="9" r="4"/><line x1="1" y1="5" x2="13" y2="5"/><circle cx="7" cy="5" r="1.3" fill="currentColor"/></svg>, col: '#A78BFA', bg: 'rgba(167,139,250,0.15)', desc: 'Tangent to circle' },
+              { key: 'grid',         label: 'Grid',           icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2"><line x1="0" y1="4.7" x2="14" y2="4.7"/><line x1="0" y1="9.3" x2="14" y2="9.3"/><line x1="4.7" y1="0" x2="4.7" y2="14"/><line x1="9.3" y1="0" x2="9.3" y2="14"/><circle cx="4.7" cy="4.7" r="1.5" fill="currentColor"/></svg>, col: '#FCD34D', bg: 'rgba(251,191,36,0.15)',  desc: 'Grid intersections' },
             ].map(({ key, label, icon, col, bg, desc }) => {
               const on = snapModes[key];
               return (
@@ -6086,7 +6227,7 @@ function SketchPage({ page, projectId, onReload }) {
                     fontSize: 11,
                   }}
                 >
-                  <span style={{ fontSize: 14, lineHeight: 1, width: 16, textAlign: 'center' }}>{icon}</span>
+                  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, flexShrink: 0 }}>{icon}</span>
                   <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>{label}</span>
                   <span style={{ fontSize: 9, color: on ? col : 'rgba(255,255,255,0.2)', opacity: 0.75 }}>{desc}</span>
                   <span style={{ fontSize: 10, color: on ? col : 'rgba(255,255,255,0.22)', marginLeft: 8, minWidth: 18, textAlign: 'right' }}>
@@ -6109,11 +6250,11 @@ function SketchPage({ page, projectId, onReload }) {
             fontFamily: 'Courier New, monospace',
           }}>
             {[
-              { op: 'add',       label: 'Add',       icon: '∪', desc: 'Union of all shapes',         col: '#4ADE80', bg: 'rgba(34,197,94,0.15)'    },
-              { op: 'subtract',  label: 'Subtract',  icon: '∖', desc: 'Subtract from first shape',   col: '#FB923C', bg: 'rgba(251,146,60,0.15)'   },
-              { op: 'intersect', label: 'Intersect', icon: '∩', desc: 'Keep overlapping area only',  col: '#60A5FA', bg: 'rgba(96,165,250,0.15)'   },
-              { op: 'xor',       label: 'XOR',       icon: '⊕', desc: 'Keep non-overlapping parts',  col: '#C084FC', bg: 'rgba(192,132,252,0.15)'  },
-              { op: 'divide',    label: 'Divide',    icon: '÷', desc: 'Split at intersections',      col: '#F9A8D4', bg: 'rgba(249,168,212,0.15)'  },
+              { op: 'add',       label: 'Add',       icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4"/></svg>, desc: 'Union of all shapes',         col: '#4ADE80', bg: 'rgba(34,197,94,0.15)'    },
+              { op: 'subtract',  label: 'Subtract',  icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4" strokeDasharray="2 1.5"/><line x1="10" y1="4" x2="10" y2="12" strokeWidth="1" opacity="0.5"/></svg>, desc: 'Subtract from first shape',   col: '#FB923C', bg: 'rgba(251,146,60,0.15)'   },
+              { op: 'intersect', label: 'Intersect', icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4"/><path d="M7.5 4.3 A4 4 0 0 1 7.5 11.7 A4 4 0 0 1 7.5 4.3" fill="currentColor" fillOpacity="0.3" stroke="none"/></svg>, desc: 'Keep overlapping area only',  col: '#60A5FA', bg: 'rgba(96,165,250,0.15)'   },
+              { op: 'xor',       label: 'XOR',       icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4" fill="currentColor" fillOpacity="0.2"/><circle cx="10" cy="8" r="4" fill="currentColor" fillOpacity="0.2"/><path d="M7.5 4.3 A4 4 0 0 1 7.5 11.7 A4 4 0 0 1 7.5 4.3" fill="rgba(16,22,48,1)" stroke="none"/></svg>, desc: 'Keep non-overlapping parts',  col: '#C084FC', bg: 'rgba(192,132,252,0.15)'  },
+              { op: 'divide',    label: 'Divide',    icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4"/><line x1="7.5" y1="4" x2="7.5" y2="12" strokeDasharray="1.5 1" strokeWidth="1.2"/></svg>, desc: 'Split at intersections',      col: '#F9A8D4', bg: 'rgba(249,168,212,0.15)'  },
             ].map(({ op, label, icon, desc, col, bg }) => (
               <button key={op}
                 onClick={() => {
@@ -6136,7 +6277,7 @@ function SketchPage({ page, projectId, onReload }) {
                 onMouseEnter={e => { e.currentTarget.style.background = bg; e.currentTarget.style.color = col; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(255,255,255,0.65)'; }}
               >
-                <span style={{ fontSize: 15, lineHeight: 1, width: 18, textAlign: 'center' }}>{icon}</span>
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, flexShrink: 0 }}>{icon}</span>
                 <span style={{ flex: 1 }}>{label}</span>
                 <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)' }}>{desc}</span>
               </button>
@@ -6171,9 +6312,9 @@ function SketchPage({ page, projectId, onReload }) {
               fontFamily: 'Courier New, monospace', outline: 'none', transition: 'all 0.15s',
             }}
           >
-            <span style={{ fontSize: 13, lineHeight: 1 }}>⊙</span>
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="7" cy="7" r="5"/><circle cx="7" cy="7" r="2" fill="currentColor" fillOpacity="0.7"/><line x1="7" y1="1" x2="7" y2="3" strokeWidth="1.2"/><line x1="7" y1="11" x2="7" y2="13" strokeWidth="1.2"/><line x1="1" y1="7" x2="3" y2="7" strokeWidth="1.2"/><line x1="11" y1="7" x2="13" y2="7" strokeWidth="1.2"/></svg>
             <span style={{ letterSpacing: '0.03em' }}>Snap</span>
-            <span style={{ fontSize: 8, opacity: 0.5, marginLeft: 1 }}>▾</span>
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ opacity: 0.5, marginLeft: 1 }}><polyline points="1 2.5 4 5.5 7 2.5"/></svg>
           </button>
           {/* Separator */}
           <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
@@ -6198,9 +6339,9 @@ function SketchPage({ page, projectId, onReload }) {
                 fontFamily: 'Courier New, monospace', outline: 'none',
               }}
             >
-              <span style={{ fontSize: 12, lineHeight: 1 }}>∪</span>
+              <svg width="13" height="13" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="7.5" r="4"/><circle cx="10" cy="7.5" r="4"/></svg>
               <span style={{ letterSpacing: '0.03em' }}>Join</span>
-              <span style={{ fontSize: 8, opacity: 0.5, marginLeft: 1 }}>▾</span>
+              <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ opacity: 0.5, marginLeft: 1 }}><polyline points="1 2.5 4 5.5 7 2.5"/></svg>
             </button>
           )}
 
@@ -6440,7 +6581,12 @@ function SketchPage({ page, projectId, onReload }) {
               cursor: canUndo ? 'pointer' : 'default', fontSize: 15,
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
-          >↶</button>
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 7v6h6"/>
+              <path d="M3 13C5 8 10 5 16 6a9 9 0 0 1 5 8"/>
+            </svg>
+          </button>
           <button
             onClick={() => {
               if (!canRedo) return;
@@ -6463,7 +6609,12 @@ function SketchPage({ page, projectId, onReload }) {
               cursor: canRedo ? 'pointer' : 'default', fontSize: 15,
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
-          >↷</button>
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 7v6h-6"/>
+              <path d="M21 13C19 8 14 5 8 6a9 9 0 0 0-5 8"/>
+            </svg>
+          </button>
 
           {/* ── View menu button ────────────────────────────────────────── */}          <button
             onClick={e => {
@@ -6486,9 +6637,9 @@ function SketchPage({ page, projectId, onReload }) {
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
           >
-            <span style={{ fontSize: 13, lineHeight: 1 }}>◨</span>
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><rect x="1" y="1" width="12" height="12" rx="1.5"/><line x1="1" y1="5" x2="13" y2="5" strokeWidth="1.2"/><line x1="5" y1="5" x2="5" y2="13" strokeWidth="1.2"/></svg>
             <span style={{ letterSpacing: '0.03em' }}>View</span>
-            <span style={{ fontSize: 8, opacity: 0.5, marginLeft: 1 }}>▾</span>
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ opacity: 0.5, marginLeft: 1 }}><polyline points="1 2.5 4 5.5 7 2.5"/></svg>
           </button>
 
           {/* ── Scale menu button ─────────────────────────────────────── */}
@@ -6510,9 +6661,9 @@ function SketchPage({ page, projectId, onReload }) {
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
           >
-            <span style={{ fontSize: 12, lineHeight: 1 }}>⊞</span>
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><rect x="1" y="4" width="12" height="6" rx="1"/><line x1="4" y1="4" x2="4" y2="10" strokeWidth="1"/><line x1="7" y1="4" x2="7" y2="10" strokeWidth="1"/><line x1="10" y1="4" x2="10" y2="10" strokeWidth="1"/></svg>
             <span style={{ letterSpacing: '0.03em' }}>Scale</span>
-            <span style={{ fontSize: 8, opacity: 0.5, marginLeft: 1 }}>▾</span>
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ opacity: 0.5, marginLeft: 1 }}><polyline points="1 2.5 4 5.5 7 2.5"/></svg>
           </button>
 
           {/* ── Line settings button ──────────────────────────────────── */}
@@ -6534,9 +6685,9 @@ function SketchPage({ page, projectId, onReload }) {
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
           >
-            <span style={{ fontSize: 13, lineHeight: 1 }}>—</span>
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><line x1="2" y1="4" x2="12" y2="4" strokeWidth="2.5"/><line x1="2" y1="7" x2="12" y2="7" strokeWidth="1.5"/><line x1="2" y1="10" x2="12" y2="10" strokeWidth="0.8"/></svg>
             <span style={{ letterSpacing: '0.03em' }}>Line</span>
-            <span style={{ fontSize: 8, opacity: 0.5, marginLeft: 1 }}>▾</span>
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ opacity: 0.5, marginLeft: 1 }}><polyline points="1 2.5 4 5.5 7 2.5"/></svg>
           </button>
 
           {/* Zoom % readout */}
@@ -6587,7 +6738,11 @@ function SketchPage({ page, projectId, onReload }) {
             }}
             title={ribbonOpen ? 'Hide toolbar' : 'Show toolbar'}
           >
-            {ribbonOpen ? '◀' : '▶'}
+            {ribbonOpen ? (
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="7 1 3 5 7 9"/></svg>
+            ) : (
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 1 7 5 3 9"/></svg>
+            )}
           </button>
 
           {/* Tool buttons — scrollable column */}
@@ -6637,7 +6792,7 @@ function SketchPage({ page, projectId, onReload }) {
                     transition: 'background 0.15s, color 0.15s',
                   }}
                 >
-                  <span style={{ fontSize: 16, lineHeight: 1 }}>{t.icon}</span>
+                  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>{t.icon}</span>
                   <span style={{ fontSize: 7, letterSpacing: '0.04em', textTransform: 'uppercase', lineHeight: 1 }}>
                     {t.label}
                   </span>
@@ -6660,7 +6815,14 @@ function SketchPage({ page, projectId, onReload }) {
                 color: '#FCA5A5', cursor: 'pointer',
               }}
             >
-              <span style={{ fontSize: 14 }}>✕</span>
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  <path d="M10 11v6"/><path d="M14 11v6"/>
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                </svg>
+              </span>
               <span style={{ fontSize: 7, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Del</span>
             </button>
           )}
@@ -7243,10 +7405,10 @@ function SketchPage({ page, projectId, onReload }) {
                             }}>{layer.name}{layer.locked && <span style={{marginLeft:3,fontSize:8,opacity:0.6}}>🔒</span>}</span>
                             {/* Up / Down */}
                             <div style={{display:'flex',flexDirection:'column',gap:1,flexShrink:0}}>
-                              {[{dir:1,icon:'▲',ttl:'Move up'},{dir:-1,icon:'▼',ttl:'Move down'}].map(({dir,icon,ttl})=>(
+                              {[{dir:1,svg:<svg width="8" height="6" viewBox="0 0 8 6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 5 4 1 7 5"/></svg>,ttl:'Move up'},{dir:-1,svg:<svg width="8" height="6" viewBox="0 0 8 6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 1 4 5 7 1"/></svg>,ttl:'Move down'}].map(({dir,svg,ttl})=>(
                                 <button key={dir} onClick={ev=>{ev.stopPropagation();moveLayer(layer.id,dir);}} title={ttl}
-                                  style={{width:14,height:10,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:7,lineHeight:1,padding:0,color:'rgba(255,255,255,0.35)',outline:'none'}}
-                                >{icon}</button>
+                                  style={{width:14,height:10,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',lineHeight:1,padding:0,color:'rgba(255,255,255,0.35)',outline:'none'}}
+                                >{svg}</button>
                               ))}
                             </div>
                           </div>
@@ -7398,7 +7560,11 @@ function SketchPage({ page, projectId, onReload }) {
             {notesOpen ? 'Notes' : (notes.trim() ? notes.replace(/\n/g, ' ').slice(0, 55) + (notes.length > 55 ? '…' : '') : 'Notes')}
           </span>
           <span style={{ fontSize: 9, color: 'rgba(40,60,120,0.4)', flexShrink: 0, marginLeft: 6 }}>
-            {notesOpen ? '▼' : '▲'}
+            {notesOpen ? (
+              <svg width="9" height="7" viewBox="0 0 9 7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 1.5 4.5 5.5 8 1.5"/></svg>
+            ) : (
+              <svg width="9" height="7" viewBox="0 0 9 7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 5.5 4.5 1.5 8 5.5"/></svg>
+            )}
           </span>
         </button>
         {/* Textarea — only rendered when open */}
