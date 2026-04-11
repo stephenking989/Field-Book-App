@@ -4796,6 +4796,8 @@ function SketchPage({ page, projectId, onReload }) {
           const _bh  = (s.h ||  80) * _bps / 2;
           add(s.x - _bw, s.y - _bh); add(s.x + _bw, s.y + _bh); break;
         }
+        case 'path':
+          if (s.nodes) { for (const n of s.nodes) add(n.x, n.y); } break;
         case 'dim-linear':
           add(s.p1.x, s.p1.y); add(s.p2.x, s.p2.y); break;
         case 'dim-bearing':
