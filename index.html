@@ -865,6 +865,12 @@
         <line x1="8" y1="17" x2="12" y2="17"/>
       </svg>
     ),
+    Camera: () => (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+        <circle cx="12" cy="13" r="4"/>
+      </svg>
+    ),
     // ── Action Icons ─────────────────────────────────────────────────────────
     Pencil: () => (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1977,6 +1983,11 @@
           if (d) el = `<path d="${d}" ${base}/>`;
           break;
         }
+        case 'image':
+          if (s.dataUrl) {
+            el = `<image href="${s.dataUrl}" x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" preserveAspectRatio="none"/>`;
+          }
+          break;
         case 'text': {
           const fs = s.fontSize || 16;
           const lines = (s.content || '').split('\n');
@@ -2339,9 +2350,10 @@
       for (const page of (proj.pages || [])) {
         pdf.addPage();
         const pdfPageNum = pdf.getNumberOfPages(); // 3, 4, 5, ...
-        const meta = { data: { label: 'Data', color: '#2D6A4F', bg: '#D8F3DC' },
+        const meta = { data:   { label: 'Data',   color: '#2D6A4F', bg: '#D8F3DC' },
                        sketch: { label: 'Sketch', color: '#3B82F6', bg: '#EFF6FF' },
-                       title: { label: 'Title', color: '#D97706', bg: '#FEF3C7' } }[page.type]
+                       title:  { label: 'Title',  color: '#D97706', bg: '#FEF3C7' },
+                       photo:  { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE' } }[page.type]
                    || { label: 'Data', color: '#2D6A4F', bg: '#D8F3DC' };
         const displayTitle = page.title?.trim() || `P.${page.pageNumber} — ${meta.label}`;
         tocEntries.push({ pageNum: page.pageNumber, typeLabel: meta.label, title: displayTitle, pdfPage: pdfPageNum });
@@ -2462,6 +2474,37 @@
             // Nothing was rendered — all fields empty
             pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
             pdf.text('(No data entered)', W/2, contentY + 20, { align: 'center' });
+          }
+
+        } else if (page.type === 'photo') {
+          // ── PHOTOS PAGE ─────────────────────────────────────────────────────
+          const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin);
+          const pagePhotos = page.photos || [];
+          if (pagePhotos.length === 0) {
+            pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
+            pdf.text('(No photos)', W/2, contentY + 20, { align: 'center' });
+          } else {
+            let py = contentY + 4;
+            const imgW = W - margin * 2;
+            const maxImgH = 70; // mm — keeps each photo from swamping the page
+            for (const ph of pagePhotos) {
+              if (py > H - margin - 20) { pdf.addPage(); py = margin + 4; }
+              try {
+                const tmp = new Image();
+                await new Promise(res => { tmp.onload = res; tmp.onerror = res; tmp.src = ph.dataUrl; });
+                const aspect = (tmp.naturalWidth || 4) / (tmp.naturalHeight || 3);
+                const imgH = Math.min(maxImgH, imgW / aspect);
+                pdf.addImage(ph.dataUrl, 'JPEG', margin, py, imgW, imgH);
+                py += imgH + 2;
+              } catch { /* skip unloadable image */ }
+              if (ph.note?.trim()) {
+                pdf.setFontSize(8); pdf.setTextColor(60, 60, 60);
+                const lines = pdf.splitTextToSize(ph.note.trim(), imgW);
+                pdf.text(lines, margin, py + 4);
+                py += lines.length * 4 + 6;
+              }
+              py += 4; // gap between cards
+            }
           }
 
         } else {
@@ -2801,9 +2844,10 @@
   // ─────────────────────────────────────────────────────────────────────────────
 
   const TYPE_META = {
-    data:   { label: 'Data',   color: '#2D6A4F', bg: '#D8F3DC', Icon: () => <Ico.Table /> },
-    sketch: { label: 'Sketch', color: '#3B82F6', bg: '#EFF6FF', Icon: () => <Ico.Grid />  },
-    title:  { label: 'Title',  color: '#D97706', bg: '#FEF3C7', Icon: () => <Ico.File />  },
+    data:   { label: 'Data',   color: '#2D6A4F', bg: '#D8F3DC', Icon: () => <Ico.Table />  },
+    sketch: { label: 'Sketch', color: '#3B82F6', bg: '#EFF6FF', Icon: () => <Ico.Grid />   },
+    title:  { label: 'Title',  color: '#D97706', bg: '#FEF3C7', Icon: () => <Ico.File />   },
+    photo:  { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE', Icon: () => <Ico.Camera /> },
   };
 
   function ProjectView({ projectId }) {
@@ -2903,6 +2947,9 @@
             // fileNames intentionally blank — different every session
           };
         }
+      }
+      if (type === 'photo') {
+        pageData = { type: 'photo', photos: [] };
       }
       const page = DB.addPage(projectId, pageData);
       if (page) { reload(); setAddStep(null); navigate(`#/project/${projectId}/page/${page.id}`); }
@@ -3145,9 +3192,10 @@
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
     const types = [
-      { id: 'data',   Icon: Ico.Table, label: 'Data Page',   desc: 'Tabular columns with custom headers — your field observations',  color: '#2D6A4F' },
-      { id: 'sketch', Icon: Ico.Grid,  label: 'Sketch Page', desc: 'Fine grid paper for diagrams, site sketches, and notes',           color: '#3B82F6' },
-      { id: 'title',  Icon: Ico.File,  label: 'Title Page',  desc: 'Job info, equipment, datum settings, crew and summary',            color: '#D97706' },
+      { id: 'data',   Icon: Ico.Table,  label: 'Data Page',   desc: 'Tabular columns with custom headers — your field observations',         color: '#2D6A4F' },
+      { id: 'sketch', Icon: Ico.Grid,   label: 'Sketch Page', desc: 'Fine grid paper for diagrams, site sketches, and notes',                  color: '#3B82F6' },
+      { id: 'title',  Icon: Ico.File,   label: 'Title Page',  desc: 'Job info, equipment, datum settings, crew and summary',                   color: '#D97706' },
+      { id: 'photo',  Icon: Ico.Camera, label: 'Photos Page', desc: 'Site photos, equipment shots, and setup images with notes', color: '#7C3AED' },
     ];
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -3387,7 +3435,7 @@
             page={page}
             projectId={projectId}
             onReload={reload}
-            onRegisterExports={page.type === 'data' ? registerExports : undefined}
+            onRegisterExports={page.type === 'data' || page.type === 'photo' ? registerExports : undefined}
           />
           {page.type !== 'sketch' && <div style={{ height: 'max(24px, env(safe-area-inset-bottom))' }} />}
         </div>
@@ -3395,9 +3443,197 @@
     );
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // IMAGE COMPRESSION UTILITY
+  // Resizes + compresses an image File to a JPEG base64 data URI.
+  // Used by PhotoPage and exposed via window._fb so sketch.js can call it.
+  // ─────────────────────────────────────────────────────────────────────────────
+  function compressImage(file, maxDim = 1920, quality = 0.7) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = reject;
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onerror = reject;
+        img.onload = () => {
+          let { width: w, height: h } = img;
+          if (w > maxDim || h > maxDim) {
+            if (w >= h) { h = Math.round(h * maxDim / w); w = maxDim; }
+            else        { w = Math.round(w * maxDim / h); h = maxDim; }
+          }
+          const c = document.createElement('canvas');
+          c.width = w; c.height = h;
+          c.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve(c.toDataURL('image/jpeg', quality));
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PHOTO PAGE
+  // ─────────────────────────────────────────────────────────────────────────────
+  function PhotoPage({ page, projectId, onReload, onRegisterExports }) {
+    const [photos, setPhotos] = useState(page.photos || []);
+    const [expandedId, setExpandedId] = useState(null);
+    const fileRef = useRef(null);
+    const camRef  = useRef(null);
+    const toast   = useToast();
+
+    useEffect(() => { setPhotos(page.photos || []); }, [page.id]);
+
+    // Register per-page PDF export so the header export button works
+    useEffect(() => {
+      if (!onRegisterExports) return;
+      onRegisterExports({
+        exportPage: () => exportPhotoPDF(page, photos, toast),
+      });
+    }, [page, photos]);
+
+    function savePhotos(next) {
+      setPhotos(next);
+      DB.updatePage(projectId, page.id, { photos: next });
+      onReload?.();
+    }
+
+    async function handleFileInput(e) {
+      const files = Array.from(e.target.files || []);
+      e.target.value = '';
+      if (!files.length) return;
+      try {
+        const added = await Promise.all(files.map(async f => ({
+          id: 'ph_' + Date.now() + '_' + Math.random().toString(36).slice(2),
+          dataUrl: await compressImage(f),
+          note: '',
+        })));
+        savePhotos([...photos, ...added]);
+      } catch (err) {
+        toast({ message: 'Failed to import image.', type: 'error' });
+      }
+    }
+
+    function updateNote(id, note) {
+      savePhotos(photos.map(p => p.id === id ? { ...p, note } : p));
+    }
+
+    function deletePhoto(id) {
+      savePhotos(photos.filter(p => p.id !== id));
+    }
+
+    return (
+      <div className="flex flex-col h-full" style={{ background: '#FDFAF4' }}>
+        <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
+        {/* Hidden file inputs */}
+        <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }}
+               onChange={handleFileInput} />
+        <input ref={camRef}  type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+               onChange={handleFileInput} />
+        {/* Add buttons */}
+        <div style={{ display: 'flex', gap: 12, padding: '12px 16px', borderBottom: '1px solid #E5E1D8' }}>
+          <button onClick={() => camRef.current?.click()}
+            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                     padding: '12px 0', borderRadius: 14, background: '#1C3829', color: '#FDFAF4',
+                     fontWeight: 600, fontSize: 14, border: 'none', cursor: 'pointer' }}>
+            <Ico.Camera /> Camera
+          </button>
+          <button onClick={() => fileRef.current?.click()}
+            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                     padding: '12px 0', borderRadius: 14, background: 'transparent', color: '#1C3829',
+                     fontWeight: 600, fontSize: 14, border: '2px solid #1C3829', cursor: 'pointer' }}>
+            <Ico.Download /> Upload
+          </button>
+        </div>
+        {/* Photo cards */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {photos.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '60px 16px', color: '#A0948A', fontSize: 14 }}>
+              No photos yet — tap Camera or Upload to add one.
+            </div>
+          )}
+          {photos.map((ph, i) => (
+            <div key={ph.id} style={{ borderRadius: 16, overflow: 'hidden', border: '1px solid #E5E1D8',
+                                      background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+              <div style={{ position: 'relative' }}>
+                <img src={ph.dataUrl} alt={`Photo ${i + 1}`}
+                     onClick={() => setExpandedId(expandedId === ph.id ? null : ph.id)}
+                     style={{ width: '100%', display: 'block', cursor: 'pointer',
+                              maxHeight: expandedId === ph.id ? 'none' : 120,
+                              objectFit: expandedId === ph.id ? 'contain' : 'cover',
+                              transition: 'max-height 0.25s ease' }} />
+                <button onClick={() => deletePhoto(ph.id)}
+                  style={{ position: 'absolute', top: 8, right: 8, width: 32, height: 32,
+                           borderRadius: '50%', background: 'rgba(0,0,0,0.5)', border: 'none',
+                           display: 'flex', alignItems: 'center', justifyContent: 'center',
+                           color: '#fff', cursor: 'pointer' }}>
+                  <Ico.Trash />
+                </button>
+              </div>
+              <div style={{ padding: 12 }}>
+                <textarea
+                  value={ph.note}
+                  onChange={e => updateNote(ph.id, e.target.value)}
+                  placeholder="Notes for this photo…"
+                  rows={2}
+                  style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, resize: 'none',
+                           borderRadius: 8, border: '1px solid #E5E1D8', padding: '8px 10px',
+                           fontFamily: 'Courier New, monospace', outline: 'none',
+                           background: '#FDFAF4', color: '#1C3829' }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Single-page photo PDF export (used by per-page export button)
+  async function exportPhotoPDF(page, photos, toast) {
+    if (!window.jspdf) { toast({ message: 'PDF library not loaded.', type: 'error' }); return; }
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
+    const W = pdf.internal.pageSize.getWidth();
+    const H = pdf.internal.pageSize.getHeight();
+    const margin = 14;
+    const meta = { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE' };
+    const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin);
+    const imgW = W - margin * 2;
+    const maxImgH = 70;
+    let py = contentY + 4;
+    if (!photos || photos.length === 0) {
+      pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
+      pdf.text('(No photos)', W / 2, py + 10, { align: 'center' });
+    } else {
+      for (const ph of photos) {
+        if (py > H - margin - 20) { pdf.addPage(); py = margin + 4; }
+        try {
+          const tmp = new Image();
+          await new Promise(res => { tmp.onload = res; tmp.onerror = res; tmp.src = ph.dataUrl; });
+          const aspect = (tmp.naturalWidth || 4) / (tmp.naturalHeight || 3);
+          const imgH = Math.min(maxImgH, imgW / aspect);
+          pdf.addImage(ph.dataUrl, 'JPEG', margin, py, imgW, imgH);
+          py += imgH + 2;
+        } catch { /* skip unloadable */ }
+        if (ph.note?.trim()) {
+          pdf.setFontSize(8); pdf.setTextColor(60, 60, 60);
+          const lines = pdf.splitTextToSize(ph.note.trim(), imgW);
+          pdf.text(lines, margin, py + 4);
+          py += lines.length * 4 + 6;
+        }
+        py += 4;
+      }
+    }
+    const title = page.title?.trim() || 'Photos';
+    pdf.save(`${title}.pdf`);
+    toast({ message: 'PDF exported.', type: 'success' });
+  }
+
   function getPageComponent(type) {
     if (type === 'sketch') return window.SketchPage;  // defined by sketch.js
     if (type === 'title')  return TitlePage;
+    if (type === 'photo')  return PhotoPage;
     return DataPage;
   }
 
@@ -5784,7 +6020,7 @@
   }
 
   // Expose shared globals for sketch.js to consume via window._fb
-  window._fb = { DB, PageHeaderStrip, HCell };
+  window._fb = { DB, PageHeaderStrip, HCell, compressImage };
 
   // Mount the app only after sketch.js has loaded and resolved _sketchPromise
   _sketchPromise.then(() => {
