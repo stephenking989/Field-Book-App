@@ -4155,12 +4155,13 @@ function SketchPage({ page, projectId, onReload }) {
       if (w > 4 && h > 4) {
         const ids = shapes
           .filter(s => {
+            if (s.visible === false) return false;
             const layer = layers.find(l => l.id === (s.layerId || layers[0]?.id));
-            if (!layer?.visible) return false;
+            if (layer?.visible === false) return false;
             return shapeIntersectsRect(s, x, y, x + w, y + h);
           })
           .map(s => s.id);
-        if (ids.length > 0) setSelectedIds(ids);
+        setSelectedIds(ids);
       }
       setMarquee(null);
       return;
@@ -4923,18 +4924,50 @@ function SketchPage({ page, projectId, onReload }) {
     persist(undefined, undefined, next);
   }
 
-  function reorderShapeInLayer(shapeId, fromIdx, toIdx) {
-    if (fromIdx === toIdx) return;
-    const sh = shapes.find(s => s.id === shapeId);
+  // Move a shape to any position in any layer.
+  // slots: flat array built at drag start [{shapeId, layerId, posInLayer}], panel order (flatIdx 0 = top of panel = highest Z).
+  // fromFlatIdx/toFlatIdx are indices into that slots array.
+  function moveShapeGlobal(slots, fromFlatIdx, toFlatIdx) {
+    if (fromFlatIdx === toFlatIdx) return;
+    const fromSlot = slots[fromFlatIdx];
+    const toSlot   = slots[toFlatIdx];
+    if (!fromSlot || !toSlot) return;
+    const sh = shapes.find(s => s.id === fromSlot.shapeId);
     if (!sh) return;
-    const lid = sh.layerId || layers[0]?.id;
-    const lSh = shapes.filter(s => (s.layerId || layers[0]?.id) === lid);
-    if (fromIdx < 0 || fromIdx >= lSh.length || toIdx < 0 || toIdx >= lSh.length) return;
-    const reordered = [...lSh];
-    const [mv] = reordered.splice(fromIdx, 1);
-    reordered.splice(toIdx, 0, mv);
-    let li = 0;
-    commitShapes(shapes.map(s => (s.layerId || layers[0]?.id) === lid ? reordered[li++] : s));
+    const targetLayerId = toSlot.layerId;
+    // Remove the dragged shape from the shapes array
+    const without = shapes.filter(s => s.id !== sh.id);
+    // Get target layer's shapes in 'without' (these are in render/Z order, index 0 = bottom of layer)
+    const tLayerShapes = without.filter(s => (s.layerId || layers[0]?.id) === targetLayerId);
+    // posInLayer from the slot is the original position. Adjust if same layer and source was below target.
+    let tPos = toSlot.posInLayer;
+    if (fromSlot.layerId === targetLayerId && fromSlot.posInLayer < toSlot.posInLayer) tPos--;
+    tPos = Math.max(0, Math.min(tLayerShapes.length, tPos));
+    let insertIdx;
+    if (tLayerShapes.length === 0) {
+      // No shapes in target layer yet — insert after all shapes of layers below it
+      const tLIdx = layers.findIndex(l => l.id === targetLayerId);
+      insertIdx = 0;
+      for (let i = 0; i < without.length; i++) {
+        const sLIdx = layers.findIndex(l => l.id === (without[i].layerId || layers[0]?.id));
+        if (sLIdx <= tLIdx) insertIdx = i + 1;
+      }
+    } else if (tPos >= tLayerShapes.length) {
+      // Insert after the last shape of target layer
+      insertIdx = without.findIndex(s => s.id === tLayerShapes[tLayerShapes.length - 1].id) + 1;
+    } else {
+      const refShape = tLayerShapes[tPos];
+      const refIdx   = without.findIndex(s => s.id === refShape.id);
+      // Moving up in panel (toward higher Z, lower flatIdx) → insert AFTER refShape
+      // Moving down in panel (toward lower Z, higher flatIdx) → insert BEFORE refShape
+      insertIdx = fromFlatIdx > toFlatIdx ? refIdx + 1 : refIdx;
+    }
+    const updated = [
+      ...without.slice(0, insertIdx),
+      { ...sh, layerId: targetLayerId },
+      ...without.slice(insertIdx),
+    ];
+    commitShapes(updated);
   }
 
   function toggleShapeVisible(shapeId) {
@@ -4956,35 +4989,50 @@ function SketchPage({ page, projectId, onReload }) {
   // Panel drag: document-level listeners while a drag is in progress
   useEffect(() => {
     if (!panelDrag) return;
-    const ROW_H = panelDrag.type === 'layer' ? 28 : 22;
-    const maxIdx = panelDrag.type === 'layer'
-      ? layers.length - 1 : (panelDrag.layerShapeCount || 1) - 1;
-    const startY = panelDrag.startY;
-    const origIdx = panelDrag.origIdx;
-    function onMove(e) {
-      const dy = e.clientY - startY;
-      const steps = -Math.round(dy / ROW_H);
-      const newTgt = Math.max(0, Math.min(maxIdx, origIdx + steps));
-      setPanelDrag(d => d ? { ...d, targetIdx: newTgt } : null);
+    const startY  = panelDrag.startY;
+
+    if (panelDrag.type === 'layer') {
+      const ROW_H  = 28;
+      const maxIdx = layers.length - 1;
+      const origIdx = panelDrag.origIdx;
+      function onMoveL(e) {
+        const steps = -Math.round((e.clientY - startY) / ROW_H);
+        setPanelDrag(d => d ? { ...d, targetIdx: Math.max(0, Math.min(maxIdx, origIdx + steps)) } : null);
+      }
+      function onUpL() {
+        setPanelDrag(d => {
+          if (!d) return null;
+          if (d.targetIdx !== d.origIdx) reorderLayer(d.id, d.origIdx, d.targetIdx);
+          if (!d.wasCollapsed) setCollapsedLayers(prev => { const next = new Set(prev); next.delete(d.id); return next; });
+          return null;
+        });
+        if (panelDragTimerRef.current) { clearTimeout(panelDragTimerRef.current); panelDragTimerRef.current = null; }
+      }
+      document.addEventListener('pointermove', onMoveL);
+      document.addEventListener('pointerup', onUpL);
+      return () => { document.removeEventListener('pointermove', onMoveL); document.removeEventListener('pointerup', onUpL); };
     }
-    function onUp() {
+
+    // ── Shape drag — cross-layer flat index ────────────────────────────────
+    const ROW_H      = 22;
+    const maxFlatIdx = (panelDrag.slots?.length || 1) - 1;
+    const origFlatIdx = panelDrag.origFlatIdx;
+    function onMoveS(e) {
+      // positive dy = moving down in panel = higher flatIdx = lower Z
+      const steps = Math.round((e.clientY - startY) / ROW_H);
+      setPanelDrag(d => d ? { ...d, targetFlatIdx: Math.max(0, Math.min(maxFlatIdx, origFlatIdx + steps)) } : null);
+    }
+    function onUpS() {
       setPanelDrag(d => {
         if (!d) return null;
-        if (d.targetIdx !== d.origIdx) {
-          if (d.type === 'layer') reorderLayer(d.id, d.origIdx, d.targetIdx);
-          else reorderShapeInLayer(d.id, d.origIdx, d.targetIdx);
-        }
-        // Restore layer collapse state if it was auto-collapsed for drag
-        if (d.type === 'layer' && !d.wasCollapsed) {
-          setCollapsedLayers(prev => { const next = new Set(prev); next.delete(d.id); return next; });
-        }
+        if (d.targetFlatIdx !== d.origFlatIdx) moveShapeGlobal(d.slots, d.origFlatIdx, d.targetFlatIdx);
         return null;
       });
       if (panelDragTimerRef.current) { clearTimeout(panelDragTimerRef.current); panelDragTimerRef.current = null; }
     }
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-    return () => { document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', onUp); };
+    document.addEventListener('pointermove', onMoveS);
+    document.addEventListener('pointerup', onUpS);
+    return () => { document.removeEventListener('pointermove', onMoveS); document.removeEventListener('pointerup', onUpS); };
   }, [!!panelDrag, panelDrag?.id]);
 
   // ── Text commit ────────────────────────────────────────────────────────────
@@ -7405,14 +7453,14 @@ function SketchPage({ page, projectId, onReload }) {
                 }}>+</button>
               </div>
 
-              {/* Move-to-layer strip — visible when 2+ shapes are selected */}
-              {selectedIds.length >= 2 && (
+              {/* Move-to-layer strip — visible when 1+ shapes are selected */}
+              {selectedIds.length >= 1 && (
                 <div style={{
                   padding: '4px 6px', borderBottom: '1px solid rgba(255,255,255,0.08)',
                   display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
                 }}>
                   <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', flexShrink: 0 }}>
-                    {selectedIds.length} selected →
+                    {selectedIds.length === 1 ? '1 shape' : `${selectedIds.length} shapes`} →
                   </span>
                   <select
                     onChange={e => {
@@ -7421,6 +7469,7 @@ function SketchPage({ page, projectId, onReload }) {
                       commitShapes(shapes.map(s =>
                         selectedIds.includes(s.id) ? { ...s, layerId: targetLayerId } : s
                       ));
+                      e.target.value = '';
                     }}
                     defaultValue=""
                     style={{
@@ -7527,10 +7576,20 @@ function SketchPage({ page, projectId, onReload }) {
                       {!collapsedLayers.has(layer.id) && (()=>{
                         const _revS=[...layerShapes].reverse();
                         return _revS.map((s,ri)=>{
-                          const _sOrig=layerShapes.length-1-ri;
+                          // flatIdx: offset = shapes in all layers above this one in panel, plus ri within this layer.
+                          // _revS[ri] === slot[offset+ri] because both use [...layerShapes].reverse() order.
+                          const _myFlatIdx=(()=>{
+                            let fi=0;
+                            for(const _l of [...layers].reverse()){
+                              if(collapsedLayers.has(_l.id)) continue;
+                              if(_l.id===layer.id) return fi+ri;
+                              fi+=shapes.filter(_s=>(_s.layerId||layers[0]?.id)===_l.id).length;
+                            }
+                            return fi;
+                          })();
                           const _sDrag=panelDrag?.type==='shape'&&panelDrag.id===s.id;
-                          const _sDrop=panelDrag?.type==='shape'&&panelDrag.id!==s.id&&panelDrag.targetIdx===_sOrig;
-                          const _sUp=panelDrag?panelDrag.targetIdx>panelDrag.origIdx:false;
+                          const _sDrop=panelDrag?.type==='shape'&&panelDrag.id!==s.id&&panelDrag.targetFlatIdx===_myFlatIdx;
+                          const _sUp=panelDrag?panelDrag.targetFlatIdx<panelDrag.origFlatIdx:false;
                           return (
                           <React.Fragment key={s.id}>
                             {_sDrop&&_sUp&&<div style={{height:2,background:'#3B82F6',margin:'0 14px'}}/>}
@@ -7563,7 +7622,7 @@ function SketchPage({ page, projectId, onReload }) {
                                 background:selectedIds.includes(s.id)?'rgba(59,130,246,0.12)':'transparent',
                                 opacity:_sDrag?0.35:1,cursor:'pointer'}}
                             >
-                              {/* Shape drag handle — hold to reorder (mouse: 150ms, touch: 400ms+vibrate) */}
+                              {/* Shape drag handle — hold to reorder across any layer (mouse: 150ms, touch: 400ms+vibrate) */}
                               <span
                                 style={{fontSize:8,color:'rgba(255,255,255,0.18)',cursor:'grab',
                                   flexShrink:0,padding:'0 2px',userSelect:'none',touchAction:'none'}}
@@ -7574,7 +7633,17 @@ function SketchPage({ page, projectId, onReload }) {
                                   panelDragTimerRef.current=setTimeout(()=>{
                                     panelDragTimerRef.current=null;
                                     if(e.pointerType==='touch'&&navigator.vibrate) navigator.vibrate(40);
-                                    setPanelDrag({type:'shape',id:s.id,origIdx:_sOrig,targetIdx:_sOrig,startY:_sy,layerShapeCount:layerShapes.length});
+                                    // Build global flat slot list at drag start
+                                    const _slots=[...layers].reverse().flatMap(_l=>{
+                                      if(collapsedLayers.has(_l.id)) return [];
+                                      const _ls=shapes.filter(_s=>(_s.layerId||layers[0]?.id)===_l.id);
+                                      return [..._ls].reverse().map((_sh,_ri)=>({
+                                        shapeId:_sh.id, layerId:_l.id, posInLayer:_ls.length-1-_ri,
+                                      }));
+                                    });
+                                    const _origFi=_slots.findIndex(sl=>sl.shapeId===s.id);
+                                    if(_origFi<0) return;
+                                    setPanelDrag({type:'shape',id:s.id,startY:_sy,slots:_slots,origFlatIdx:_origFi,targetFlatIdx:_origFi});
                                   },e.pointerType==='touch'?400:150);
                                 }}
                                 onPointerMove={e=>{

@@ -2485,21 +2485,24 @@
             pdf.text('(No photos)', W/2, contentY + 20, { align: 'center' });
           } else {
             let py = contentY + 4;
-            const imgW = W - margin * 2;
-            const maxImgH = 70; // mm — keeps each photo from swamping the page
+            const fullImgW = W - margin * 2;
+            const maxPhotoH = 180; // mm — portrait images scale down and centre
             for (const ph of pagePhotos) {
-              if (py > H - margin - 20) { pdf.addPage(); py = margin + 4; }
               try {
                 const tmp = new Image();
                 await new Promise(res => { tmp.onload = res; tmp.onerror = res; tmp.src = ph.dataUrl; });
                 const aspect = (tmp.naturalWidth || 4) / (tmp.naturalHeight || 3);
-                const imgH = Math.min(maxImgH, imgW / aspect);
-                pdf.addImage(ph.dataUrl, 'JPEG', margin, py, imgW, imgH);
+                let imgW = fullImgW;
+                let imgH = imgW / aspect;
+                if (imgH > maxPhotoH) { imgH = maxPhotoH; imgW = imgH * aspect; }
+                const x = margin + (fullImgW - imgW) / 2; // centre portrait images
+                if (py + imgH > H - margin - 10) { pdf.addPage(); py = margin + 4; }
+                pdf.addImage(ph.dataUrl, 'JPEG', x, py, imgW, imgH);
                 py += imgH + 2;
               } catch { /* skip unloadable image */ }
               if (ph.note?.trim()) {
                 pdf.setFontSize(8); pdf.setTextColor(60, 60, 60);
-                const lines = pdf.splitTextToSize(ph.note.trim(), imgW);
+                const lines = pdf.splitTextToSize(ph.note.trim(), fullImgW);
                 pdf.text(lines, margin, py + 4);
                 py += lines.length * 4 + 6;
               }
@@ -3557,11 +3560,9 @@
                                       background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
               <div style={{ position: 'relative' }}>
                 <img src={ph.dataUrl} alt={`Photo ${i + 1}`}
-                     onClick={() => setExpandedId(expandedId === ph.id ? null : ph.id)}
-                     style={{ width: '100%', display: 'block', cursor: 'pointer',
-                              maxHeight: expandedId === ph.id ? 'none' : 120,
-                              objectFit: expandedId === ph.id ? 'contain' : 'cover',
-                              transition: 'max-height 0.25s ease' }} />
+                     onClick={() => setExpandedId(ph.id)}
+                     style={{ width: '100%', height: 120, display: 'block', cursor: 'zoom-in',
+                              objectFit: 'cover', objectPosition: 'center' }} />
                 <button onClick={() => deletePhoto(ph.id)}
                   style={{ position: 'absolute', top: 8, right: 8, width: 32, height: 32,
                            borderRadius: '50%', background: 'rgba(0,0,0,0.5)', border: 'none',
@@ -3585,6 +3586,35 @@
             </div>
           ))}
         </div>
+        {/* Lightbox — full image on tap */}
+        {expandedId && (() => {
+          const lbPhoto = photos.find(p => p.id === expandedId);
+          if (!lbPhoto) return null;
+          return (
+            <div onClick={() => setExpandedId(null)}
+                 style={{ position: 'fixed', inset: 0, zIndex: 9999,
+                          background: 'rgba(0,0,0,0.90)',
+                          display: 'flex', flexDirection: 'column',
+                          alignItems: 'center', justifyContent: 'center',
+                          cursor: 'zoom-out', padding: '12px 8px' }}>
+              <img src={lbPhoto.dataUrl}
+                   style={{ maxWidth: '96vw', maxHeight: '80vh',
+                            objectFit: 'contain', borderRadius: 6,
+                            boxShadow: '0 4px 32px rgba(0,0,0,0.6)',
+                            display: 'block' }} />
+              {lbPhoto.note?.trim() && (
+                <div style={{ marginTop: 12, maxWidth: '96vw', color: '#E8E4DC',
+                              fontSize: 13, fontFamily: 'Courier New, monospace',
+                              textAlign: 'center', lineHeight: 1.4 }}>
+                  {lbPhoto.note.trim()}
+                </div>
+              )}
+              <div style={{ marginTop: 14, fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>
+                Tap anywhere to close
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   }
@@ -3599,26 +3629,29 @@
     const margin = 14;
     const meta = { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE' };
     const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin);
-    const imgW = W - margin * 2;
-    const maxImgH = 70;
+    const fullImgW = W - margin * 2;
+    const maxPhotoH = 180; // mm — max height per photo; portrait images scale down and centre
     let py = contentY + 4;
     if (!photos || photos.length === 0) {
       pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
       pdf.text('(No photos)', W / 2, py + 10, { align: 'center' });
     } else {
       for (const ph of photos) {
-        if (py > H - margin - 20) { pdf.addPage(); py = margin + 4; }
         try {
           const tmp = new Image();
           await new Promise(res => { tmp.onload = res; tmp.onerror = res; tmp.src = ph.dataUrl; });
           const aspect = (tmp.naturalWidth || 4) / (tmp.naturalHeight || 3);
-          const imgH = Math.min(maxImgH, imgW / aspect);
-          pdf.addImage(ph.dataUrl, 'JPEG', margin, py, imgW, imgH);
+          let imgW = fullImgW;
+          let imgH = imgW / aspect;
+          if (imgH > maxPhotoH) { imgH = maxPhotoH; imgW = imgH * aspect; }
+          const x = margin + (fullImgW - imgW) / 2; // centre portrait images
+          if (py + imgH > H - margin - 10) { pdf.addPage(); py = margin + 4; }
+          pdf.addImage(ph.dataUrl, 'JPEG', x, py, imgW, imgH);
           py += imgH + 2;
         } catch { /* skip unloadable */ }
         if (ph.note?.trim()) {
           pdf.setFontSize(8); pdf.setTextColor(60, 60, 60);
-          const lines = pdf.splitTextToSize(ph.note.trim(), imgW);
+          const lines = pdf.splitTextToSize(ph.note.trim(), fullImgW);
           pdf.text(lines, margin, py + 4);
           py += lines.length * 4 + 6;
         }
