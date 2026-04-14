@@ -927,6 +927,17 @@
         <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
       </svg>
     ),
+    // Survey point / crosshair — used for Points page type badge
+    Pin: () => (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="7"/>
+        <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/>
+        <line x1="12" y1="2" x2="12" y2="5"/>
+        <line x1="12" y1="19" x2="12" y2="22"/>
+        <line x1="2" y1="12" x2="5" y2="12"/>
+        <line x1="19" y1="12" x2="22" y2="12"/>
+      </svg>
+    ),
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -2074,6 +2085,82 @@
             `</g>`;
           break;
         }
+        case 'point': {
+          // Point symbol — constant screen-size elements scaled by ps
+          const r = 10 * ps;
+          const sw = (s.strokeWidth || 1.5) * ps;
+          const stroke = s.stroke || '#1C3829';
+          const cx = s.x, cy = s.y;
+          const sym = s.symbol || 'survey';
+          let symEl = '';
+          switch (sym) {
+            case 'survey':
+              symEl = `<circle cx="${cx}" cy="${cy}" r="${r}" stroke="${stroke}" stroke-width="${sw}" fill="none"/>` +
+                      `<circle cx="${cx}" cy="${cy}" r="${(r*0.35).toFixed(2)}" fill="${stroke}" stroke="none"/>`;
+              break;
+            case 'dot':
+              symEl = `<circle cx="${cx}" cy="${cy}" r="${(r*0.35).toFixed(2)}" fill="${stroke}" stroke="none"/>`;
+              break;
+            case 'x': {
+              const d = (r * 0.7).toFixed(2);
+              symEl = `<line x1="${(cx-d)}" y1="${(cy-d)}" x2="${(cx+d)}" y2="${(cy+d)}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>` +
+                      `<line x1="${(cx+d)}" y1="${(cy-d)}" x2="${(cx-d)}" y2="${(cy+d)}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>`;
+              break;
+            }
+            case 'cross': {
+              const d = (r * 0.7).toFixed(2);
+              symEl = `<line x1="${cx}" y1="${(cy-d)}" x2="${cx}" y2="${(cy+d)}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>` +
+                      `<line x1="${(cx-d)}" y1="${cy}" x2="${(cx+d)}" y2="${cy}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>`;
+              break;
+            }
+            case 'square': {
+              const h = (r * 0.7).toFixed(2);
+              symEl = `<rect x="${(cx-h)}" y="${(cy-h)}" width="${(h*2)}" height="${(h*2)}" stroke="${stroke}" stroke-width="${sw}" fill="none"/>`;
+              break;
+            }
+            case 'triangle': {
+              const h = r;
+              const pts = `${cx},${(cy-h)} ${(cx-h*0.866)},${(cy+h*0.5)} ${(cx+h*0.866)},${(cy+h*0.5)}`;
+              symEl = `<polygon points="${pts}" stroke="${stroke}" stroke-width="${sw}" fill="none" stroke-linejoin="round"/>`;
+              break;
+            }
+            case 'tri-down': {
+              const h = r;
+              const pts = `${cx},${(cy+h)} ${(cx-h*0.866)},${(cy-h*0.5)} ${(cx+h*0.866)},${(cy-h*0.5)}`;
+              symEl = `<polygon points="${pts}" stroke="${stroke}" stroke-width="${sw}" fill="none" stroke-linejoin="round"/>`;
+              break;
+            }
+            case 'diamond': {
+              const pts = `${cx},${(cy-r)} ${(cx+r)},${cy} ${cx},${(cy+r)} ${(cx-r)},${cy}`;
+              symEl = `<polygon points="${pts}" stroke="${stroke}" stroke-width="${sw}" fill="none" stroke-linejoin="round"/>`;
+              break;
+            }
+            case 'circle':
+            default:
+              symEl = `<circle cx="${cx}" cy="${cy}" r="${r}" stroke="${stroke}" stroke-width="${sw}" fill="none"/>`;
+              break;
+          }
+          el = `<g>${symEl}</g>`;
+
+          // Labels stacked below symbol
+          const esc = t => String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          const lfs = (10 * ps).toFixed(2);
+          const lStep = 11 * ps;
+          let labels = [];
+          if (s.showNum     && s.ptNum)    labels.push(esc(s.ptNum));
+          if (s.showNorthing && s.northing) labels.push('N ' + esc(s.northing));
+          if (s.showEasting  && s.easting)  labels.push('E ' + esc(s.easting));
+          if (s.showElev     && s.elev)     labels.push('Z ' + esc(s.elev));
+          if (s.showDesc     && s.desc)     labels.push(esc(s.desc));
+          let startY = cy + r + 14 * ps;
+          labels.forEach(txt => {
+            el += `<text x="${cx}" y="${startY.toFixed(2)}" font-size="${lfs}" font-family="Courier New,monospace" font-weight="bold" text-anchor="middle" dominant-baseline="middle" fill="#000000" stroke="#FFFFFF" stroke-width="${(3*ps).toFixed(2)}" paint-order="stroke fill" style="pointer-events:none;user-select:none;">${txt}</text>`;
+            startY += lStep;
+          });
+          // Points don't use _rot and are never added to dimsSVG
+          shapesSVG += el;
+          continue; // skip the rotation + _dimsSVG logic below
+        }
       }
       if (!el) continue;
 
@@ -2851,6 +2938,7 @@
     sketch: { label: 'Sketch', color: '#3B82F6', bg: '#EFF6FF', Icon: () => <Ico.Grid />   },
     title:  { label: 'Title',  color: '#D97706', bg: '#FEF3C7', Icon: () => <Ico.File />   },
     photo:  { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE', Icon: () => <Ico.Camera /> },
+    points: { label: 'Points', color: '#0E7490', bg: '#E0F2FE', Icon: () => <Ico.Pin />    },
   };
 
   function ProjectView({ projectId }) {
@@ -2953,6 +3041,21 @@
       }
       if (type === 'photo') {
         pageData = { type: 'photo', photos: [] };
+      }
+      if (type === 'points') {
+        // Fixed PNEZD columns — IDs must match PNEZD_COLS constants
+        const cols = [
+          { id: 'col_ptnum', label: 'Pt #',        colType: 'text', width: 70 },
+          { id: 'col_north', label: 'Northing',    colType: 'num',  width: 100 },
+          { id: 'col_east',  label: 'Easting',     colType: 'num',  width: 100 },
+          { id: 'col_elev',  label: 'Elevation',   colType: 'num',  width: 100 },
+          { id: 'col_desc',  label: 'Description', colType: 'text', width: 130 },
+        ];
+        const rows = Array.from({ length: 20 }, (_, i) => ({
+          id: 'r_' + (Date.now() + i),
+          cells: { col_ptnum: String(i + 1), col_north: '', col_east: '', col_elev: '', col_desc: '' },
+        }));
+        pageData = { type: 'points', columns: cols, rows };
       }
       const page = DB.addPage(projectId, pageData);
       if (page) { reload(); setAddStep(null); navigate(`#/project/${projectId}/page/${page.id}`); }
@@ -3169,7 +3272,7 @@
             </div>
             <p className="text-white/30 text-xs mt-0.5 truncate">
               {page.date}
-              {page.type === 'data' && rowCount > 0 ? ` · ${rowCount} rows` : ''}
+              {(page.type === 'data' || page.type === 'points') && rowCount > 0 ? ` · ${rowCount} pts` : ''}
             </p>
           </div>
           <span className="text-white/25 flex-shrink-0"><Ico.ChevR /></span>
@@ -3198,7 +3301,8 @@
       { id: 'data',   Icon: Ico.Table,  label: 'Data Page',   desc: 'Tabular columns with custom headers — your field observations',         color: '#2D6A4F' },
       { id: 'sketch', Icon: Ico.Grid,   label: 'Sketch Page', desc: 'Fine grid paper for diagrams, site sketches, and notes',                  color: '#3B82F6' },
       { id: 'title',  Icon: Ico.File,   label: 'Title Page',  desc: 'Job info, equipment, datum settings, crew and summary',                   color: '#D97706' },
-      { id: 'photo',  Icon: Ico.Camera, label: 'Photos Page', desc: 'Site photos, equipment shots, and setup images with notes', color: '#7C3AED' },
+      { id: 'photo',  Icon: Ico.Camera, label: 'Photos Page', desc: 'Site photos, equipment shots, and setup images with notes',               color: '#7C3AED' },
+      { id: 'points', Icon: Ico.Pin,    label: 'Points Page', desc: 'PNEZD point list — links to sketch canvas for placing survey points',     color: '#0E7490' },
     ];
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -3667,6 +3771,7 @@
     if (type === 'sketch') return window.SketchPage;  // defined by sketch.js
     if (type === 'title')  return TitlePage;
     if (type === 'photo')  return PhotoPage;
+    if (type === 'points') return DataPage;           // DataPage with locked PNEZD columns
     return DataPage;
   }
 
@@ -4260,23 +4365,40 @@
       onReload();
     }
 
+    // Compute the next sequential point number for a Points Data Page
+    function nextPointNum(existingRows) {
+      const nums = existingRows.map(r => parseInt(r.cells['col_ptnum'])).filter(n => !isNaN(n));
+      return String(nums.length ? Math.max(...nums) + 1 : existingRows.length + 1);
+    }
+
     function addRow() {
       const cells = {};
       columns.forEach(c => { cells[c.id] = ''; });
+      if (page.type === 'points') cells['col_ptnum'] = nextPointNum(rows);
       const row = { id: 'r_' + Date.now(), cells };
       persistRows([...rows, row]);
     }
 
     function addRows(n) {
-      const newRows = Array.from({ length: n }, (_, i) => {
+      const newRows = [];
+      for (let i = 0; i < n; i++) {
         const cells = {};
         columns.forEach(c => { cells[c.id] = ''; });
-        return { id: 'r_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2), cells };
-      });
+        if (page.type === 'points') cells['col_ptnum'] = nextPointNum([...rows, ...newRows]);
+        newRows.push({ id: 'r_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2), cells });
+      }
       persistRows([...rows, ...newRows]);
     }
 
     function deleteRow(rowId) {
+      if (page.type === 'points') {
+        // Cross-page sync: remove this point from all sketch canvases and this data page
+        window._fb?.deletePointPermanently?.(projectId, rowId);
+        // Reload rows from DB since deletePointPermanently already updated this page
+        const updated = DB.getPage(projectId, page.id);
+        if (updated) { setRows(updated.rows || []); onReload(); }
+        return;
+      }
       persistRows(rows.filter(r => r.id !== rowId));
     }
 
@@ -4812,6 +4934,52 @@
       onReload();
     }
 
+    // ── CSV Import (Points pages only) ──────────────────────────────────
+
+    function importPointsCSV() {
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = '.csv,.txt';
+      inp.onchange = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          try {
+            const text = ev.target.result;
+            // Split into lines, remove blank lines
+            const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l);
+            if (!lines.length) { toast.error('CSV file appears to be empty'); return; }
+            // Parse each line: split on comma or tab, strip surrounding quotes
+            const parsed = lines.map(line => {
+              const sep = line.includes('\t') ? '\t' : ',';
+              return line.split(sep).map(c => c.trim().replace(/^["']|["']$/g, ''));
+            });
+            // Skip header row if first cell looks like a column name
+            const first = (parsed[0][0] || '').toLowerCase();
+            const isHeader = isNaN(Number(first)) || ['pt','point','p#','#','no','num','id'].some(h => first.startsWith(h));
+            const dataRows = isHeader ? parsed.slice(1) : parsed;
+            if (!dataRows.length) { toast.error('No data rows found after header'); return; }
+            // Map columns positionally: [ptNum, northing, easting, elev, desc]
+            const colMap = ['col_ptnum','col_north','col_east','col_elev','col_desc'];
+            const newRows = dataRows.map((cols, i) => {
+              const cells = {};
+              columns.forEach(c => { cells[c.id] = ''; });
+              colMap.forEach((cid, ci) => { if (cols[ci] != null) cells[cid] = cols[ci]; });
+              // If no pt number in CSV, auto-number based on existing + position
+              if (!cells['col_ptnum']) cells['col_ptnum'] = nextPointNum([...rows, ...newRows.slice(0, i)]);
+              return { id: 'r_' + (Date.now() + i), cells };
+            });
+            persistRows([...rows, ...newRows]);
+            toast.success(`Imported ${newRows.length} point${newRows.length !== 1 ? 's' : ''}`);
+          } catch(err) {
+            toast.error('Failed to parse CSV: ' + (err.message || 'unknown error'));
+          }
+        };
+        reader.readAsText(file);
+      };
+      inp.click();
+    }
+
     // ── Column drag-and-drop ─────────────────────────────────────────
 
     function handleColDragStart(e, ci) {
@@ -5177,13 +5345,26 @@
               <button onClick={() => { cutCells(); setOpenTbMenu(null); }}>Cut</button>
               <button onClick={() => { pasteCells(); setOpenTbMenu(null); }}>Paste</button>
               <div className="dp-drop-sep" />
-              <div className="dp-drop-section">Rows &amp; Columns</div>
+              <div className="dp-drop-section">Rows {page.type !== 'points' && '& Columns'}</div>
               <button onClick={() => { addRow(); setOpenTbMenu(null); }}>＋ Row</button>
               <button onClick={() => { addRows(5); setOpenTbMenu(null); }}>＋ 5 Rows</button>
-              <button onClick={() => { addColumn(); setOpenTbMenu(null); }}>＋ Column</button>
-              <div className="dp-drop-sep" />
-              <div className="dp-drop-section">Templates</div>
-              <button onClick={() => { setTemplateModal(true); setOpenTbMenu(null); }}>Apply Template…</button>
+              {page.type !== 'points' && (
+                <button onClick={() => { addColumn(); setOpenTbMenu(null); }}>＋ Column</button>
+              )}
+              {page.type === 'points' && (
+                <>
+                  <div className="dp-drop-sep" />
+                  <div className="dp-drop-section">Import</div>
+                  <button onClick={() => { importPointsCSV(); setOpenTbMenu(null); }}>⬆ Import CSV…</button>
+                </>
+              )}
+              {page.type !== 'points' && (
+                <>
+                  <div className="dp-drop-sep" />
+                  <div className="dp-drop-section">Templates</div>
+                  <button onClick={() => { setTemplateModal(true); setOpenTbMenu(null); }}>Apply Template…</button>
+                </>
+              )}
             </div>
           )}
           {openTbMenu === 'formulas' && (
@@ -5356,23 +5537,23 @@
                 <th className="dp-row-num" style={{ position: 'sticky', top: 0, left: 0, zIndex: 3 }}>#</th>
                 {columns.map((col, ci) => (
                   <th key={col.id}
-                    draggable={true}
+                    draggable={page.type !== 'points'}
                     className={`dp-col-header${activeCell && activeCell.colIdx === ci ? ' active-col' : ''}${dragOverCol === ci && dragStartCol !== ci ? ' dp-drag-over-col' : ''}`}
-                    style={{ width: colWidth(col), minWidth: colWidth(col) }}
-                    onClick={() => openColModal(col)}
-                    onDragStart={e => handleColDragStart(e, ci)}
-                    onDragOver={e => handleColDragOver(e, ci)}
-                    onDrop={e => handleColDrop(e, ci)}
-                    onDragEnd={handleColDragEnd}
-                    onDragLeave={() => { if (dragOverCol === ci) setDragOverCol(null); }}
-                    title="Drag to reorder · Tap to edit settings">
+                    style={{ width: colWidth(col), minWidth: colWidth(col), cursor: page.type === 'points' ? 'default' : undefined }}
+                    onClick={() => page.type !== 'points' && openColModal(col)}
+                    onDragStart={page.type !== 'points' ? (e => handleColDragStart(e, ci)) : undefined}
+                    onDragOver={page.type !== 'points' ? (e => handleColDragOver(e, ci)) : undefined}
+                    onDrop={page.type !== 'points' ? (e => handleColDrop(e, ci)) : undefined}
+                    onDragEnd={page.type !== 'points' ? handleColDragEnd : undefined}
+                    title={page.type === 'points' ? 'PNEZD column — locked' : 'Drag to reorder · Tap to edit settings'}>
                     <span style={{ fontSize: 7.5, color: 'rgba(156,163,175,0.6)', fontFamily: 'Courier New', marginRight: 3 }}>
                       {colLetter(ci)}
                     </span>
                     {col.label}
-                    <span className={`dp-col-type-badge dp-col-type-${col.colType || 'num'}`}>
-                      {typeLabels[col.colType || 'num']}
-                    </span>
+                    {page.type === 'points'
+                      ? <span style={{ fontSize: 8, color: '#9CA3AF', marginLeft: 4, opacity: 0.6 }}>🔒</span>
+                      : <span className={`dp-col-type-badge dp-col-type-${col.colType || 'num'}`}>{typeLabels[col.colType || 'num']}</span>
+                    }
                   </th>
                 ))}
                 <th style={{ width: 32, minWidth: 32 }}></th>
@@ -6052,8 +6233,40 @@
     );
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PNEZD column IDs — shared between DataPage (points mode) and sketch.js canvas.
+  // These are fixed so sketch.js can reference them without hard-coding strings.
+  const PNEZD_COLS = {
+    ptNum: 'col_ptnum',
+    north: 'col_north',
+    east:  'col_east',
+    elev:  'col_elev',
+    desc:  'col_desc',
+  };
+
+  // Permanently removes a point row from all 'points' data pages AND removes
+  // any matching point shapes from all sketch pages in the same project.
+  // Called when: (1) a row is deleted from a Points Data Page, or
+  //              (2) user chooses "Delete Permanently" from the sketch delete prompt.
+  function deletePointPermanently(projectId, pointId) {
+    const project = DB.getProject(projectId);
+    if (!project) return;
+    project.pages.forEach(page => {
+      if (page.type === 'points' && page.rows) {
+        const next = page.rows.filter(r => r.id !== pointId);
+        if (next.length !== page.rows.length)
+          DB.updatePage(projectId, page.id, { rows: next });
+      }
+      if (page.type === 'sketch' && page.shapes) {
+        const next = page.shapes.filter(s => !(s.type === 'point' && s.pointId === pointId));
+        if (next.length !== page.shapes.length)
+          DB.updatePage(projectId, page.id, { shapes: next });
+      }
+    });
+  }
+
   // Expose shared globals for sketch.js to consume via window._fb
-  window._fb = { DB, PageHeaderStrip, HCell, compressImage };
+  window._fb = { DB, PageHeaderStrip, HCell, compressImage, PNEZD_COLS, deletePointPermanently };
 
   // Mount the app only after sketch.js has loaded and resolved _sketchPromise
   _sketchPromise.then(() => {

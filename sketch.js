@@ -29,6 +29,9 @@ const ROT_R   = 9;          // rotate handle hit radius
 // Node keys that snap (excludes bezier handle 'cp' and body/pivot/rotate pseudo-keys)
 const SNAP_NODES = new Set(['p1', 'p2', 'c', 'r', 'tl', 'tr', 'bl', 'br']);
 
+// Fixed layer ID for the Points layer — all point shapes are placed here
+const POINTS_LAYER_ID = 'l_points';
+
 // ── Sketch tool SVG icons — 20×20 viewBox, stroke="currentColor" ──────────────
 const SketchIco = {
   // Arrow cursor with a subtle tail
@@ -172,6 +175,17 @@ const SketchIco = {
       <path d="M2 14 L7 10 L10 13 L14 9 L18 14" strokeWidth="1.3" opacity="0.7"/>
     </svg>
   ),
+  // Survey point — crosshair with center dot
+  Point: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <circle cx="10" cy="10" r="6"/>
+      <circle cx="10" cy="10" r="1.8" fill="currentColor" stroke="none"/>
+      <line x1="10" y1="2" x2="10" y2="4.5" strokeWidth="1.2"/>
+      <line x1="10" y1="15.5" x2="10" y2="18" strokeWidth="1.2"/>
+      <line x1="2" y1="10" x2="4.5" y2="10" strokeWidth="1.2"/>
+      <line x1="15.5" y1="10" x2="18" y2="10" strokeWidth="1.2"/>
+    </svg>
+  ),
 };
 
 const TOOLS = [
@@ -186,11 +200,12 @@ const TOOLS = [
   { id: 'text',      label: 'Text',      icon: <SketchIco.Text /> },
   { id: 'eraser',    label: 'Eraser',    icon: <SketchIco.Eraser /> },
   { id: 'fill',      label: 'Fill',      icon: <SketchIco.Fill /> },
+  { id: 'point',     label: 'Point',     icon: <SketchIco.Point /> },  // Survey point placement
   { id: 'dim-linear',  label: 'Dist',    icon: <SketchIco.DimLinear /> },
   { id: 'dim-angle',   label: 'Angle',   icon: <SketchIco.DimAngle /> },
   { id: 'dim-bearing', label: 'Bearing', icon: <SketchIco.DimBearing /> },
   { id: 'dim-radius',  label: 'Radius',  icon: <SketchIco.DimRadius /> },
-  { id: 'image',       label: 'Image',   icon: <SketchIco.Image />,  action: 'import' },
+  // Image is now in the Insert ▾ top-toolbar menu; no longer in the left toolbar
 ];
 
 function newId() { return 's_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6); }
@@ -206,6 +221,7 @@ function getShapePivot(shape) {
     case 'circle': return { x: shape.cx,                        y: shape.cy                       };
     case 'rect':   return { x: shape.x + shape.w/2,             y: shape.y + shape.h/2            };
     case 'image':  return { x: shape.x + shape.w/2,             y: shape.y + shape.h/2            };
+    case 'point':  return { x: shape.x,                         y: shape.y                        };
     case 'text':   return { x: shape.x,                          y: shape.y                        }; // s.x/y is center
     case 'path': {
       if (!shape.nodes || shape.nodes.length === 0) return { x: 0, y: 0 };
@@ -1974,12 +1990,357 @@ function detectClosedRegionFromSegments(clickPt, shapes, snapTol) {
   }));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// POINT SYMBOL RENDERER  (module-level, takes ps for constant screen size)
+// Returns an array of SVG elements for the symbol only (no labels).
+// ─────────────────────────────────────────────────────────────────────────────
+function renderPointSymbolSVG(s, ps) {
+  const r   = 10 * ps;
+  const sw  = (s.strokeWidth || 1.5) * ps;
+  const col = s.stroke || '#1C3829';
+  const x   = s.x, y = s.y;
+  switch (s.symbol || 'survey') {
+    case 'survey':
+      return [
+        <circle key="o" cx={x} cy={y} r={r}    fill="none" stroke={col} strokeWidth={sw} />,
+        <circle key="i" cx={x} cy={y} r={r*0.3} fill={col}  stroke="none" />,
+      ];
+    case 'dot':
+      return [<circle key="d" cx={x} cy={y} r={r*0.4} fill={col} stroke="none" />];
+    case 'x': {
+      const d = r * 0.7;
+      return [
+        <line key="x1" x1={x-d} y1={y-d} x2={x+d} y2={y+d} stroke={col} strokeWidth={sw} strokeLinecap="round" />,
+        <line key="x2" x1={x+d} y1={y-d} x2={x-d} y2={y+d} stroke={col} strokeWidth={sw} strokeLinecap="round" />,
+      ];
+    }
+    case 'cross': {
+      const d = r * 0.75;
+      return [
+        <line key="v" x1={x}   y1={y-d} x2={x}   y2={y+d} stroke={col} strokeWidth={sw} strokeLinecap="round" />,
+        <line key="h" x1={x-d} y1={y}   x2={x+d} y2={y}   stroke={col} strokeWidth={sw} strokeLinecap="round" />,
+      ];
+    }
+    case 'square': {
+      const h = r * 0.72;
+      return [<rect key="sq" x={x-h} y={y-h} width={h*2} height={h*2} fill="none" stroke={col} strokeWidth={sw} />];
+    }
+    case 'triangle': {
+      const h = r * 0.86, hb = r * 0.72;
+      return [<polygon key="t" points={`${x},${y-h} ${x-hb},${y+h*0.5} ${x+hb},${y+h*0.5}`} fill="none" stroke={col} strokeWidth={sw} strokeLinejoin="round" />];
+    }
+    case 'tri-down': {
+      const h = r * 0.86, hb = r * 0.72;
+      return [<polygon key="td" points={`${x},${y+h} ${x-hb},${y-h*0.5} ${x+hb},${y-h*0.5}`} fill="none" stroke={col} strokeWidth={sw} strokeLinejoin="round" />];
+    }
+    case 'diamond': {
+      const d = r * 0.78;
+      return [<polygon key="dm" points={`${x},${y-d} ${x+d},${y} ${x},${y+d} ${x-d},${y}`} fill="none" stroke={col} strokeWidth={sw} strokeLinejoin="round" />];
+    }
+    case 'circle':
+      return [<circle key="c" cx={x} cy={y} r={r} fill="none" stroke={col} strokeWidth={sw} />];
+    default:
+      return [
+        <circle key="o" cx={x} cy={y} r={r}    fill="none" stroke={col} strokeWidth={sw} />,
+        <circle key="i" cx={x} cy={y} r={r*0.3} fill={col}  stroke="none" />,
+      ];
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POINT LABELS RENDERER  (module-level, returns array of SVG elements)
+// ─────────────────────────────────────────────────────────────────────────────
+function renderPointLabelsSVG(s, ps) {
+  const r   = 10 * ps;
+  const lineH = 11 * ps;
+  let curY  = s.y + r + 14 * ps;
+  const elems = [];
+  const addLabel = (text) => {
+    if (!text) return;
+    elems.push(dimTextEl(s.x, curY, 0, String(text), ps));
+    curY += lineH;
+  };
+  if (s.showNum)      addLabel(s.ptNum);
+  if (s.showNorthing) addLabel('N ' + (s.northing || ''));
+  if (s.showEasting)  addLabel('E ' + (s.easting  || ''));
+  if (s.showElev)     addLabel('Z ' + (s.elev     || ''));
+  if (s.showDesc)     addLabel(s.desc);
+  return elems;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POINT INFO CARD  (module-level component)
+// ─────────────────────────────────────────────────────────────────────────────
+function PointInfoCard({ shape: s, onUpdate, projectId }) {
+  const cardStyle = {
+    position: 'absolute', bottom: 60, right: 8, width: 190,
+    background: 'rgba(15,30,20,0.94)', borderRadius: 10,
+    border: '1px solid rgba(255,255,255,0.12)', padding: '10px 10px 8px',
+    color: 'rgba(255,255,255,0.85)', fontSize: 10, userSelect: 'none',
+    boxShadow: '0 4px 20px rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)',
+    zIndex: 120,
+  };
+  const rowSt  = { display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4, lineHeight: 1.5 };
+  const lblSt  = { color: '#64748B', width: 42, flexShrink: 0 };
+  const valSt  = { color: 'rgba(255,255,255,0.7)', fontFamily: 'Courier New, monospace', fontSize: 9.5, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+  const togBtn = (on, onClick, label) => (
+    <button onClick={onClick} style={{
+      padding: '2px 7px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 9, fontWeight: 600,
+      background: on ? '#2D6A4F' : 'rgba(255,255,255,0.08)',
+      color: on ? '#FDFAF4' : 'rgba(255,255,255,0.45)',
+    }}>{label}</button>
+  );
+
+  const SYMBOLS = [
+    { id: 'survey',   label: '⊙' },
+    { id: 'dot',      label: '•' },
+    { id: 'x',        label: '✕' },
+    { id: 'cross',    label: '+' },
+    { id: 'square',   label: '□' },
+    { id: 'triangle', label: '△' },
+    { id: 'tri-down', label: '▽' },
+    { id: 'diamond',  label: '◇' },
+    { id: 'circle',   label: '○' },
+  ];
+
+  const allOn = s.showNum && s.showNorthing && s.showEasting && s.showElev && s.showDesc;
+
+  function toggle(field) {
+    onUpdate(sh => ({ ...sh, [field]: !sh[field] }));
+  }
+  function setSymbol(sym) {
+    onUpdate(sh => ({ ...sh, symbol: sym }));
+  }
+  function masterToggle() {
+    const next = !allOn;
+    onUpdate(sh => ({ ...sh, showNum: next, showNorthing: next, showEasting: next, showElev: next, showDesc: next }));
+  }
+  function handleRefresh() {
+    const project = window._fb?.DB?.getProject(projectId);
+    if (!project) return;
+    let found = null;
+    for (const pg of project.pages) {
+      if (pg.type === 'points' && pg.rows) {
+        const row = pg.rows.find(r => r.id === s.pointId);
+        if (row) { found = row; break; }
+      }
+    }
+    if (!found) { console.warn('[PointInfoCard] Point row not found in data page'); return; }
+    onUpdate(sh => ({
+      ...sh,
+      ptNum:    found.cells['col_ptnum'] || sh.ptNum,
+      northing: found.cells['col_north'] || sh.northing,
+      easting:  found.cells['col_east']  || sh.easting,
+      elev:     found.cells['col_elev']  || sh.elev,
+      desc:     found.cells['col_desc']  || sh.desc,
+    }));
+  }
+
+  return (
+    <div style={cardStyle}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
+        <span style={{ fontWeight: 700, fontSize: 11, color: '#FDFAF4' }}>Point {s.ptNum || '—'}</span>
+        <button onClick={handleRefresh} title="Re-sync from Points Data Page"
+          style={{ fontSize: 12, background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.5)', padding: '0 2px' }}>
+          ↺
+        </button>
+      </div>
+
+      {/* PNEZD data display */}
+      <div style={{ marginBottom: 7 }}>
+        {[['Pt #', s.ptNum], ['N', s.northing], ['E', s.easting], ['Z', s.elev], ['Desc', s.desc]].map(([lbl, val]) => (
+          val ? (
+            <div key={lbl} style={rowSt}>
+              <span style={lblSt}>{lbl}</span>
+              <span style={valSt}>{val}</span>
+            </div>
+          ) : null
+        ))}
+      </div>
+
+      {/* Symbol picker */}
+      <div style={{ marginBottom: 7 }}>
+        <div style={{ fontSize: 9, color: '#64748B', marginBottom: 4 }}>SYMBOL</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+          {SYMBOLS.map(sym => (
+            <button key={sym.id} onClick={() => setSymbol(sym.id)} title={sym.id}
+              style={{
+                width: 28, height: 28, borderRadius: 5, border: 'none', cursor: 'pointer', fontSize: 14,
+                background: (s.symbol || 'survey') === sym.id ? '#2D6A4F' : 'rgba(255,255,255,0.08)',
+                color: (s.symbol || 'survey') === sym.id ? '#FDFAF4' : 'rgba(255,255,255,0.6)',
+              }}>
+              {sym.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Label toggles */}
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
+          <span style={{ fontSize: 9, color: '#64748B' }}>LABELS</span>
+          {togBtn(allOn, masterToggle, allOn ? 'All Off' : 'All On')}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+          {togBtn(s.showNum,      () => toggle('showNum'),      'Pt #')}
+          {togBtn(s.showNorthing, () => toggle('showNorthing'), 'N')}
+          {togBtn(s.showEasting,  () => toggle('showEasting'),  'E')}
+          {togBtn(s.showElev,     () => toggle('showElev'),     'Z')}
+          {togBtn(s.showDesc,     () => toggle('showDesc'),     'Desc')}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POINT SELECT MODAL  (module-level component)
+// ─────────────────────────────────────────────────────────────────────────────
+function PointSelectModal({ projectId, onSelect, onClose }) {
+  const [filter, setFilter] = useState('');
+  const project = window._fb?.DB?.getProject(projectId);
+  const allPoints = [];
+  if (project) {
+    for (const pg of project.pages) {
+      if (pg.type === 'points' && pg.rows) {
+        for (const row of pg.rows) {
+          allPoints.push({
+            pointId:  row.id,
+            ptNum:    row.cells['col_ptnum'] || '',
+            northing: row.cells['col_north'] || '',
+            easting:  row.cells['col_east']  || '',
+            elev:     row.cells['col_elev']  || '',
+            desc:     row.cells['col_desc']  || '',
+          });
+        }
+      }
+    }
+  }
+  const q = filter.trim().toLowerCase();
+  const visible = q
+    ? allPoints.filter(p => p.ptNum.toLowerCase().includes(q) || p.desc.toLowerCase().includes(q))
+    : allPoints;
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 1200,
+      display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+    }} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{
+        background: '#FDFAF4', borderRadius: '18px 18px 0 0',
+        width: '100%', maxWidth: 480, maxHeight: '70vh',
+        display: 'flex', flexDirection: 'column', padding: '16px 16px 0',
+        boxShadow: '0 -4px 24px rgba(0,0,0,0.3)',
+      }}>
+        <div style={{ width: 40, height: 4, background: '#DDD6C8', borderRadius: 4, margin: '0 auto 12px' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, color: '#1C3829', margin: 0 }}>Select Point</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#9CA3AF', padding: 4 }}>×</button>
+        </div>
+        {allPoints.length === 0 ? (
+          <div style={{ padding: '20px 0', textAlign: 'center', color: '#9CA3AF', fontSize: 13, flex: 1 }}>
+            No Points Data Page found in this project.<br />
+            <span style={{ fontSize: 11 }}>Add a Points page to this project first.</span>
+          </div>
+        ) : (
+          <>
+            <input
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+              placeholder="Filter by Pt # or description…"
+              style={{
+                width: '100%', padding: '8px 12px', borderRadius: 8, border: '1.5px solid #DDD6C8',
+                fontSize: 13, fontFamily: 'Courier New, monospace', background: 'white',
+                marginBottom: 8, boxSizing: 'border-box', outline: 'none',
+              }}
+              autoFocus
+            />
+            <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 16 }}>
+              {visible.length === 0 && (
+                <div style={{ textAlign: 'center', color: '#9CA3AF', fontSize: 12, padding: '16px 0' }}>No points match</div>
+              )}
+              {visible.map((pt, i) => (
+                <button key={pt.pointId} onClick={() => onSelect(pt, visible, i)}
+                  style={{
+                    width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer',
+                    padding: '10px 4px', borderBottom: i < visible.length - 1 ? '1px solid #EDE8E0' : 'none',
+                    display: 'flex', alignItems: 'center', gap: 10,
+                  }}>
+                  <span style={{
+                    fontFamily: 'Courier New, monospace', fontSize: 13, fontWeight: 700,
+                    color: '#1C3829', width: 36, flexShrink: 0,
+                  }}>{pt.ptNum || '—'}</span>
+                  <span style={{ flex: 1, fontSize: 11, color: '#4B5563', fontFamily: 'Courier New, monospace' }}>
+                    {pt.desc && <span style={{ fontWeight: 600 }}>{pt.desc} · </span>}
+                    {pt.northing && <span>N:{pt.northing} </span>}
+                    {pt.easting  && <span>E:{pt.easting}</span>}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POINT DELETE PROMPT MODAL  (module-level component)
+// ─────────────────────────────────────────────────────────────────────────────
+function PointDeletePromptModal({ pointCount, onPermanent, onSketchOnly, onCancel }) {
+  const plural = pointCount > 1 ? `${pointCount} points` : 'this point';
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 1200,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <div style={{
+        background: '#FDFAF4', borderRadius: 16, padding: 24, maxWidth: 340, width: 'calc(100% - 32px)',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.35)',
+      }}>
+        <p style={{ fontSize: 15, fontWeight: 600, color: '#1C3829', margin: '0 0 8px' }}>Delete {plural}?</p>
+        <p style={{ fontSize: 12, color: '#6B7280', margin: '0 0 20px', lineHeight: 1.5 }}>
+          Choose whether to remove {plural} from the canvas only, or permanently from the entire project.
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <button onClick={onPermanent} style={{
+            padding: '12px 16px', borderRadius: 10, border: 'none', cursor: 'pointer',
+            background: '#7F1D1D', color: '#FECACA', fontWeight: 600, fontSize: 13, textAlign: 'left',
+          }}>
+            🗑 Delete Permanently
+            <div style={{ fontSize: 10, fontWeight: 400, color: 'rgba(254,202,202,0.7)', marginTop: 2 }}>
+              Removes from data page and all sketch canvases
+            </div>
+          </button>
+          <button onClick={onSketchOnly} style={{
+            padding: '12px 16px', borderRadius: 10, border: 'none', cursor: 'pointer',
+            background: '#1C3829', color: '#FDFAF4', fontWeight: 600, fontSize: 13, textAlign: 'left',
+          }}>
+            ✂ Remove from Sketch Only
+            <div style={{ fontSize: 10, fontWeight: 400, color: 'rgba(253,250,244,0.55)', marginTop: 2 }}>
+              Keeps the point in the data page
+            </div>
+          </button>
+          <button onClick={onCancel} style={{
+            padding: '10px 16px', borderRadius: 10, border: '1.5px solid #DDD6C8',
+            cursor: 'pointer', background: 'none', color: '#6B7280', fontSize: 13,
+          }}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 function SketchPage({ page, projectId, onReload }) {
   // Sanitize shapes on load: remove any path shapes with corrupted (NaN/null/undefined)
   // node coordinates that would crash pathToSVGD on render.
   function sanitizeShapes(raw) {
     if (!Array.isArray(raw)) return [];
     return raw.filter(s => {
+      if (s.type === 'point') return isFinite(s.x) && isFinite(s.y);
       if (s.type !== 'path') return true;
       if (!Array.isArray(s.nodes) || s.nodes.length < 2) return false;
       return s.nodes.every(n =>
@@ -2078,8 +2439,16 @@ function SketchPage({ page, projectId, onReload }) {
   const [northAzimuth, setNorthAzimuth]  = useState(page.northAzimuth || 0);
 
   // ── Dropdown menus ─────────────────────────────────────────────────────────
-  const [openMenu, setOpenMenu] = useState(null); // null | 'view' | 'scale'
+  const [openMenu, setOpenMenu] = useState(null); // null | 'view' | 'scale' | 'snap' | 'join' | 'insert'
   const [menuPos,  setMenuPos]  = useState({ x: 0 });
+
+  // ── Points system ──────────────────────────────────────────────────────────
+  // pendingPoint: the point currently queued for placement on the canvas.
+  // Carries _allPoints (full list from data page) and _currentIdx for auto-advance.
+  const [pendingPoint,         setPendingPoint]         = useState(null);
+  const [showPointSelectModal, setShowPointSelectModal] = useState(false);
+  const [pointDeletePrompt,    setPointDeletePrompt]    = useState(null);
+  // null | { shapeIds: string[], pointIds: string[] }
 
   // Close any open dropdown when the user clicks outside the toolbar
   useEffect(() => {
@@ -2462,6 +2831,19 @@ function SketchPage({ page, projectId, onReload }) {
         // Select tool: delete all currently selected shapes
         if (selectedIds.length > 0) {
           e.preventDefault();
+          const pointShapes = shapes.filter(s => selectedIds.includes(s.id) && s.type === 'point');
+          const nonPoints   = selectedIds.filter(id => !pointShapes.find(p => p.id === id));
+          if (pointShapes.length > 0) {
+            // Delete non-point shapes immediately, then show prompt for points
+            if (nonPoints.length > 0) {
+              commitShapes(shapes.filter(s => !nonPoints.includes(s.id)));
+            }
+            setPointDeletePrompt({
+              shapeIds: pointShapes.map(p => p.id),
+              pointIds: pointShapes.map(p => p.pointId),
+            });
+            return;
+          }
           commitShapes(shapes.filter(s => !selectedIds.includes(s.id)));
           setSelectedIds([]);
           return;
@@ -2655,6 +3037,18 @@ function SketchPage({ page, projectId, onReload }) {
     inp.click();
   }
 
+  // ── Points layer management ─────────────────────────────────────────────────
+  // Ensures the dedicated Points layer exists, creating it if needed.
+  // Returns the POINTS_LAYER_ID so callers can assign shapes to it immediately.
+  function ensurePointsLayer() {
+    if (layers.find(l => l.id === POINTS_LAYER_ID)) return POINTS_LAYER_ID;
+    const newLayer = { id: POINTS_LAYER_ID, name: 'Points', visible: true };
+    const updatedLayers = [...layers, newLayer];
+    setLayers(updatedLayers);
+    persist(shapes, undefined, updatedLayers);
+    return POINTS_LAYER_ID;
+  }
+
   // ── Node positions per shape type ──────────────────────────────────────────
   // Returns array of {key, x, y, type: 'endpoint'|'control'}
   function getNodes(shape) {
@@ -2691,6 +3085,9 @@ function SketchPage({ page, projectId, onReload }) {
           { key: 'bl', x: shape.x,           y: shape.y + shape.h, type: 'endpoint' },
           { key: 'br', x: shape.x + shape.w, y: shape.y + shape.h, type: 'endpoint' },
         ];
+      case 'point':
+        // Single center handle for drag. No resize or rotate handles.
+        return [{ key: 'c', x: shape.x, y: shape.y, type: 'endpoint' }];
       case 'text': {
         // s.x/y = world center; s.w/h = screen pixels. Convert half-sizes to world units.
         const _ps2 = viewBox.w / (svgSizeRef.current.w || viewBox.w);
@@ -2975,6 +3372,10 @@ function SketchPage({ page, projectId, onReload }) {
         }
         break;
       }
+      case 'point':
+        // Points have a single center node; drag moves the placement position
+        if (nodeKey === 'c') return { ...shape, x: shape.x + dx, y: shape.y + dy };
+        break;
       case 'dim-bearing':
         if (nodeKey === 'p1') return { ...shape, p1: { x:(shape.p1?.x||0)+dx, y:(shape.p1?.y||0)+dy } };
         if (nodeKey === 'p2') return { ...shape, p2: { x:(shape.p2?.x||0)+dx, y:(shape.p2?.y||0)+dy } };
@@ -3316,6 +3717,40 @@ function SketchPage({ page, projectId, onReload }) {
         pushRecentColor(activeFillColor);
         persist(undefined, undefined, undefined, { bgColor: newBg });
       }
+      return;
+    }
+
+    // ── Point tool ───────────────────────────────────────────────────────────
+    if (tool === 'point') {
+      if (!pendingPoint) {
+        // No point selected yet — open the picker modal
+        setShowPointSelectModal(true);
+        return;
+      }
+      const sp = anySnapActive ? resolveSnap(pt) : pt;
+      const layerId = ensurePointsLayer();
+      const newShape = {
+        id: newId(), type: 'point',
+        x: sp.x, y: sp.y,
+        pointId:     pendingPoint.pointId,
+        ptNum:       pendingPoint.ptNum,
+        northing:    pendingPoint.northing,
+        easting:     pendingPoint.easting,
+        elev:        pendingPoint.elev,
+        desc:        pendingPoint.desc,
+        symbol:      'survey',
+        showNum:     true, showNorthing: false,
+        showEasting: false, showElev: false, showDesc: true,
+        stroke: '#1C3829', strokeWidth: 1.5,
+        layerId,
+      };
+      commitShapes([...shapes, newShape]);
+      setSelectedIds([newShape.id]);
+      // Auto-advance to the next sequential point in the list
+      const allPts = pendingPoint._allPoints || [];
+      const curIdx = pendingPoint._currentIdx ?? allPts.findIndex(p => p.pointId === pendingPoint.pointId);
+      const next   = allPts[curIdx + 1] ?? null;
+      setPendingPoint(next ? { ...next, _allPoints: allPts, _currentIdx: curIdx + 1 } : null);
       return;
     }
 
@@ -4453,6 +4888,11 @@ function SketchPage({ page, projectId, onReload }) {
         // Images are fully filled — hit anywhere inside the bounding box
         if (tp.x >= s.x - thresh && tp.x <= s.x + s.w + thresh &&
             tp.y >= s.y - thresh && tp.y <= s.y + s.h + thresh) return s;
+      } else if (s.type === 'point') {
+        // Hit within 12 screen-pixels of the center (constant screen size)
+        const _psP = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+        const pr = 12 * _psP;
+        if (Math.hypot(tp.x - s.x, tp.y - s.y) <= pr) return s;
       } else if (s.type === 'text') {
         // s.x/y = world center; s.w/h = screen pixels. Convert half-extents to world units.
         const _psHT = viewBox.w / (svgSizeRef.current.w || viewBox.w);
@@ -4587,6 +5027,11 @@ function SketchPage({ page, projectId, onReload }) {
         minX=Math.min(_rcx,_rcx+(s.offset?.x||0)); maxX=Math.max(_rcx,_rcx+(s.offset?.x||0));
         minY=Math.min(_rcy,_rcy+(s.offset?.y||0)); maxY=Math.max(_rcy,_rcy+(s.offset?.y||0)); break;
       }
+      case 'point':
+        // Use a small square around the center (12px screen size at current zoom)
+        { const _psP2 = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+          const pr2 = 12 * _psP2;
+          minX = s.x - pr2; maxX = s.x + pr2; minY = s.y - pr2; maxY = s.y + pr2; break; }
       case 'dim-angle': return false; // no simple AABB for a referenced angle arc
       default: return false;
     }
@@ -4631,6 +5076,10 @@ function SketchPage({ page, projectId, onReload }) {
         raw = (shape.nodes || []).map(n => ({ x: n.x, y: n.y }));
         break;
       }
+      case 'point':
+        // Survey points snap at their exact center
+        raw = [{ x: shape.x, y: shape.y }];
+        break;
     }
     if (!rot) return raw;
     return raw.map(p => rotatePoint(p.x, p.y, piv.x, piv.y, rot));
@@ -5007,6 +5456,8 @@ function SketchPage({ page, projectId, onReload }) {
     if (!fromSlot || !toSlot) return;
     const sh = shapes.find(s => s.id === fromSlot.shapeId);
     if (!sh) return;
+    // Points are locked to the Points layer — cannot be moved to another layer
+    if (sh.type === 'point') return;
     const targetLayerId = toSlot.layerId;
     // Remove the dragged shape from the shapes array
     const without = shapes.filter(s => s.id !== sh.id);
@@ -5384,6 +5835,19 @@ function SketchPage({ page, projectId, onReload }) {
           />
         );
         break;
+      }
+      case 'point': {
+        // Point symbols and labels maintain constant screen size via ps.
+        // The symbol is rendered with a selection glow via sel; labels are separate.
+        const _pps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+        return (
+          <g key={s.id} transform={undefined}>
+            <g style={sel}>
+              {renderPointSymbolSVG(s, _pps)}
+            </g>
+            {renderPointLabelsSVG(s, _pps)}
+          </g>
+        );
       }
       // ── Dimension shapes (Phase 7) ──────────────────────────────────────────
       case 'dim-linear': {
@@ -5830,13 +6294,13 @@ function SketchPage({ page, projectId, onReload }) {
           );
         })}
 
-        {/* Pivot + rotate handles are suppressed for dimension shapes and multi-select */}
-        {!suppressPivotRotate && !shape.type.startsWith('dim-') && <line x1={piv.x} y1={piv.y} x2={rhPos.x} y2={rhPos.y}
+        {/* Pivot + rotate handles are suppressed for dimension shapes, points, and multi-select */}
+        {!suppressPivotRotate && !shape.type.startsWith('dim-') && shape.type !== 'point' && <line x1={piv.x} y1={piv.y} x2={rhPos.x} y2={rhPos.y}
           stroke="rgba(245,158,11,0.45)" strokeWidth={ps} strokeDasharray={`${3*ps},${3*ps}`}
           style={{ pointerEvents: 'none' }} />}
 
-        {/* Pivot handle — amber crosshair circle (not shown for dim shapes or multi-select) */}
-        {!suppressPivotRotate && !shape.type.startsWith('dim-') && <g key="pivot" style={{ cursor: 'move' }}
+        {/* Pivot handle — amber crosshair circle (not shown for dim shapes, points, or multi-select) */}
+        {!suppressPivotRotate && !shape.type.startsWith('dim-') && shape.type !== 'point' && <g key="pivot" style={{ cursor: 'move' }}
           onPointerDown={ev => {
             ev.stopPropagation();
             setDragNode({ shapeId: shape.id, nodeKey: 'pivot' });
@@ -5852,8 +6316,8 @@ function SketchPage({ page, projectId, onReload }) {
             stroke="#F59E0B" strokeWidth={1.5 * ps} />
         </g>}
 
-        {/* Rotate handle — amber ↻ circle (not shown for dim shapes or multi-select) */}
-        {!suppressPivotRotate && !shape.type.startsWith('dim-') && <g key="rotate" style={{ cursor: 'grab' }}
+        {/* Rotate handle — amber ↻ circle (not shown for dim shapes, points, or multi-select) */}
+        {!suppressPivotRotate && !shape.type.startsWith('dim-') && shape.type !== 'point' && <g key="rotate" style={{ cursor: 'grab' }}
           onPointerDown={ev => {
             ev.stopPropagation();
             const svgPt = screenToWorld(ev);
@@ -6142,6 +6606,7 @@ function SketchPage({ page, projectId, onReload }) {
     select: 'default', line: 'crosshair', curve: 'crosshair',
     pencil: 'crosshair', pen: 'crosshair', node: 'default',
     circle: 'crosshair', rect: 'crosshair', text: 'text', eraser: 'pointer', fill: 'cell',
+    point: 'crosshair',
     'dim-linear': 'crosshair', 'dim-angle': 'pointer',
     'dim-bearing': 'crosshair', 'dim-radius': 'pointer',
   };
@@ -6188,6 +6653,64 @@ function SketchPage({ page, projectId, onReload }) {
         borderBottom: '1px solid rgba(255,255,255,0.08)',
         zIndex: 20, overflow: 'visible',
       }}>
+
+        {/* ── Insert dropdown panel ────────────────────────────────────── */}
+        {openMenu === 'insert' && (
+          <div style={{
+            position: 'absolute', top: 36, left: menuPos.x, zIndex: 100,
+            background: 'rgba(16,22,48,0.98)', backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
+            boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+            minWidth: 165, padding: '4px 0',
+            fontFamily: 'Courier New, monospace',
+          }}>
+            {/* Point */}
+            <button
+              onClick={() => {
+                setTool('point');
+                setShowPointSelectModal(true);
+                setOpenMenu(null);
+              }}
+              style={{
+                width: '100%', height: 38, display: 'flex', alignItems: 'center',
+                gap: 10, padding: '0 14px',
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: 'rgba(255,255,255,0.65)', fontSize: 11,
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(28,56,41,0.5)'; e.currentTarget.style.color = '#86EFAC'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(255,255,255,0.65)'; }}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, flexShrink: 0 }}>
+                <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <circle cx="10" cy="10" r="6"/><circle cx="10" cy="10" r="1.8" fill="currentColor" stroke="none"/>
+                  <line x1="10" y1="2" x2="10" y2="4.5" strokeWidth="1.2"/><line x1="10" y1="15.5" x2="10" y2="18" strokeWidth="1.2"/>
+                  <line x1="2" y1="10" x2="4.5" y2="10" strokeWidth="1.2"/><line x1="15.5" y1="10" x2="18" y2="10" strokeWidth="1.2"/>
+                </svg>
+              </span>
+              <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>Point…</span>
+            </button>
+            {/* Image */}
+            <button
+              onClick={() => { handleImageImport(); setOpenMenu(null); }}
+              style={{
+                width: '100%', height: 38, display: 'flex', alignItems: 'center',
+                gap: 10, padding: '0 14px',
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: 'rgba(255,255,255,0.65)', fontSize: 11,
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; e.currentTarget.style.color = 'rgba(255,255,255,0.9)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(255,255,255,0.65)'; }}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, flexShrink: 0 }}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="1" y="1" width="12" height="12" rx="2"/><circle cx="5" cy="5" r="1.2" fill="currentColor" stroke="none"/>
+                  <polyline points="1 10 4 7 6.5 9.5 9 7 13 11" strokeWidth="1.2"/>
+                </svg>
+              </span>
+              <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>Image…</span>
+            </button>
+          </div>
+        )}
 
         {/* ── View dropdown panel ──────────────────────────────────────── */}
         {openMenu === 'view' && (
@@ -6840,6 +7363,32 @@ function SketchPage({ page, projectId, onReload }) {
               <path d="M21 7v6h-6"/>
               <path d="M21 13C19 8 14 5 8 6a9 9 0 0 0-5 8"/>
             </svg>
+          </button>
+
+          {/* ── Insert menu button ───────────────────────────────────── */}
+          <button
+            onClick={e => {
+              const btnRect = e.currentTarget.getBoundingClientRect();
+              const barRect = toolbarRef.current ? toolbarRef.current.getBoundingClientRect() : { left: 0 };
+              setMenuPos({ x: btnRect.left - barRect.left });
+              setOpenMenu(m => m === 'insert' ? null : 'insert');
+            }}
+            title="Insert Point or Image"
+            style={{
+              height: 26, padding: '0 10px', borderRadius: 4, flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 5,
+              background: openMenu === 'insert' ? 'rgba(28,56,41,0.45)' : 'rgba(255,255,255,0.06)',
+              border: `1px solid ${openMenu === 'insert' ? 'rgba(134,239,172,0.5)' : 'rgba(255,255,255,0.14)'}`,
+              color: openMenu === 'insert' ? '#86EFAC' : 'rgba(255,255,255,0.6)',
+              cursor: 'pointer', fontSize: 11,
+              fontFamily: 'Courier New, monospace', outline: 'none',
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+              <line x1="7" y1="2" x2="7" y2="12"/><line x1="2" y1="7" x2="12" y2="7"/>
+            </svg>
+            <span style={{ letterSpacing: '0.03em' }}>Insert</span>
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ opacity: 0.5, marginLeft: 1 }}><polyline points="1 2.5 4 5.5 7 2.5"/></svg>
           </button>
 
           {/* ── View menu button ────────────────────────────────────────── */}          <button
@@ -7512,8 +8061,18 @@ function SketchPage({ page, projectId, onReload }) {
               </div>
             );
           })()}
+          {/* Point Info Card — shown when a point shape is selected */}
+          {showValueCard && selectedShape?.type === 'point' && (
+            <PointInfoCard
+              key={selectedShape.id}
+              shape={selectedShape}
+              onUpdate={handleCardUpdate}
+              projectId={projectId}
+            />
+          )}
+
           {/* Committed-shape card — proper React component with controlled inputs */}
-          {showValueCard && selectedShape && selectedShape.type !== 'text' && (() => {
+          {showValueCard && selectedShape && selectedShape.type !== 'text' && selectedShape.type !== 'point' && (() => {
             const _lShapes = shapes.filter(s => (s.layerId || layers[0]?.id) === (selectedShape.layerId || layers[0]?.id));
             const _ri = [..._lShapes].reverse().findIndex(s => s.id === selectedShape.id);
             const _num = _ri >= 0 ? _lShapes.length - _ri : 1;
@@ -7644,7 +8203,8 @@ function SketchPage({ page, projectId, onReload }) {
                       const targetLayerId = e.target.value;
                       if (!targetLayerId) return;
                       commitShapes(shapes.map(s =>
-                        selectedIds.includes(s.id) ? { ...s, layerId: targetLayerId } : s
+                        selectedIds.includes(s.id) && s.type !== 'point'
+                          ? { ...s, layerId: targetLayerId } : s
                       ));
                       e.target.value = '';
                     }}
@@ -7960,6 +8520,70 @@ function SketchPage({ page, projectId, onReload }) {
           />
         )}
       </div>
+
+      {/* ── Point Select Modal ───────────────────────────────────────── */}
+      {showPointSelectModal && (
+        <PointSelectModal
+          projectId={projectId}
+          onSelect={pt => {
+            // Load all points list for auto-advance
+            const project = window._fb?.DB?.getProject(projectId);
+            let allPts = [];
+            if (project) {
+              project.pages.forEach(pg => {
+                if (pg.type === 'points' && pg.rows) {
+                  pg.rows.forEach((row, idx) => {
+                    allPts.push({
+                      pointId:  row.id,
+                      ptNum:    row.cells?.col_ptnum || '',
+                      northing: row.cells?.col_north || '',
+                      easting:  row.cells?.col_east  || '',
+                      elev:     row.cells?.col_elev  || '',
+                      desc:     row.cells?.col_desc  || '',
+                      _allPoints: null, // filled below
+                      _currentIdx: idx,
+                    });
+                  });
+                }
+              });
+            }
+            // Fill _allPoints references
+            allPts = allPts.map(p => ({ ...p, _allPoints: allPts }));
+            const selIdx = allPts.findIndex(p => p.pointId === pt.pointId);
+            const selPt  = allPts[selIdx] ?? { ...pt, _allPoints: allPts, _currentIdx: 0 };
+            setPendingPoint(selPt);
+            setShowPointSelectModal(false);
+          }}
+          onClose={() => setShowPointSelectModal(false)}
+        />
+      )}
+
+      {/* ── Point Delete Prompt Modal ────────────────────────────────── */}
+      {pointDeletePrompt && (
+        <PointDeletePromptModal
+          pointCount={pointDeletePrompt.shapeIds.length}
+          onPermanent={() => {
+            pointDeletePrompt.pointIds.forEach(pid =>
+              window._fb?.deletePointPermanently?.(projectId, pid)
+            );
+            // Reload shapes from DB since deletePointPermanently already updated sketch pages
+            const refreshed = window._fb?.DB?.getPage(projectId, page?.id);
+            if (refreshed) {
+              setShapes(sanitizeShapes(refreshed.shapes || []));
+            } else {
+              commitShapes(shapes.filter(s => !pointDeletePrompt.shapeIds.includes(s.id)));
+            }
+            setSelectedIds([]);
+            setPointDeletePrompt(null);
+          }}
+          onSketchOnly={() => {
+            commitShapes(shapes.filter(s => !pointDeletePrompt.shapeIds.includes(s.id)));
+            setSelectedIds([]);
+            setPointDeletePrompt(null);
+          }}
+          onCancel={() => setPointDeletePrompt(null)}
+        />
+      )}
     </div>
   );
 }
