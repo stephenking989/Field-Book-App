@@ -819,7 +819,7 @@ function parseQBearing(str) {
 //   shape    — the currently selected shape object (never null when rendered)
 //   onUpdate — fn(transformFn) called with a shape→shape transform to apply
 // ─────────────────────────────────────────────────────────────────────────────
-function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: northAz }) {
+function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: northAz, defaultName = '' }) {
   // ── Shared styles ───────────────────────────────────────────────────────
   const iStyle = {
     width: 82, background: 'rgba(255,255,255,0.08)',
@@ -844,6 +844,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
     const _dbPx = (sh.type==='dim-bearing'&&sh.p1&&sh.p2) ? Math.hypot(sh.p2.x-sh.p1.x,sh.p2.y-sh.p1.y) : 0;
     const _dbAz = (sh.type==='dim-bearing'&&sh.p1&&sh.p2) ? ((Math.atan2(sh.p2.x-sh.p1.x,-(sh.p2.y-sh.p1.y))*180/Math.PI)+360)%360 : 0;
     return {
+      name:   sh.customName || defaultName,
       len:    pxToReal(lenPx, scaleDenom, units).toFixed(3),
       brg:    aziToQBearing(brg),
       r:      sh.type === 'circle' ? pxToReal(sh.r, scaleDenom, units).toFixed(3) : '0',
@@ -861,7 +862,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
   // Re-initialise when shape changes, or when scale/units change so displayed
   // values refresh immediately without needing to re-select the shape.
   useEffect(() => { setVals(initVals(s)); },
-    [s.id, s.x1, s.y1, s.x2, s.y2, s.r, s.w, s.h, s.px, s.py, s.ntsLabel, scaleDenom, units,
+    [s.id, s.x1, s.y1, s.x2, s.y2, s.r, s.w, s.h, s.px, s.py, s.ntsLabel, s.customName, defaultName, scaleDenom, units,
      s.p1?.x, s.p1?.y, s.p2?.x, s.p2?.y]);
 
   // ── Commit helper ───────────────────────────────────────────────────────
@@ -1065,8 +1066,24 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
       </div>,
     ];
   } else {
-    return null;
+    title = s.type.charAt(0).toUpperCase() + s.type.slice(1);
   }
+
+  // ── Name field — shown for all shape types ────────────────────────────
+  rows = [
+    <div key="_name" style={rStyle}>
+      <span style={lStyle}>Name</span>
+      <input
+        value={vals.name}
+        placeholder="Custom name…"
+        onChange={e => setVals(v => ({ ...v, name: e.target.value }))}
+        onBlur={e => { const v = e.target.value.trim(); onUpdate(sh => ({ ...sh, customName: (v && v !== defaultName) ? v : undefined })); }}
+        onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+        style={{ ...iStyle, width: 90 }}
+      />
+    </div>,
+    ...rows,
+  ];
 
   // ── NTS label field + per-shape dims toggle (all committed shapes) ─────
   rows = rows.concat([
@@ -1151,6 +1168,60 @@ function offsetShape(s, dx, dy) {
     // just return unchanged so pasting doesn't crash.
     default: return s;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER CARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+function LayerCard({ layer, onRename }) {
+  const iStyle = {
+    width: 100, background: 'rgba(255,255,255,0.08)',
+    border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3,
+    color: 'rgba(255,255,255,0.9)', fontFamily: 'Courier New, monospace',
+    fontSize: 10, padding: '2px 5px', outline: 'none',
+  };
+  const [name, setName] = useState(layer.name);
+
+  useEffect(() => { setName(layer.name); }, [layer.id, layer.name]);
+
+  return (
+    <div style={{
+      position: 'absolute', bottom: 10, left: 10, pointerEvents: 'all',
+      background: 'rgba(10,15,35,0.90)', border: '1px solid rgba(99,102,241,0.45)',
+      borderRadius: 6, padding: '7px 11px',
+      fontFamily: 'Courier New, monospace', fontSize: 10.5,
+      color: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(5px)', zIndex: 15,
+      lineHeight: 1.7, minWidth: 180,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#A5B4FC',
+        fontSize: 9.5, letterSpacing: '0.1em', marginBottom: 4, textTransform: 'uppercase' }}>
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+          <rect x="1" y="1" width="10" height="3" rx="0.8"/>
+          <rect x="1" y="5" width="10" height="3" rx="0.8"/>
+          <rect x="1" y="9" width="10" height="2" rx="0.8" opacity="0.5"/>
+        </svg>
+        Layer
+      </div>
+      <div style={{ display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.6 }}>
+        <span style={{ color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 }}>Name</span>
+        <input
+          value={name}
+          onChange={e => setName(e.target.value)}
+          onBlur={e => { const v = e.target.value.trim(); if (v) onRename(v); else setName(layer.name); }}
+          onKeyDown={e => {
+            if (e.key === 'Enter') e.target.blur();
+            if (e.key === 'Escape') { setName(layer.name); e.target.blur(); }
+          }}
+          style={iStyle}
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.6, marginTop: 3 }}>
+        <span style={{ color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 }}>Shapes</span>
+        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>{layer._shapeCount ?? 0}</span>
+      </div>
+    </div>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2031,6 +2102,7 @@ function SketchPage({ page, projectId, onReload }) {
   const [collapsedLayers,  setCollapsedLayers]  = useState(new Set());
   const [panelDrag, setPanelDrag]             = useState(null);
   const panelDragTimerRef = useRef(null);
+  const panelRowGestureRef = useRef(null);        // { startX, startY, shapeId, swiped }
   const [headerOpen,       setHeaderOpen]       = useState(false);
   const [notesOpen,        setNotesOpen]        = useState(false);
 
@@ -2074,6 +2146,7 @@ function SketchPage({ page, projectId, onReload }) {
   // ── Layers panel state ───────────────────────────────────────────────────────────────────────────
   // lastPanelClickId: last shape tile clicked in the layers panel (for shift-click range)
   const [lastPanelClickId, setLastPanelClickId] = useState(null);
+  const [selectedLayerForCard, setSelectedLayerForCard] = useState(null); // layerId or null
 
   const svgRef      = useRef(null);
   const svgWrapRef  = useRef(null);
@@ -6956,6 +7029,85 @@ function SketchPage({ page, projectId, onReload }) {
             </div>
           )}
 
+          {/* Copy + Duplicate — when shapes are selected */}
+          {ribbonOpen && selectedIds.length > 0 && (<>
+            <button
+              onClick={() => { shapeClipRef.current = shapes.filter(s => selectedIds.includes(s.id)); }}
+              title="Copy selected (Ctrl+C)"
+              style={{
+                flexShrink: 0, width: 52, height: 34,
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                justifyContent: 'center', gap: 2,
+                background: 'rgba(59,130,246,0.10)', border: 'none',
+                borderTop: '1px solid rgba(255,255,255,0.07)',
+                color: '#93C5FD', cursor: 'pointer',
+              }}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+              </span>
+              <span style={{ fontSize: 7, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Copy</span>
+            </button>
+            <button
+              onClick={() => {
+                const sel = shapes.filter(s => selectedIds.includes(s.id));
+                let t = Date.now();
+                const duped = sel.map(s => { const id = 's_' + (++t) + '_' + Math.random().toString(36).slice(2, 6); return offsetShape({ ...s, id }, 20, 20); });
+                commitShapes([...shapes, ...duped]);
+                setSelectedIds(duped.map(s => s.id));
+              }}
+              title="Duplicate selected"
+              style={{
+                flexShrink: 0, width: 52, height: 34,
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                justifyContent: 'center', gap: 2,
+                background: 'rgba(167,139,250,0.10)', border: 'none',
+                borderTop: '1px solid rgba(255,255,255,0.07)',
+                color: '#C4B5FD', cursor: 'pointer',
+              }}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="1" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <rect x="9" y="1" width="13" height="13" rx="2" ry="2"/>
+                </svg>
+              </span>
+              <span style={{ fontSize: 7, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Dupe</span>
+            </button>
+          </>)}
+          {/* Paste — always visible when ribbon is open */}
+          {ribbonOpen && (
+            <button
+              onClick={() => {
+                if (!shapeClipRef.current || shapeClipRef.current.length === 0) return;
+                let t = Date.now();
+                const pasted = shapeClipRef.current.map(s => { const id = 's_' + (++t) + '_' + Math.random().toString(36).slice(2, 6); return offsetShape({ ...s, id }, 20, 20); });
+                commitShapes([...shapes, ...pasted]);
+                setSelectedIds(pasted.map(s => s.id));
+              }}
+              title="Paste (Ctrl+V)"
+              style={{
+                flexShrink: 0, width: 52, height: 34,
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                justifyContent: 'center', gap: 2,
+                background: 'rgba(52,211,153,0.10)', border: 'none',
+                borderTop: '1px solid rgba(255,255,255,0.07)',
+                color: '#6EE7B7', cursor: 'pointer',
+              }}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                  <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+                  <line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/>
+                </svg>
+              </span>
+              <span style={{ fontSize: 7, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Paste</span>
+            </button>
+          )}
           {/* Delete selected — pinned at bottom, outside the scroll area */}
           {ribbonOpen && selectedIds.length > 0 && (
             <button
@@ -7361,16 +7513,41 @@ function SketchPage({ page, projectId, onReload }) {
             );
           })()}
           {/* Committed-shape card — proper React component with controlled inputs */}
-          {showValueCard && selectedShape && selectedShape.type !== 'text' && (
-            <ShapeValueCard
-              key={selectedShape.id}
-              shape={selectedShape}
-              onUpdate={handleCardUpdate}
-              scaleDenom={scaleDenom}
-              units={units}
-              northAzimuth={northAzimuth}
-            />
-          )}
+          {showValueCard && selectedShape && selectedShape.type !== 'text' && (() => {
+            const _lShapes = shapes.filter(s => (s.layerId || layers[0]?.id) === (selectedShape.layerId || layers[0]?.id));
+            const _ri = [..._lShapes].reverse().findIndex(s => s.id === selectedShape.id);
+            const _num = _ri >= 0 ? _lShapes.length - _ri : 1;
+            const _defaultName = selectedShape.type.charAt(0).toUpperCase() + selectedShape.type.slice(1) + ' ' + _num;
+            return (
+              <ShapeValueCard
+                key={selectedShape.id}
+                shape={selectedShape}
+                onUpdate={handleCardUpdate}
+                scaleDenom={scaleDenom}
+                units={units}
+                northAzimuth={northAzimuth}
+                defaultName={_defaultName}
+              />
+            );
+          })()}
+
+          {/* Layer card — shown when a layer header is clicked and no shapes are selected */}
+          {selectedLayerForCard && selectedIds.length === 0 && (() => {
+            const _layer = layers.find(l => l.id === selectedLayerForCard);
+            if (!_layer) return null;
+            const _shapeCount = shapes.filter(s => (s.layerId || layers[0]?.id) === _layer.id).length;
+            return (
+              <LayerCard
+                key={_layer.id}
+                layer={{ ..._layer, _shapeCount }}
+                onRename={newName => {
+                  const next = layers.map(l => l.id === _layer.id ? { ...l, name: newName } : l);
+                  setLayers(next);
+                  persist(undefined, undefined, next);
+                }}
+              />
+            );
+          })()}
 
           {/* Inline text editor — absolutely positioned in SVG container.
               textEdit stores world coordinates; convert to screen pixels for CSS. */}
@@ -7503,7 +7680,7 @@ function SketchPage({ page, projectId, onReload }) {
                         return (<>
                           {_lDrop && _lUp && <div style={{height:2,background:'#3B82F6',margin:'0 4px'}}/>}
                           <div
-                            onClick={()=>setActiveLayerId(layer.id)}
+                            onClick={()=>{ setActiveLayerId(layer.id); setSelectedLayerForCard(layer.id); setSelectedIds([]); }}
                             style={{
                               display:'flex', alignItems:'center', gap:2,
                               padding:'4px 3px 4px 4px', minHeight:28,
@@ -7555,7 +7732,14 @@ function SketchPage({ page, projectId, onReload }) {
                               title={layer.locked?'Unlock layer':'Lock layer'}
                               style={{width:18,height:18,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:10,color:layer.locked?'#FCD34D':'rgba(255,255,255,0.2)',outline:'none'}}
                             >{layer.locked?'🔒':'🔓'}</button>
-                            {/* Name */}
+                            {/* Layer stack icon + Name */}
+                            <svg width="10" height="10" viewBox="0 0 12 12" fill="none"
+                              stroke={isActive?'#93C5FD':(layer.visible?'rgba(255,255,255,0.5)':'rgba(255,255,255,0.18)')}
+                              strokeWidth="1.4" strokeLinecap="round" style={{flexShrink:0}}>
+                              <rect x="1" y="1" width="10" height="3" rx="0.8"/>
+                              <rect x="1" y="5" width="10" height="3" rx="0.8"/>
+                              <rect x="1" y="9" width="10" height="2" rx="0.8" opacity="0.5"/>
+                            </svg>
                             <span style={{flex:1,fontSize:11,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
                               color:isActive?'#93C5FD':(layer.visible?'rgba(255,255,255,0.7)':'rgba(255,255,255,0.3)')
                             }}>{layer.name}{layer.locked && <span style={{marginLeft:3,fontSize:8,opacity:0.6}}>🔒</span>}</span>
@@ -7595,6 +7779,8 @@ function SketchPage({ page, projectId, onReload }) {
                             {_sDrop&&_sUp&&<div style={{height:2,background:'#3B82F6',margin:'0 14px'}}/>}
                             <div
                               onClick={e=>{
+                                // Swipe gesture was already handled in onPointerUp — skip click
+                                if(panelRowGestureRef.current?.swiped){panelRowGestureRef.current=null;return;}
                                 // Ctrl/Cmd+click: toggle this shape in selection
                                 if(e.ctrlKey||e.metaKey){
                                   e.stopPropagation();
@@ -7615,47 +7801,65 @@ function SketchPage({ page, projectId, onReload }) {
                                   }
                                 } else {
                                   setTool('select');setSelectedIds([s.id]);setPrevTool(null);
+                                  setLastPanelClickId(s.id);setSelectedLayerForCard(null);
+                                }
+                              }}
+                              onPointerDown={e=>{
+                                if(e.button!==0&&e.pointerType==='mouse')return;
+                                const _startX=e.clientX,_startY=e.clientY,_pType=e.pointerType;
+                                panelRowGestureRef.current={startX:_startX,startY:_startY,shapeId:s.id,swiped:false};
+                                // Long-press anywhere on the row to initiate drag
+                                if(panelDragTimerRef.current)clearTimeout(panelDragTimerRef.current);
+                                panelDragTimerRef.current=setTimeout(()=>{
+                                  panelDragTimerRef.current=null;
+                                  if(_pType==='touch'&&navigator.vibrate)navigator.vibrate(40);
+                                  const _slots=[...layers].reverse().flatMap(_l=>{
+                                    if(collapsedLayers.has(_l.id))return[];
+                                    const _ls=shapes.filter(_s=>(_s.layerId||layers[0]?.id)===_l.id);
+                                    return[..._ls].reverse().map((_sh,_ri)=>({shapeId:_sh.id,layerId:_l.id,posInLayer:_ls.length-1-_ri}));
+                                  });
+                                  const _origFi=_slots.findIndex(sl=>sl.shapeId===s.id);
+                                  if(_origFi<0)return;
+                                  setPanelDrag({type:'shape',id:s.id,startY:_startY,slots:_slots,origFlatIdx:_origFi,targetFlatIdx:_origFi});
+                                  panelRowGestureRef.current=null;
+                                },_pType==='touch'?400:150);
+                              }}
+                              onPointerMove={e=>{
+                                const g=panelRowGestureRef.current;
+                                if(!g||g.shapeId!==s.id)return;
+                                const dx=e.clientX-g.startX,dy=e.clientY-g.startY;
+                                // Horizontal swipe: cancel drag timer, mark as swiped
+                                if(Math.abs(dx)>25&&Math.abs(dx)>Math.abs(dy)*1.5){
+                                  if(panelDragTimerRef.current){clearTimeout(panelDragTimerRef.current);panelDragTimerRef.current=null;}
+                                  panelRowGestureRef.current={...g,swiped:true};
+                                // Vertical scroll: cancel drag timer only
+                                }else if(Math.abs(dy)>20){
+                                  if(panelDragTimerRef.current){clearTimeout(panelDragTimerRef.current);panelDragTimerRef.current=null;}
+                                }
+                              }}
+                              onPointerUp={e=>{
+                                if(panelDragTimerRef.current){clearTimeout(panelDragTimerRef.current);panelDragTimerRef.current=null;}
+                                const g=panelRowGestureRef.current;
+                                // Swipe right → toggle multi-select
+                                if(g?.swiped&&g.shapeId===s.id){
+                                  setTool('select');setPrevTool(null);
+                                  setSelectedIds(prev=>prev.includes(s.id)?prev.filter(id=>id!==s.id):[...prev,s.id]);
                                   setLastPanelClickId(s.id);
                                 }
                               }}
                               style={{display:'flex',alignItems:'center',gap:3,padding:'2px 4px 2px 14px',
                                 background:selectedIds.includes(s.id)?'rgba(59,130,246,0.12)':'transparent',
-                                opacity:_sDrag?0.35:1,cursor:'pointer'}}
+                                opacity:_sDrag?0.35:1,cursor:'pointer',touchAction:'pan-y'}}
                             >
-                              {/* Shape drag handle — hold to reorder across any layer (mouse: 150ms, touch: 400ms+vibrate) */}
+                              {/* Shape drag handle — visual affordance; long-press anywhere on row also works */}
                               <span
                                 style={{fontSize:8,color:'rgba(255,255,255,0.18)',cursor:'grab',
-                                  flexShrink:0,padding:'0 2px',userSelect:'none',touchAction:'none'}}
-                                onPointerDown={e=>{
-                                  e.stopPropagation();
-                                  const _sy=e.clientY;
-                                  if(panelDragTimerRef.current) clearTimeout(panelDragTimerRef.current);
-                                  panelDragTimerRef.current=setTimeout(()=>{
-                                    panelDragTimerRef.current=null;
-                                    if(e.pointerType==='touch'&&navigator.vibrate) navigator.vibrate(40);
-                                    // Build global flat slot list at drag start
-                                    const _slots=[...layers].reverse().flatMap(_l=>{
-                                      if(collapsedLayers.has(_l.id)) return [];
-                                      const _ls=shapes.filter(_s=>(_s.layerId||layers[0]?.id)===_l.id);
-                                      return [..._ls].reverse().map((_sh,_ri)=>({
-                                        shapeId:_sh.id, layerId:_l.id, posInLayer:_ls.length-1-_ri,
-                                      }));
-                                    });
-                                    const _origFi=_slots.findIndex(sl=>sl.shapeId===s.id);
-                                    if(_origFi<0) return;
-                                    setPanelDrag({type:'shape',id:s.id,startY:_sy,slots:_slots,origFlatIdx:_origFi,targetFlatIdx:_origFi});
-                                  },e.pointerType==='touch'?400:150);
-                                }}
-                                onPointerMove={e=>{
-                                  if(panelDragTimerRef.current&&Math.abs(e.clientY-(panelDrag?.startY||e.clientY))>8){
-                                    clearTimeout(panelDragTimerRef.current);panelDragTimerRef.current=null;
-                                  }
-                                }}
-                                onPointerUp={()=>{if(panelDragTimerRef.current){clearTimeout(panelDragTimerRef.current);panelDragTimerRef.current=null;}}}
+                                  flexShrink:0,padding:'0 2px',userSelect:'none',pointerEvents:'none'}}
                               >⣿</span>
                               {/* Per-shape visibility toggle */}
                               <button
                                 onClick={ev=>{ev.stopPropagation();toggleShapeVisible(s.id);}}
+                                onPointerDown={ev=>ev.stopPropagation()}
                                 title={s.visible===false?'Show':'Hide'}
                                 style={{width:14,height:14,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
                                   background:'none',border:'none',cursor:'pointer',fontSize:9,outline:'none',
@@ -7664,6 +7868,7 @@ function SketchPage({ page, projectId, onReload }) {
                               {/* Per-shape lock toggle */}
                               <button
                                 onClick={ev=>{ev.stopPropagation();toggleShapeLocked(s.id);}}
+                                onPointerDown={ev=>ev.stopPropagation()}
                                 title={s.locked?'Unlock shape':'Lock shape'}
                                 style={{width:14,height:14,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
                                   background:'none',border:'none',cursor:'pointer',fontSize:8,outline:'none',
@@ -7671,7 +7876,7 @@ function SketchPage({ page, projectId, onReload }) {
                               >{s.locked?'🔒':'🔓'}</button>
                               <span style={{flex:1,fontSize:10,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
                                 color:s.visible===false?'rgba(255,255,255,0.2)':(selectedIds.includes(s.id)?'#93C5FD':'rgba(255,255,255,0.4)')}}>
-                                {s.type.charAt(0).toUpperCase()+s.type.slice(1)} {layerShapes.length-ri}{s.locked&&<span style={{marginLeft:2,fontSize:7,opacity:0.7}}>🔒</span>}
+                                {s.customName||(s.type.charAt(0).toUpperCase()+s.type.slice(1)+' '+(layerShapes.length-ri))}{s.locked&&<span style={{marginLeft:2,fontSize:7,opacity:0.7}}>🔒</span>}
                               </span>
                             </div>
                             {_sDrop&&!_sUp&&<div style={{height:2,background:'#3B82F6',margin:'0 14px'}}/>}
