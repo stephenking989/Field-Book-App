@@ -2051,144 +2051,201 @@ function renderPointSymbolSVG(s, ps) {
 // POINT LABELS RENDERER  (module-level, returns array of SVG elements)
 // ─────────────────────────────────────────────────────────────────────────────
 function renderPointLabelsSVG(s, ps) {
-  const r   = 10 * ps;
+  const r     = 10 * ps;
   const lineH = 11 * ps;
-  let curY  = s.y + r + 14 * ps;
+  let curY    = s.y + r + 14 * ps;
   const elems = [];
-  const addLabel = (text) => {
+  const addLabel = (keyId, text) => {
     if (!text) return;
-    elems.push(dimTextEl(s.x, curY, 0, String(text), ps));
+    // cloneElement to inject the key React requires for array children
+    elems.push(React.cloneElement(dimTextEl(s.x, curY, 0, String(text), ps), { key: keyId }));
     curY += lineH;
   };
-  if (s.showNum)      addLabel(s.ptNum);
-  if (s.showNorthing) addLabel('N ' + (s.northing || ''));
-  if (s.showEasting)  addLabel('E ' + (s.easting  || ''));
-  if (s.showElev)     addLabel('Z ' + (s.elev     || ''));
-  if (s.showDesc)     addLabel(s.desc);
+  if (s.showNum)       addLabel('pt',   s.ptNum);
+  if (s.showNorthing)  addLabel('n',    'N ' + (s.northing || ''));
+  if (s.showEasting)   addLabel('e',    'E ' + (s.easting  || ''));
+  if (s.showElev)      addLabel('z',    'Z ' + (s.elev     || ''));
+  if (s.showDesc)      addLabel('desc', s.desc);
   return elems;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POINT INFO CARD  (module-level component)
 // ─────────────────────────────────────────────────────────────────────────────
-function PointInfoCard({ shape: s, onUpdate, projectId }) {
-  const cardStyle = {
-    position: 'absolute', bottom: 60, right: 8, width: 190,
-    background: 'rgba(15,30,20,0.94)', borderRadius: 10,
-    border: '1px solid rgba(255,255,255,0.12)', padding: '10px 10px 8px',
-    color: 'rgba(255,255,255,0.85)', fontSize: 10, userSelect: 'none',
-    boxShadow: '0 4px 20px rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)',
-    zIndex: 120,
-  };
-  const rowSt  = { display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4, lineHeight: 1.5 };
-  const lblSt  = { color: '#64748B', width: 42, flexShrink: 0 };
-  const valSt  = { color: 'rgba(255,255,255,0.7)', fontFamily: 'Courier New, monospace', fontSize: 9.5, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
-  const togBtn = (on, onClick, label) => (
-    <button onClick={onClick} style={{
-      padding: '2px 7px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 9, fontWeight: 600,
-      background: on ? '#2D6A4F' : 'rgba(255,255,255,0.08)',
-      color: on ? '#FDFAF4' : 'rgba(255,255,255,0.45)',
-    }}>{label}</button>
-  );
+function PointInfoCard({ shape: s, onUpdate, projectId, onPtNumChange }) {
+  // Local controlled state for all editable PNEZD fields.
+  // Re-initialised whenever the selected point changes.
+  const [vals, setVals] = useState({
+    ptNum: s.ptNum || '', northing: s.northing || '',
+    easting: s.easting || '', elev: s.elev || '', desc: s.desc || '',
+  });
+  const [ptNumError, setPtNumError] = useState('');
+  useEffect(() => {
+    setVals({
+      ptNum: s.ptNum || '', northing: s.northing || '',
+      easting: s.easting || '', elev: s.elev || '', desc: s.desc || '',
+    });
+    setPtNumError('');
+  }, [s.id, s.ptNum, s.northing, s.easting, s.elev, s.desc]);
 
-  const SYMBOLS = [
-    { id: 'survey',   label: '⊙' },
-    { id: 'dot',      label: '•' },
-    { id: 'x',        label: '✕' },
-    { id: 'cross',    label: '+' },
-    { id: 'square',   label: '□' },
-    { id: 'triangle', label: '△' },
-    { id: 'tri-down', label: '▽' },
-    { id: 'diamond',  label: '◇' },
-    { id: 'circle',   label: '○' },
+  // Update shape snapshot AND persist to the data page row simultaneously.
+  // For ptNum, only updates local vals — commit happens on blur via commitPtNum.
+  function updateField(shapeKey, dataCol, value) {
+    setVals(v => ({ ...v, [shapeKey]: value }));
+    if (shapeKey !== 'ptNum') {
+      onUpdate(sh => ({ ...sh, [shapeKey]: value }));
+      window._fb?.updatePointRow?.(projectId, s.pointId, { [dataCol]: value });
+    }
+  }
+
+  // Called on pt# field blur (or Enter key). Checks for duplicates before committing.
+  function commitPtNum() {
+    const newNum = (vals.ptNum || '').trim();
+    if (newNum === String(s.ptNum || '').trim()) { setPtNumError(''); return; }
+    if (!newNum) { setVals(v => ({ ...v, ptNum: s.ptNum || '' })); return; }
+    if (window._fb?.isPtNumTaken?.(projectId, newNum, s.pointId)) {
+      setPtNumError('Pt # ' + newNum + ' already exists');
+      setVals(v => ({ ...v, ptNum: s.ptNum || '' }));
+      return;
+    }
+    setPtNumError('');
+    onUpdate(sh => ({ ...sh, ptNum: newNum }));
+    window._fb?.updatePointRow?.(projectId, s.pointId, { col_ptnum: newNum });
+    onPtNumChange?.(newNum);
+  }
+
+  function toggle(showField) {
+    onUpdate(sh => ({ ...sh, [showField]: !sh[showField] }));
+  }
+
+  const SYMBOL_OPTS = [
+    { id: 'survey',   label: '⊙  Survey Marker' },
+    { id: 'dot',      label: '•  Dot'            },
+    { id: 'x',        label: '✕  X'              },
+    { id: 'cross',    label: '+  Cross'           },
+    { id: 'square',   label: '□  Square'          },
+    { id: 'triangle', label: '△  Triangle ▲'      },
+    { id: 'tri-down', label: '▽  Triangle ▼'      },
+    { id: 'diamond',  label: '◇  Diamond'         },
+    { id: 'circle',   label: '○  Circle'          },
   ];
 
-  const allOn = s.showNum && s.showNorthing && s.showEasting && s.showElev && s.showDesc;
+  // Field definitions: shape key, data-page column, visibility toggle field, button label
+  const FIELDS = [
+    { key: 'ptNum',    col: 'col_ptnum', show: 'showNum',      label: 'Pt #', ph: 'Point #'     },
+    { key: 'northing', col: 'col_north', show: 'showNorthing', label: 'N',    ph: 'Northing'    },
+    { key: 'easting',  col: 'col_east',  show: 'showEasting',  label: 'E',    ph: 'Easting'     },
+    { key: 'elev',     col: 'col_elev',  show: 'showElev',     label: 'Z',    ph: 'Elevation'   },
+    { key: 'desc',     col: 'col_desc',  show: 'showDesc',     label: 'Desc', ph: 'Description' },
+  ];
 
-  function toggle(field) {
-    onUpdate(sh => ({ ...sh, [field]: !sh[field] }));
-  }
-  function setSymbol(sym) {
-    onUpdate(sh => ({ ...sh, symbol: sym }));
-  }
-  function masterToggle() {
-    const next = !allOn;
-    onUpdate(sh => ({ ...sh, showNum: next, showNorthing: next, showEasting: next, showElev: next, showDesc: next }));
-  }
-  function handleRefresh() {
-    const project = window._fb?.DB?.getProject(projectId);
-    if (!project) return;
-    let found = null;
-    for (const pg of project.pages) {
-      if (pg.type === 'points' && pg.rows) {
-        const row = pg.rows.find(r => r.id === s.pointId);
-        if (row) { found = row; break; }
-      }
-    }
-    if (!found) { console.warn('[PointInfoCard] Point row not found in data page'); return; }
-    onUpdate(sh => ({
-      ...sh,
-      ptNum:    found.cells['col_ptnum'] || sh.ptNum,
-      northing: found.cells['col_north'] || sh.northing,
-      easting:  found.cells['col_east']  || sh.easting,
-      elev:     found.cells['col_elev']  || sh.elev,
-      desc:     found.cells['col_desc']  || sh.desc,
-    }));
-  }
+  const allOn = FIELDS.every(f => s[f.show]);
+
+  const inpSt = {
+    flex: 1, padding: '4px 6px', borderRadius: 4, minWidth: 0,
+    background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.13)',
+    color: '#FDFAF4', fontSize: 10.5, fontFamily: 'Courier New, monospace', outline: 'none',
+  };
 
   return (
-    <div style={cardStyle}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
-        <span style={{ fontWeight: 700, fontSize: 11, color: '#FDFAF4' }}>Point {s.ptNum || '—'}</span>
-        <button onClick={handleRefresh} title="Re-sync from Points Data Page"
-          style={{ fontSize: 12, background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.5)', padding: '0 2px' }}>
-          ↺
-        </button>
+    <div style={{
+      position: 'absolute', bottom: 60, left: 8, width: 210,
+      background: 'rgba(12,24,16,0.96)', borderRadius: 10,
+      border: '1px solid rgba(255,255,255,0.13)', padding: '9px 10px 10px',
+      color: 'rgba(255,255,255,0.85)', userSelect: 'none',
+      boxShadow: '0 4px 24px rgba(0,0,0,0.55)', backdropFilter: 'blur(8px)',
+      zIndex: 120,
+    }}>
+
+      {/* ── Top row: symbol dropdown + All toggle + refresh ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 8 }}>
+        <select
+          value={s.symbol || 'survey'}
+          onChange={e => onUpdate(sh => ({ ...sh, symbol: e.target.value }))}
+          style={{
+            flex: 1, fontSize: 10, padding: '4px 5px', borderRadius: 5, minWidth: 0,
+            background: '#1A3D28', border: '1px solid rgba(255,255,255,0.2)',
+            color: '#FDFAF4', fontFamily: 'Courier New, monospace', outline: 'none', cursor: 'pointer',
+          }}
+        >
+          {SYMBOL_OPTS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+        </select>
+        <button
+          onClick={() => { const n = !allOn; onUpdate(sh => ({ ...sh, showNum: n, showNorthing: n, showEasting: n, showElev: n, showDesc: n })); }}
+          title="Toggle all labels"
+          style={{
+            flexShrink: 0, padding: '4px 8px', borderRadius: 5, border: 'none', cursor: 'pointer',
+            fontSize: 9, fontWeight: 700,
+            background: allOn ? '#2D6A4F' : 'rgba(255,255,255,0.09)',
+            color: allOn ? '#FDFAF4' : 'rgba(255,255,255,0.45)',
+          }}
+        >{allOn ? 'All Off' : 'All On'}</button>
+        <button
+          onClick={() => {
+            const project = window._fb?.DB?.getProject(projectId);
+            if (!project) return;
+            for (const pg of project.pages) {
+              if (pg.type === 'points' && pg.rows) {
+                const row = pg.rows.find(r => r.id === s.pointId);
+                if (row) {
+                  const next = {
+                    ptNum:    row.cells['col_ptnum'] || s.ptNum,
+                    northing: row.cells['col_north'] || s.northing,
+                    easting:  row.cells['col_east']  || s.easting,
+                    elev:     row.cells['col_elev']  || s.elev,
+                    desc:     row.cells['col_desc']  || s.desc,
+                  };
+                  setVals(next);
+                  onUpdate(sh => ({ ...sh, ...next }));
+                  return;
+                }
+              }
+            }
+          }}
+          title="Re-sync from Points Data Page"
+          style={{ flexShrink: 0, fontSize: 14, background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.4)', padding: '0 1px', lineHeight: 1 }}
+        >↺</button>
       </div>
 
-      {/* PNEZD data display */}
-      <div style={{ marginBottom: 7 }}>
-        {[['Pt #', s.ptNum], ['N', s.northing], ['E', s.easting], ['Z', s.elev], ['Desc', s.desc]].map(([lbl, val]) => (
-          val ? (
-            <div key={lbl} style={rowSt}>
-              <span style={lblSt}>{lbl}</span>
-              <span style={valSt}>{val}</span>
+      {/* ── PNEZD fields: toggle-label button + editable input ── */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {FIELDS.map(f => (
+          <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              {/* Toggle button doubles as field label */}
+              <button
+                onClick={() => toggle(f.show)}
+                title={`Toggle ${f.label} label on canvas`}
+                style={{
+                  flexShrink: 0, width: 34, height: 26, borderRadius: 5, border: 'none',
+                  cursor: 'pointer', fontSize: 9, fontWeight: 700,
+                  background: s[f.show] ? '#2D6A4F' : 'rgba(255,255,255,0.09)',
+                  color: s[f.show] ? '#FDFAF4' : 'rgba(255,255,255,0.38)',
+                }}
+              >{f.label}</button>
+              {f.key === 'ptNum' ? (
+                <input
+                  value={vals.ptNum}
+                  onChange={e => setVals(v => ({ ...v, ptNum: e.target.value }))}
+                  onBlur={commitPtNum}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.target.blur(); } }}
+                  placeholder={f.ph}
+                  style={{ ...inpSt, borderColor: ptNumError ? '#f87171' : 'rgba(255,255,255,0.13)' }}
+                />
+              ) : (
+                <input
+                  value={vals[f.key]}
+                  onChange={e => updateField(f.key, f.col, e.target.value)}
+                  placeholder={f.ph}
+                  style={inpSt}
+                />
+              )}
             </div>
-          ) : null
+            {f.key === 'ptNum' && ptNumError && (
+              <div style={{ fontSize: 9, color: '#f87171', paddingLeft: 39 }}>{ptNumError}</div>
+            )}
+          </div>
         ))}
-      </div>
-
-      {/* Symbol picker */}
-      <div style={{ marginBottom: 7 }}>
-        <div style={{ fontSize: 9, color: '#64748B', marginBottom: 4 }}>SYMBOL</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-          {SYMBOLS.map(sym => (
-            <button key={sym.id} onClick={() => setSymbol(sym.id)} title={sym.id}
-              style={{
-                width: 28, height: 28, borderRadius: 5, border: 'none', cursor: 'pointer', fontSize: 14,
-                background: (s.symbol || 'survey') === sym.id ? '#2D6A4F' : 'rgba(255,255,255,0.08)',
-                color: (s.symbol || 'survey') === sym.id ? '#FDFAF4' : 'rgba(255,255,255,0.6)',
-              }}>
-              {sym.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Label toggles */}
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
-          <span style={{ fontSize: 9, color: '#64748B' }}>LABELS</span>
-          {togBtn(allOn, masterToggle, allOn ? 'All Off' : 'All On')}
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-          {togBtn(s.showNum,      () => toggle('showNum'),      'Pt #')}
-          {togBtn(s.showNorthing, () => toggle('showNorthing'), 'N')}
-          {togBtn(s.showEasting,  () => toggle('showEasting'),  'E')}
-          {togBtn(s.showElev,     () => toggle('showElev'),     'Z')}
-          {togBtn(s.showDesc,     () => toggle('showDesc'),     'Desc')}
-        </div>
       </div>
     </div>
   );
@@ -2449,6 +2506,9 @@ function SketchPage({ page, projectId, onReload }) {
   const [showPointSelectModal, setShowPointSelectModal] = useState(false);
   const [pointDeletePrompt,    setPointDeletePrompt]    = useState(null);
   // null | { shapeIds: string[], pointIds: string[] }
+  // Tracks the last Pt # assigned via manual canvas placement (or edited in the card).
+  // Used so sequential manual placement increments from this number, not from imported pts.
+  const [lastManualPtNum,      setLastManualPtNum]      = useState(null);
 
   // Close any open dropdown when the user clicks outside the toolbar
   useEffect(() => {
@@ -3047,6 +3107,26 @@ function SketchPage({ page, projectId, onReload }) {
     setLayers(updatedLayers);
     persist(shapes, undefined, updatedLayers);
     return POINTS_LAYER_ID;
+  }
+
+  // ── Points page management ─────────────────────────────────────────────────
+  // Checks the project for a type:'points' page. If none exists, creates one
+  // automatically (with locked PNEZD columns, empty rows). Returns the page id.
+  function ensurePointsPage() {
+    const project = window._fb?.DB?.getProject(projectId);
+    if (!project) return null;
+    const existing = project.pages.find(p => p.type === 'points');
+    if (existing) return existing.id;
+    const PNEZD = [
+      { id: 'col_ptnum', label: 'Pt #',        colType: 'text', width: 70 },
+      { id: 'col_north', label: 'Northing',    colType: 'num',  width: 100 },
+      { id: 'col_east',  label: 'Easting',     colType: 'num',  width: 100 },
+      { id: 'col_elev',  label: 'Elevation',   colType: 'num',  width: 100 },
+      { id: 'col_desc',  label: 'Description', colType: 'text', width: 130 },
+    ];
+    const newPage = window._fb.DB.addPage(projectId, { type: 'points', columns: PNEZD, rows: [] });
+    onReload?.(); // refresh the nav page list
+    return newPage?.id ?? null;
   }
 
   // ── Node positions per shape type ──────────────────────────────────────────
@@ -3722,35 +3802,59 @@ function SketchPage({ page, projectId, onReload }) {
 
     // ── Point tool ───────────────────────────────────────────────────────────
     if (tool === 'point') {
-      if (!pendingPoint) {
-        // No point selected yet — open the picker modal
-        setShowPointSelectModal(true);
-        return;
-      }
-      const sp = anySnapActive ? resolveSnap(pt) : pt;
+      const sp      = anySnapActive ? resolveSnap(pt) : pt;
       const layerId = ensurePointsLayer();
-      const newShape = {
-        id: newId(), type: 'point',
-        x: sp.x, y: sp.y,
-        pointId:     pendingPoint.pointId,
-        ptNum:       pendingPoint.ptNum,
-        northing:    pendingPoint.northing,
-        easting:     pendingPoint.easting,
-        elev:        pendingPoint.elev,
-        desc:        pendingPoint.desc,
-        symbol:      'survey',
-        showNum:     true, showNorthing: false,
-        showEasting: false, showElev: false, showDesc: true,
-        stroke: '#1C3829', strokeWidth: 1.5,
-        layerId,
-      };
-      commitShapes([...shapes, newShape]);
-      setSelectedIds([newShape.id]);
-      // Auto-advance to the next sequential point in the list
-      const allPts = pendingPoint._allPoints || [];
-      const curIdx = pendingPoint._currentIdx ?? allPts.findIndex(p => p.pointId === pendingPoint.pointId);
-      const next   = allPts[curIdx + 1] ?? null;
-      setPendingPoint(next ? { ...next, _allPoints: allPts, _currentIdx: curIdx + 1 } : null);
+      // Inherit symbol from the last placed point so rapid placement is seamless.
+      const lastSym = [...shapes].reverse().find(s => s.type === 'point')?.symbol || 'survey';
+
+      if (pendingPoint) {
+        // ── Place a specific existing point chosen from PointSelectModal ──────
+        const newShape = {
+          id: newId(), type: 'point',
+          x: sp.x, y: sp.y,
+          pointId:     pendingPoint.pointId,
+          ptNum:       pendingPoint.ptNum,
+          northing:    pendingPoint.northing,
+          easting:     pendingPoint.easting,
+          elev:        pendingPoint.elev,
+          desc:        pendingPoint.desc,
+          symbol:      lastSym,
+          showNum:     true, showNorthing: false,
+          showEasting: false, showElev: false, showDesc: true,
+          stroke: '#1C3829', strokeWidth: 1.5, layerId,
+        };
+        commitShapes([...shapes, newShape]);
+        setSelectedIds([newShape.id]);
+        // Auto-advance to the next sequential point in the list
+        const allPts = pendingPoint._allPoints || [];
+        const curIdx = pendingPoint._currentIdx ?? allPts.findIndex(p => p.pointId === pendingPoint.pointId);
+        const next   = allPts[curIdx + 1] ?? null;
+        setPendingPoint(next ? { ...next, _allPoints: allPts, _currentIdx: curIdx + 1 } : null);
+      } else {
+        // ── Auto-create: ensure Points page exists, add row, place shape ──────
+        ensurePointsPage(); // no-op if already exists; triggers onReload if created
+        const newPtNum = window._fb?.getNextManualPtNum?.(projectId, lastManualPtNum)
+          ?? (shapes.filter(s => s.type === 'point').length + 1);
+        const newRowId = 'r_' + Date.now();
+        window._fb?.addPointRow?.(projectId, {
+          id: newRowId,
+          cells: { col_ptnum: String(newPtNum), col_north: '', col_east: '', col_elev: '', col_desc: '' },
+        });
+        const newShape = {
+          id: newId(), type: 'point',
+          x: sp.x, y: sp.y,
+          pointId:  newRowId,
+          ptNum:    String(newPtNum),
+          northing: '', easting: '', elev: '', desc: '',
+          symbol:      lastSym,
+          showNum:     true, showNorthing: false,
+          showEasting: false, showElev: false, showDesc: true,
+          stroke: '#1C3829', strokeWidth: 1.5, layerId,
+        };
+        commitShapes([...shapes, newShape]);
+        setSelectedIds([newShape.id]);
+        setLastManualPtNum(newPtNum);
+      }
       return;
     }
 
@@ -8068,6 +8172,7 @@ function SketchPage({ page, projectId, onReload }) {
               shape={selectedShape}
               onUpdate={handleCardUpdate}
               projectId={projectId}
+              onPtNumChange={num => setLastManualPtNum(parseInt(num) || null)}
             />
           )}
 

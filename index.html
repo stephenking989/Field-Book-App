@@ -3051,11 +3051,9 @@
           { id: 'col_elev',  label: 'Elevation',   colType: 'num',  width: 100 },
           { id: 'col_desc',  label: 'Description', colType: 'text', width: 130 },
         ];
-        const rows = Array.from({ length: 20 }, (_, i) => ({
-          id: 'r_' + (Date.now() + i),
-          cells: { col_ptnum: String(i + 1), col_north: '', col_east: '', col_elev: '', col_desc: '' },
-        }));
-        pageData = { type: 'points', columns: cols, rows };
+        // Rows start empty — they are added automatically when points are placed
+        // on the sketch canvas (one row per placed point).
+        pageData = { type: 'points', columns: cols, rows: [] };
       }
       const page = DB.addPage(projectId, pageData);
       if (page) { reload(); setAddStep(null); navigate(`#/project/${projectId}/page/${page.id}`); }
@@ -6265,8 +6263,78 @@
     });
   }
 
+  // Returns the next available Pt # for manual canvas placement.
+  // Starts from lastNum+1 (or 1), then walks forward past any existing numbers.
+  function getNextManualPtNum(projectId, lastNum) {
+    const project = DB.getProject(projectId);
+    const usedNums = new Set();
+    if (project) {
+      for (const pg of project.pages) {
+        if (pg.type === 'points' && pg.rows) {
+          pg.rows.forEach(r => {
+            const n = parseInt(r.cells?.col_ptnum);
+            if (!isNaN(n)) usedNums.add(n);
+          });
+        }
+      }
+    }
+    let candidate = (lastNum != null && !isNaN(parseInt(lastNum)))
+      ? parseInt(lastNum) + 1
+      : 1;
+    while (usedNums.has(candidate)) candidate++;
+    return candidate;
+  }
+
+  // Returns true if ptNum (as a string) is already used by a row other than excludeRowId.
+  function isPtNumTaken(projectId, ptNum, excludeRowId) {
+    const project = DB.getProject(projectId);
+    if (!project) return false;
+    const target = String(ptNum).trim();
+    for (const pg of project.pages) {
+      if (pg.type === 'points' && pg.rows) {
+        for (const r of pg.rows) {
+          if (r.id !== excludeRowId && String(r.cells?.col_ptnum ?? '').trim() === target)
+            return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Appends a new row object to the first 'points' page in the project.
+  // The caller is responsible for building the row (id, cells).
+  function addPointRow(projectId, row) {
+    const project = DB.getProject(projectId);
+    if (!project) return null;
+    const pg = project.pages.find(p => p.type === 'points');
+    if (!pg) return null;
+    const updatedRows = [...(pg.rows || []), row];
+    DB.updatePage(projectId, pg.id, { rows: updatedRows });
+    return row.id;
+  }
+
+  // Updates specific cells on an existing point row (by rowId) across all points pages.
+  // cells is an object like { col_ptnum: '5', col_north: '123.45' }
+  function updatePointRow(projectId, rowId, cells) {
+    const project = DB.getProject(projectId);
+    if (!project) return;
+    for (const pg of project.pages) {
+      if (pg.type === 'points' && pg.rows) {
+        const idx = pg.rows.findIndex(r => r.id === rowId);
+        if (idx >= 0) {
+          const newRows = pg.rows.map((r, i) =>
+            i === idx ? { ...r, cells: { ...r.cells, ...cells } } : r
+          );
+          DB.updatePage(projectId, pg.id, { rows: newRows });
+          return;
+        }
+      }
+    }
+  }
+
   // Expose shared globals for sketch.js to consume via window._fb
-  window._fb = { DB, PageHeaderStrip, HCell, compressImage, PNEZD_COLS, deletePointPermanently };
+  window._fb = { DB, PageHeaderStrip, HCell, compressImage, PNEZD_COLS,
+                 deletePointPermanently, getNextManualPtNum, addPointRow, updatePointRow, isPtNumTaken };
 
   // Mount the app only after sketch.js has loaded and resolved _sketchPromise
   _sketchPromise.then(() => {
