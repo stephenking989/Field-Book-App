@@ -829,6 +829,193 @@ function parseQBearing(str) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MULTI-SELECT CARD  —  shown when 2+ shapes are selected.
+// Allows batch editing of shared properties across the entire selection.
+// ─────────────────────────────────────────────────────────────────────────────
+function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate }) {
+  const selShapes    = shapes.filter(s => selectedIds.includes(s.id));
+  const hasPoints    = selShapes.some(s => s.type === 'point');
+  const hasNonPoints = selShapes.some(s => s.type !== 'point');
+  const hasDimmable  = selShapes.some(s =>
+    !s.type.startsWith('dim-') && s.type !== 'point' && s.type !== 'path' && s.type !== 'text'
+  );
+
+  // Derive common values from the current selection
+  const strokes = [...new Set(selShapes.map(s => s.stroke || '#000000'))];
+  const nonPtShapes = selShapes.filter(s => s.type !== 'point');
+  const widths  = [...new Set(nonPtShapes.map(s => s.strokeWidth || 1.5))];
+  const ptShapes = selShapes.filter(s => s.type === 'point');
+  const symbols = [...new Set(ptShapes.map(s => s.symbol || 'survey'))];
+
+  const selKey = selectedIds.join(',');
+  const [strokeColor, setStrokeColor] = useState(strokes.length === 1 ? strokes[0] : '#888888');
+  const [strokeWidth, setStrokeWidth] = useState(widths.length  === 1 ? widths[0]  : 1.5);
+  const [symbol,      setSymbol]      = useState(symbols.length === 1 ? symbols[0] : 'survey');
+
+  // Re-sync local state whenever the selection composition changes
+  useEffect(() => {
+    const _sels = shapes.filter(s => selectedIds.includes(s.id));
+    const _s = [...new Set(_sels.map(s => s.stroke || '#000000'))];
+    setStrokeColor(_s.length === 1 ? _s[0] : '#888888');
+    const _np = _sels.filter(s => s.type !== 'point');
+    const _w  = [...new Set(_np.map(s => s.strokeWidth || 1.5))];
+    setStrokeWidth(_w.length === 1 ? _w[0] : 1.5);
+    const _pts = _sels.filter(s => s.type === 'point');
+    const _sym = [...new Set(_pts.map(s => s.symbol || 'survey'))];
+    setSymbol(_sym.length === 1 ? _sym[0] : 'survey');
+  }, [selKey]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const SYMBOL_OPTS = [
+    { id: 'survey',   label: '⊙  Survey Marker' },
+    { id: 'dot',      label: '•  Dot'            },
+    { id: 'x',        label: '✕  X'              },
+    { id: 'cross',    label: '+  Cross'           },
+    { id: 'square',   label: '□  Square'          },
+    { id: 'triangle', label: '△  Triangle ▲'      },
+    { id: 'tri-down', label: '▽  Triangle ▼'      },
+    { id: 'diamond',  label: '◇  Diamond'         },
+    { id: 'circle',   label: '○  Circle'          },
+  ];
+
+  const iStyle = {
+    background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)',
+    borderRadius: 3, color: 'rgba(255,255,255,0.9)',
+    fontFamily: 'Courier New, monospace', fontSize: 10, padding: '2px 5px', outline: 'none',
+  };
+  const lStyle = { color: '#64748B', width: 68, flexShrink: 0, fontSize: 10 };
+  const rStyle = { display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.8 };
+
+  // Whether ALL dimmable shapes currently have dims hidden
+  const dimmableShapes = selShapes.filter(s =>
+    !s.type.startsWith('dim-') && s.type !== 'point' && s.type !== 'path' && s.type !== 'text'
+  );
+  const allDimsHidden = dimmableShapes.length > 0 && dimmableShapes.every(s => s._hideDims);
+
+  return (
+    <div style={{
+      position: 'absolute', bottom: 10, left: 10, pointerEvents: 'all',
+      background: 'rgba(10,15,35,0.90)', border: '1px solid rgba(99,102,241,0.45)',
+      borderRadius: 6, padding: '7px 11px',
+      fontFamily: 'Courier New, monospace', fontSize: 10.5,
+      color: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(5px)', zIndex: 15,
+      lineHeight: 1.7, minWidth: 200,
+    }}>
+      {/* Header */}
+      <div style={{ color: '#A5B4FC', fontSize: 9.5, letterSpacing: '0.1em',
+        marginBottom: 5, textTransform: 'uppercase' }}>
+        {selectedIds.length} shapes selected
+      </div>
+
+      {/* Color — all shapes */}
+      <div style={rStyle}>
+        <span style={lStyle}>Color</span>
+        <input type="color"
+          value={strokeColor}
+          onChange={e => {
+            setStrokeColor(e.target.value);
+            onBatchUpdate(s => ({ ...s, stroke: e.target.value }));
+          }}
+          style={{ width: 36, height: 22, padding: 1, border: '1px solid rgba(255,255,255,0.2)',
+            borderRadius: 3, background: 'rgba(255,255,255,0.05)', cursor: 'pointer' }}
+        />
+        {strokes.length > 1 && (
+          <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)' }}>mixed</span>
+        )}
+      </div>
+
+      {/* Stroke width — non-point shapes */}
+      {hasNonPoints && (
+        <div style={rStyle}>
+          <span style={lStyle}>Stroke W</span>
+          <input type="number"
+            value={strokeWidth} min={0.5} max={20} step={0.5}
+            onChange={e => {
+              const v = parseFloat(e.target.value);
+              if (!isNaN(v) && v > 0) {
+                setStrokeWidth(v);
+                onBatchUpdate(s => s.type === 'point' ? s : { ...s, strokeWidth: v });
+              }
+            }}
+            style={{ ...iStyle, width: 58 }}
+          />
+          <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)' }}>px</span>
+        </div>
+      )}
+
+      {/* Symbol — point shapes only */}
+      {hasPoints && (
+        <div style={rStyle}>
+          <span style={lStyle}>Symbol</span>
+          <select value={symbol}
+            onChange={e => {
+              setSymbol(e.target.value);
+              onBatchUpdate(s => s.type !== 'point' ? s : { ...s, symbol: e.target.value });
+            }}
+            style={{ ...iStyle, width: 130 }}
+          >
+            {SYMBOL_OPTS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+        </div>
+      )}
+
+      {/* Point label visibility */}
+      {hasPoints && (
+        <div style={rStyle}>
+          <span style={lStyle}>Pt labels</span>
+          <button
+            onClick={() => onBatchUpdate(s => s.type !== 'point' ? s : { ...s, showNum: true, showDesc: true })}
+            style={{ ...iStyle, padding: '2px 7px', cursor: 'pointer', fontSize: 9.5 }}
+          >All on</button>
+          <button
+            onClick={() => onBatchUpdate(s => s.type !== 'point' ? s : { ...s, showNum: false, showDesc: false })}
+            style={{ ...iStyle, padding: '2px 7px', cursor: 'pointer', fontSize: 9.5 }}
+          >All off</button>
+        </div>
+      )}
+
+      {/* Dims visibility — shapes that have dimension labels */}
+      {hasDimmable && (
+        <div style={rStyle}>
+          <span style={lStyle}>Dims</span>
+          <button
+            onClick={() => onBatchUpdate(s => {
+              if (s.type.startsWith('dim-') || s.type === 'point' || s.type === 'path' || s.type === 'text') return s;
+              return { ...s, _hideDims: allDimsHidden ? undefined : true };
+            })}
+            style={{ ...iStyle, padding: '2px 7px', cursor: 'pointer', fontSize: 9.5,
+              color: allDimsHidden ? '#F87171' : '#86EFAC' }}
+          >
+            {allDimsHidden ? 'Show all' : 'Hide all'}
+          </button>
+        </div>
+      )}
+
+      {/* Layer assignment — only shown when multiple layers exist */}
+      {layers.length > 1 && (() => {
+        const layerIds = [...new Set(selShapes.map(s => s.layerId || layers[0]?.id))];
+        const currentLid = layerIds.length === 1 ? layerIds[0] : '';
+        return (
+          <div style={rStyle}>
+            <span style={lStyle}>Layer</span>
+            <select
+              value={currentLid}
+              onChange={e => {
+                const lid = e.target.value;
+                if (lid) onBatchUpdate(s => ({ ...s, layerId: lid }));
+              }}
+              style={{ ...iStyle, width: 120 }}
+            >
+              {layerIds.length > 1 && <option value="">— mixed —</option>}
+              {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SHAPE VALUE CARD  —  proper React component with controlled inputs
 // Extracted from the IIFE so it can hold useState/useEffect.
 // Props:
@@ -2596,7 +2783,9 @@ function SketchPage({ page, projectId, onReload }) {
   // lastPinchRef: stores the previous frame's pinch midpoint + distance so we can
   //   compute per-frame zoom factor and pan delta incrementally.
   const lastPinchRef       = useRef(null);           // { dist, midX, midY }
-  const pendingDeselectRef = useRef(null);           // setTimeout id — defers touch empty-space deselect
+  const pendingDeselectRef   = useRef(null);  // setTimeout id — defers touch empty-space deselect
+  const pendingSelectionRef  = useRef(null);  // { ids, timeoutId } — defers touch shape-select
+  const pointerDownScreenRef = useRef(null);  // { x, y } screen coords at pointer-down (for drag threshold)
   // wasMultiTouchRef: true while ≥2 fingers are active (pinch/pan in progress).
   // Stays true until the LAST finger lifts, then clears.
   // Suppresses all tool commits in onPointerUp so that finger-lift events from a
@@ -2996,6 +3185,12 @@ function SketchPage({ page, projectId, onReload }) {
     setShapesHistory(h => ({ past: [...h.past.slice(-49), shapes], future: [] }));
     setShapes(next);
     persist(next, undefined);
+  }
+
+  // Apply a transform to every shape in the current selection, through history.
+  // Used by MultiSelectCard for batch property edits (color, stroke width, symbol, etc.).
+  function handleBatchUpdate(transformFn) {
+    commitShapes(shapes.map(s => selectedIds.includes(s.id) ? transformFn(s) : s));
   }
 
   // Returns the layer ID to use for new dimension shapes (Phase 7).
@@ -3532,6 +3727,11 @@ function SketchPage({ page, projectId, onReload }) {
         clearTimeout(pendingDeselectRef.current);
         pendingDeselectRef.current = null;
       }
+      // Cancel any deferred touch selection — second finger means pinch, not a tap
+      if (pendingSelectionRef.current) {
+        clearTimeout(pendingSelectionRef.current.timeoutId);
+        pendingSelectionRef.current = null;
+      }
       setDragNode(null);
       setDragStart(null);
       setDrawState(null);           // cancel any in-progress text/dim/drawing state
@@ -3548,6 +3748,9 @@ function SketchPage({ page, projectId, onReload }) {
 
     // Fresh single-touch — reset the multi-touch flag so this tap is treated normally.
     wasMultiTouchRef.current = false;
+
+    // Record screen-space origin for drag-threshold checks (body drag, marquee min)
+    pointerDownScreenRef.current = { x: e.clientX, y: e.clientY };
 
     e.preventDefault();
     const pt = screenToWorld(e);
@@ -3651,6 +3854,16 @@ function SketchPage({ page, projectId, onReload }) {
             setSelectedIds(prev =>
               prev.includes(msHit.id) ? prev.filter(id => id !== msHit.id) : [...prev, msHit.id]
             );
+          } else if (e.pointerType === 'touch') {
+            // Defer touch selection so a second finger arriving within 80 ms
+            // (two-finger pinch) cancels the selection change.
+            if (pendingSelectionRef.current) clearTimeout(pendingSelectionRef.current.timeoutId);
+            const _msIds = [msHit.id];
+            const _msTid = setTimeout(() => {
+              pendingSelectionRef.current = null;
+              if (activePtrsRef.current.size < 2 && !wasMultiTouchRef.current) setSelectedIds(_msIds);
+            }, 80);
+            pendingSelectionRef.current = { ids: _msIds, timeoutId: _msTid };
           } else {
             setSelectedIds([msHit.id]);
           }
@@ -3668,7 +3881,7 @@ function SketchPage({ page, projectId, onReload }) {
           }
           if (prevTool !== null) { setPrevTool(null); return; }
           if (tool === 'select') {
-            setMarquee({ ox: pt.x, oy: pt.y, x: pt.x, y: pt.y, w: 0, h: 0 });
+            setMarquee({ ox: pt.x, oy: pt.y, x: pt.x, y: pt.y, w: 0, h: 0, dir: 'right' });
           }
         }
         return;
@@ -3742,6 +3955,16 @@ function SketchPage({ page, projectId, onReload }) {
           setSelectedIds(prev =>
             prev.includes(hit.id) ? prev.filter(id => id !== hit.id) : [...prev, hit.id]
           );
+        } else if (e.pointerType === 'touch') {
+          // Defer touch selection so a second finger arriving within 80 ms
+          // (two-finger pinch) cancels the selection change.
+          if (pendingSelectionRef.current) clearTimeout(pendingSelectionRef.current.timeoutId);
+          const _selIds = [hit.id];
+          const _selTid = setTimeout(() => {
+            pendingSelectionRef.current = null;
+            if (activePtrsRef.current.size < 2 && !wasMultiTouchRef.current) setSelectedIds(_selIds);
+          }, 80);
+          pendingSelectionRef.current = { ids: _selIds, timeoutId: _selTid };
         } else {
           setSelectedIds([hit.id]);
         }
@@ -3766,7 +3989,7 @@ function SketchPage({ page, projectId, onReload }) {
         }
         // Start a lasso/marquee drag (select tool only; not in post-create mode)
         if (tool === 'select') {
-          setMarquee({ ox: pt.x, oy: pt.y, x: pt.x, y: pt.y, w: 0, h: 0 });
+          setMarquee({ ox: pt.x, oy: pt.y, x: pt.x, y: pt.y, w: 0, h: 0, dir: 'right' });
         }
       }
       return;
@@ -4334,6 +4557,7 @@ function SketchPage({ page, projectId, onReload }) {
         ox, oy,
         x: Math.min(ox, rawPt.x), y: Math.min(oy, rawPt.y),
         w: Math.abs(rawPt.x - ox), h: Math.abs(rawPt.y - oy),
+        dir: rawPt.x >= ox ? 'right' : 'left',
       });
       return;
     }
@@ -4463,6 +4687,14 @@ function SketchPage({ page, projectId, onReload }) {
       // Check each key point of the shape at its would-be position and snap
       // whichever corner/endpoint is closest to a candidate.
       if (dragNode.nodeKey === 'body') {
+        // Threshold: require at least 6 screen pixels before starting to move,
+        // preventing a micro-movement tap from accidentally displacing a shape.
+        if (pointerDownScreenRef.current) {
+          const _bdx = e.clientX - pointerDownScreenRef.current.x;
+          const _bdy = e.clientY - pointerDownScreenRef.current.y;
+          if (Math.hypot(_bdx, _bdy) < 6) return;
+        }
+
         let dx = rawPt.x - dragStart.svgX;
         let dy = rawPt.y - dragStart.svgY;
 
@@ -4814,14 +5046,19 @@ function SketchPage({ page, projectId, onReload }) {
 
     // ── Marquee selection commit ───────────────────────────────────────────
     if (marquee) {
-      const { x, y, w, h } = marquee;
-      if (w > 4 && h > 4) {
+      const { x, y, w, h, dir } = marquee;
+      // Require at least 8 screen-pixels in each dimension to avoid micro-drag commits.
+      const _mPS = viewBox.w / (svgSizeRef.current.w || 1);
+      const minMarquee = 8 * _mPS;
+      if (w > minMarquee && h > minMarquee) {
+        // right-drag → containment (window select); left-drag → crossing (intersection select)
+        const testFn = dir === 'right' ? shapeContainedInRect : shapeIntersectsRect;
         const ids = shapes
           .filter(s => {
             if (s.visible === false) return false;
             const layer = layers.find(l => l.id === (s.layerId || layers[0]?.id));
             if (layer?.visible === false) return false;
-            return shapeIntersectsRect(s, x, y, x + w, y + h);
+            return testFn(s, x, y, x + w, y + h);
           })
           .map(s => s.id);
         setSelectedIds(ids);
@@ -5191,6 +5428,59 @@ function SketchPage({ page, projectId, onReload }) {
       default: return false;
     }
     return minX <= rx2 && maxX >= rx1 && minY <= ry2 && maxY >= ry1;
+  }
+
+  // Returns true if shape's AABB is fully contained within [rx1,rx2]×[ry1,ry2].
+  // Used for right-drag (window) marquee — only completely enclosed shapes are selected.
+  function shapeContainedInRect(s, rx1, ry1, rx2, ry2) {
+    const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+    let minX, maxX, minY, maxY;
+    switch (s.type) {
+      case 'line':
+        minX=Math.min(s.x1,s.x2); maxX=Math.max(s.x1,s.x2);
+        minY=Math.min(s.y1,s.y2); maxY=Math.max(s.y1,s.y2); break;
+      case 'circle':
+        minX=s.cx-s.r; maxX=s.cx+s.r; minY=s.cy-s.r; maxY=s.cy+s.r; break;
+      case 'rect':
+      case 'image':
+        minX=s.x; maxX=s.x+s.w; minY=s.y; maxY=s.y+s.h; break;
+      case 'curve': {
+        const { px: cpx, py: cpy } = getCurvePI(s);
+        minX=Math.min(s.x1,s.x2,cpx); maxX=Math.max(s.x1,s.x2,cpx);
+        minY=Math.min(s.y1,s.y2,cpy); maxY=Math.max(s.y1,s.y2,cpy); break;
+      }
+      case 'text': {
+        const hw=(s.w||180)*ps/2, hh=(s.h||80)*ps/2;
+        minX=s.x-hw; maxX=s.x+hw; minY=s.y-hh; maxY=s.y+hh; break;
+      }
+      case 'path':
+        if (!s.nodes || !s.nodes.length) return false;
+        minX=Math.min(...s.nodes.map(n=>n.x)); maxX=Math.max(...s.nodes.map(n=>n.x));
+        minY=Math.min(...s.nodes.map(n=>n.y)); maxY=Math.max(...s.nodes.map(n=>n.y)); break;
+      case 'dim-linear':
+        minX=Math.min(s.p1.x,s.p2.x); maxX=Math.max(s.p1.x,s.p2.x);
+        minY=Math.min(s.p1.y,s.p2.y); maxY=Math.max(s.p1.y,s.p2.y); break;
+      case 'dim-bearing': {
+        const _ln=shapes.find(sh=>sh.id===s.lineId); if(!_ln) return false;
+        const _ox=s.offset?.x||0, _oy=s.offset?.y||0;
+        minX=Math.min(_ln.x1,_ln.x2,(_ln.x1+_ln.x2)/2+_ox); maxX=Math.max(_ln.x1,_ln.x2,(_ln.x1+_ln.x2)/2+_ox);
+        minY=Math.min(_ln.y1,_ln.y2,(_ln.y1+_ln.y2)/2+_oy); maxY=Math.max(_ln.y1,_ln.y2,(_ln.y1+_ln.y2)/2+_oy); break;
+      }
+      case 'dim-radius': {
+        const _ref=shapes.find(sh=>sh.id===s.shapeId); if(!_ref) return false;
+        const _rcx=_ref.type==='circle'?_ref.cx:(_ref.x1+_ref.x2)/2;
+        const _rcy=_ref.type==='circle'?_ref.cy:(_ref.y1+_ref.y2)/2;
+        minX=Math.min(_rcx,_rcx+(s.offset?.x||0)); maxX=Math.max(_rcx,_rcx+(s.offset?.x||0));
+        minY=Math.min(_rcy,_rcy+(s.offset?.y||0)); maxY=Math.max(_rcy,_rcy+(s.offset?.y||0)); break;
+      }
+      case 'point':
+        { const _psP2 = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+          const pr2 = 12 * _psP2;
+          minX = s.x - pr2; maxX = s.x + pr2; minY = s.y - pr2; maxY = s.y + pr2; break; }
+      case 'dim-angle': return false;
+      default: return false;
+    }
+    return minX >= rx1 && maxX <= rx2 && minY >= ry1 && maxY <= ry2;
   }
 
   // ── Snap Engine (Phase 5) ────────────────────────────────────────────────
@@ -7912,16 +8202,23 @@ function SketchPage({ page, projectId, onReload }) {
               return lbl ? <g key={`dim-${s.id}`}>{lbl}</g> : null;
             })}
 
-            {/* Marquee selection rectangle */}
-            {marquee && marquee.w > 0 && marquee.h > 0 && (
-              <rect
-                x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h}
-                fill="rgba(59,130,246,0.08)" stroke="#3B82F6"
-                strokeWidth={viewBox.w / (svgSizeRef.current.w || viewBox.w)}
-                strokeDasharray={`${4 * viewBox.w / (svgSizeRef.current.w || viewBox.w)} ${3 * viewBox.w / (svgSizeRef.current.w || viewBox.w)}`}
-                style={{ pointerEvents: 'none' }}
-              />
-            )}
+            {/* Marquee selection rectangle
+                Right-drag (left→right) = blue  = window/containment mode
+                Left-drag  (right→left) = green = crossing/intersection mode */}
+            {marquee && marquee.w > 0 && marquee.h > 0 && (() => {
+              const mFill   = marquee.dir === 'left' ? 'rgba(34,197,94,0.10)'  : 'rgba(59,130,246,0.10)';
+              const mStroke = marquee.dir === 'left' ? '#22C55E' : '#3B82F6';
+              const mSW     = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+              return (
+                <rect
+                  x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h}
+                  fill={mFill} stroke={mStroke}
+                  strokeWidth={mSW}
+                  strokeDasharray={`${4 * mSW} ${3 * mSW}`}
+                  style={{ pointerEvents: 'none' }}
+                />
+              );
+            })()}
 
             {/* Node handles for selected shape.
                 Shows in select mode OR when prevTool is set (shape just created —
@@ -8216,8 +8513,18 @@ function SketchPage({ page, projectId, onReload }) {
               </div>
             );
           })()}
-          {/* Point Info Card — shown when a point shape is selected */}
-          {showValueCard && selectedShape?.type === 'point' && (
+          {/* Multi-select card — shown when 2+ shapes selected */}
+          {showValueCard && selectedIds.length > 1 && (
+            <MultiSelectCard
+              selectedIds={selectedIds}
+              shapes={shapes}
+              layers={layers}
+              onBatchUpdate={handleBatchUpdate}
+            />
+          )}
+
+          {/* Point Info Card — shown when a single point shape is selected */}
+          {showValueCard && selectedIds.length <= 1 && selectedShape?.type === 'point' && (
             <PointInfoCard
               key={selectedShape.id}
               shape={selectedShape}
@@ -8228,7 +8535,7 @@ function SketchPage({ page, projectId, onReload }) {
           )}
 
           {/* Committed-shape card — proper React component with controlled inputs */}
-          {showValueCard && selectedShape && selectedShape.type !== 'text' && selectedShape.type !== 'point' && (() => {
+          {showValueCard && selectedIds.length <= 1 && selectedShape && selectedShape.type !== 'text' && selectedShape.type !== 'point' && (() => {
             const _lShapes = shapes.filter(s => (s.layerId || layers[0]?.id) === (selectedShape.layerId || layers[0]?.id));
             const _ri = [..._lShapes].reverse().findIndex(s => s.id === selectedShape.id);
             const _num = _ri >= 0 ? _lShapes.length - _ri : 1;
