@@ -6178,7 +6178,12 @@ function SketchPage({ page, projectId, onReload }) {
   // ── Render a single shape ──────────────────────────────────────────────────
   // Always wrapped in a <g key={s.id}> so rotation transform can be applied.
   function renderShape(s, isSelected) {
-    const sel = isSelected ? { filter: 'drop-shadow(0 0 3px rgba(59,130,246,0.7))' } : {};
+    // Selection glow — applied on the outer <g> so it wraps the whole shape as one unit.
+    // Double drop-shadow: tight inner glow + diffuse outer halo for a visible "bloom".
+    const sel = {};  // kept as no-op on inner elements; glow is on the outer <g> below
+    const selGlow = isSelected
+      ? { filter: 'drop-shadow(0 0 3px #3B82F6) drop-shadow(0 0 9px rgba(59,130,246,0.55))' }
+      : undefined;
     const rot = s._rot || 0;
     const piv = getShapePivot(s);
     const transform = rot ? `rotate(${rot},${piv.x},${piv.y})` : undefined;
@@ -6283,11 +6288,11 @@ function SketchPage({ page, projectId, onReload }) {
       }
       case 'point': {
         // Point symbols and labels maintain constant screen size via ps.
-        // The symbol is rendered with a selection glow via sel; labels are separate.
+        // selGlow applied on the symbol group so labels don't bloom.
         const _pps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
         return (
           <g key={s.id} transform={undefined}>
-            <g style={sel}>
+            <g style={selGlow}>
               {renderPointSymbolSVG(s, _pps)}
             </g>
             {renderPointLabelsSVG(s, _pps)}
@@ -6427,7 +6432,7 @@ function SketchPage({ page, projectId, onReload }) {
       }
       default: return null;
     }
-    return <g key={s.id} transform={transform}>{inner}</g>;
+    return <g key={s.id} transform={transform} style={selGlow}>{inner}</g>;
   }
 
   // ── Dynamic SVG grid (Phase 4) ────────────────────────────────────────────
@@ -6806,9 +6811,9 @@ function SketchPage({ page, projectId, onReload }) {
       <>
         {/* Selection bounding box */}
         <rect x={bx} y={by} width={bw} height={bh}
-          fill="rgba(59,130,246,0.05)" stroke="rgba(59,130,246,0.55)"
-          strokeWidth={ps} strokeDasharray={`${5*ps},${3*ps}`}
-          style={{ pointerEvents: 'none' }} />
+          fill="rgba(59,130,246,0.06)" stroke="#3B82F6"
+          strokeWidth={1.5 * ps} strokeDasharray={`${6*ps},${3*ps}`}
+          style={{ pointerEvents: 'none', filter: 'drop-shadow(0 0 3px rgba(59,130,246,0.4))' }} />
 
         {/* Dashed stem from top-center to group rotate handle */}
         <line x1={cx} y1={bb.minY - PAD} x2={rhPos.x} y2={rhPos.y}
