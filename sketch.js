@@ -2002,7 +2002,7 @@ function renderPointSymbolSVG(s, ps) {
   switch (s.symbol || 'survey') {
     case 'survey':
       return [
-        <circle key="o" cx={x} cy={y} r={r}    fill="none" stroke={col} strokeWidth={sw} />,
+        <circle key="o" cx={x} cy={y} r={r*0.8}    fill="none" stroke={col} strokeWidth={sw} />,
         <circle key="i" cx={x} cy={y} r={r*0.3} fill={col}  stroke="none" />,
       ];
     case 'dot':
@@ -2041,7 +2041,7 @@ function renderPointSymbolSVG(s, ps) {
       return [<circle key="c" cx={x} cy={y} r={r} fill="none" stroke={col} strokeWidth={sw} />];
     default:
       return [
-        <circle key="o" cx={x} cy={y} r={r}    fill="none" stroke={col} strokeWidth={sw} />,
+        <circle key="o" cx={x} cy={y} r={r*0.8}    fill="none" stroke={col} strokeWidth={sw} />,
         <circle key="i" cx={x} cy={y} r={r*0.3} fill={col}  stroke="none" />,
       ];
   }
