@@ -1968,9 +1968,9 @@
       if (s.visible === false) continue;  // per-shape visibility
 
       const stroke = s.stroke || '#1C3829';
-      const sw     = s.strokeWidth || 1.5;
+      const sw     = (s.strokeWidth || 1.5) * ps;  // multiply by ps so lines match screen thickness
       const fill   = s.fill || 'none';
-      const base   = `stroke="${stroke}" stroke-width="${sw}" fill="${fill}" stroke-linecap="round" stroke-linejoin="round"`;
+      const base   = `stroke="${stroke}" stroke-width="${sw.toFixed(3)}" fill="${fill}" stroke-linecap="round" stroke-linejoin="round"`;
 
       let el = '';
       switch (s.type) {
@@ -2021,9 +2021,9 @@
           const dludx=(s.p2.x-s.p1.x)/dlLen, dludy=(s.p2.y-s.p1.y)/dlLen;
           const mka=(ax,ay,dx,dy)=>
             `M ${ax-dx*dlAh*0.5+dy*dlAs} ${ay-dy*dlAh*0.5-dx*dlAs} L ${ax} ${ay} L ${ax-dx*dlAh*0.5-dy*dlAs} ${ay-dy*dlAh*0.5+dx*dlAs}`;
-          el = `<g stroke="${stroke}" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round">`+
-            `<line x1="${s.p1.x+dlpX*dlGap}" y1="${s.p1.y+dlpY*dlGap}" x2="${dd1x+dlpX*dlExt}" y2="${dd1y+dlpY*dlExt}" stroke-width="0.9"/>`+
-            `<line x1="${s.p2.x+dlpX*dlGap}" y1="${s.p2.y+dlpY*dlGap}" x2="${dd2x+dlpX*dlExt}" y2="${dd2y+dlpY*dlExt}" stroke-width="0.9"/>`+
+          el = `<g stroke="${stroke}" stroke-width="${(1.2*ps).toFixed(3)}" fill="none" stroke-linecap="round" stroke-linejoin="round">`+
+            `<line x1="${s.p1.x+dlpX*dlGap}" y1="${s.p1.y+dlpY*dlGap}" x2="${dd1x+dlpX*dlExt}" y2="${dd1y+dlpY*dlExt}" stroke-width="${(0.9*ps).toFixed(3)}"/>`+
+            `<line x1="${s.p2.x+dlpX*dlGap}" y1="${s.p2.y+dlpY*dlGap}" x2="${dd2x+dlpX*dlExt}" y2="${dd2y+dlpY*dlExt}" stroke-width="${(0.9*ps).toFixed(3)}"/>`+
             `<line x1="${dd1x}" y1="${dd1y}" x2="${dd2x}" y2="${dd2y}"/>`+
             `<path d="${mka(dd1x,dd1y,-dludx,-dludy)}"/><path d="${mka(dd2x,dd2y,dludx,dludy)}"/>`+
             `</g>`;
@@ -2044,7 +2044,7 @@
           const daLg=s.flip?1:0, daSw=s.flip?0:1;
           const ax1=daInt.x+Math.cos(daa1)*daR, ay1=daInt.y+Math.sin(daa1)*daR;
           const ax2=daInt.x+Math.cos(daa2)*daR, ay2=daInt.y+Math.sin(daa2)*daR;
-          el = `<path d="M ${ax1.toFixed(2)} ${ay1.toFixed(2)} A ${daR.toFixed(2)} ${daR.toFixed(2)} 0 ${daLg} ${daSw} ${ax2.toFixed(2)} ${ay2.toFixed(2)}" stroke="${stroke}" stroke-width="1.2" fill="none" stroke-linecap="round"/>`;
+          el = `<path d="M ${ax1.toFixed(2)} ${ay1.toFixed(2)} A ${daR.toFixed(2)} ${daR.toFixed(2)} 0 ${daLg} ${daSw} ${ax2.toFixed(2)} ${ay2.toFixed(2)}" stroke="${stroke}" stroke-width="${(1.2*ps).toFixed(3)}" fill="none" stroke-linecap="round"/>`;
           break;
         }
         case 'dim-bearing': {
@@ -2055,7 +2055,7 @@
           const dbAh=8*ps, dbAs=3*ps;
           const mkba=(ax,ay,dx,dy)=>
             `M ${ax-dx*dbAh*0.5+dy*dbAs} ${ay-dy*dbAh*0.5-dx*dbAs} L ${ax} ${ay} L ${ax-dx*dbAh*0.5-dy*dbAs} ${ay-dy*dbAh*0.5+dx*dbAs}`;
-          el = `<g stroke="${stroke}" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round">`+
+          el = `<g stroke="${stroke}" stroke-width="${(1.2*ps).toFixed(3)}" fill="none" stroke-linecap="round" stroke-linejoin="round">`+
             `<line x1="${s.p1.x}" y1="${s.p1.y}" x2="${s.p2.x}" y2="${s.p2.y}"/>`+
             `<path d="${mkba(s.p2.x,s.p2.y,dbUx,dbUy)}"/>`+
             `</g>`;
@@ -2079,7 +2079,7 @@
           const rrLL=Math.hypot(rrOff.x,rrOff.y)||1;
           const rrUx=rrOff.x/rrLL, rrUy=rrOff.y/rrLL;
           const rrSx=rrcx+rrUx*rrR, rrSy=rrcy+rrUy*rrR;
-          el = `<g stroke="${stroke}" stroke-width="1.2" fill="none" stroke-linecap="round">`+
+          el = `<g stroke="${stroke}" stroke-width="${(1.2*ps).toFixed(3)}" fill="none" stroke-linecap="round">`+
             `<line x1="${rrSx.toFixed(2)}" y1="${rrSy.toFixed(2)}" x2="${rrEx.toFixed(2)}" y2="${rrEy.toFixed(2)}"/>`+
             `<line x1="${rrEx.toFixed(2)}" y1="${rrEy.toFixed(2)}" x2="${(rrEx+12*ps).toFixed(2)}" y2="${rrEy.toFixed(2)}"/>`+
             `</g>`;
