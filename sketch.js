@@ -2597,6 +2597,16 @@ function SketchPage({ page, projectId, onReload }) {
   //   compute per-frame zoom factor and pan delta incrementally.
   const lastPinchRef       = useRef(null);           // { dist, midX, midY }
   const pendingDeselectRef = useRef(null);           // setTimeout id — defers touch empty-space deselect
+  // wasMultiTouchRef: true while ≥2 fingers are active (pinch/pan in progress).
+  // Stays true until the LAST finger lifts, then clears.
+  // Suppresses all tool commits in onPointerUp so that finger-lift events from a
+  // completed pinch gesture don't accidentally fire draw/place/select actions.
+  const wasMultiTouchRef   = useRef(false);
+  // touchTapRef: stores a deferred action for single-touch pointerdown events.
+  // Set when an "instant-commit" tool (point, etc.) is active and pointerType==='touch'.
+  // Executed in onPointerUp only if no second pointer arrived (confirmed single-tap).
+  // Cleared immediately if a second pointer arrives (pinch detected).
+  const touchTapRef        = useRef(null);          // null | () => void
   // midPanRef: anchor data captured at middle-mouse button-down for smooth pan.
   const midPanRef     = useRef(null);           // { startX, startY, vbX, vbY, ps }
   const [isPanActive, setIsPanActive] = useState(false); // drives 'grab' cursor
@@ -3514,8 +3524,8 @@ function SketchPage({ page, projectId, onReload }) {
     activePtrsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
     // ── Two-finger touch → enter pinch/pan mode ───────────────────────────
-    // Do NOT cancel drawState here — active drawings should survive a two-finger pan.
-    // Cancel any pending touch-deselect so selection is preserved during the gesture.
+    // Cancel dirty draw/selection state so finger-lift events after the gesture
+    // cannot accidentally commit a shape, text box, or dim measurement.
     if (activePtrsRef.current.size >= 2) {
       e.preventDefault();
       if (pendingDeselectRef.current) {
@@ -3524,6 +3534,10 @@ function SketchPage({ page, projectId, onReload }) {
       }
       setDragNode(null);
       setDragStart(null);
+      setDrawState(null);           // cancel any in-progress text/dim/drawing state
+      setMarquee(null);             // cancel any rubber-band marquee
+      touchTapRef.current = null;   // cancel any deferred single-touch action
+      wasMultiTouchRef.current = true; // suppress tool commits in onPointerUp
       const pts  = [...activePtrsRef.current.values()];
       const midX = (pts[0].x + pts[1].x) / 2;
       const midY = (pts[0].y + pts[1].y) / 2;
@@ -3531,6 +3545,9 @@ function SketchPage({ page, projectId, onReload }) {
       lastPinchRef.current = { dist, midX, midY };
       return;
     }
+
+    // Fresh single-touch — reset the multi-touch flag so this tap is treated normally.
+    wasMultiTouchRef.current = false;
 
     e.preventDefault();
     const pt = screenToWorld(e);
@@ -3807,54 +3824,65 @@ function SketchPage({ page, projectId, onReload }) {
       // Inherit symbol from the last placed point so rapid placement is seamless.
       const lastSym = [...shapes].reverse().find(s => s.type === 'point')?.symbol || 'survey';
 
-      if (pendingPoint) {
-        // ── Place a specific existing point chosen from PointSelectModal ──────
-        const newShape = {
-          id: newId(), type: 'point',
-          x: sp.x, y: sp.y,
-          pointId:     pendingPoint.pointId,
-          ptNum:       pendingPoint.ptNum,
-          northing:    pendingPoint.northing,
-          easting:     pendingPoint.easting,
-          elev:        pendingPoint.elev,
-          desc:        pendingPoint.desc,
-          symbol:      lastSym,
-          showNum:     true, showNorthing: false,
-          showEasting: false, showElev: false, showDesc: true,
-          stroke: '#1C3829', strokeWidth: 1.5, layerId,
-        };
-        commitShapes([...shapes, newShape]);
-        setSelectedIds([newShape.id]);
-        // Auto-advance to the next sequential point in the list
-        const allPts = pendingPoint._allPoints || [];
-        const curIdx = pendingPoint._currentIdx ?? allPts.findIndex(p => p.pointId === pendingPoint.pointId);
-        const next   = allPts[curIdx + 1] ?? null;
-        setPendingPoint(next ? { ...next, _allPoints: allPts, _currentIdx: curIdx + 1 } : null);
-      } else {
-        // ── Auto-create: ensure Points page exists, add row, place shape ──────
-        ensurePointsPage(); // no-op if already exists; triggers onReload if created
-        const newPtNum = window._fb?.getNextManualPtNum?.(projectId, lastManualPtNum)
-          ?? (shapes.filter(s => s.type === 'point').length + 1);
-        const newRowId = 'r_' + Date.now();
-        window._fb?.addPointRow?.(projectId, {
-          id: newRowId,
-          cells: { col_ptnum: String(newPtNum), col_north: '', col_east: '', col_elev: '', col_desc: '' },
-        });
-        const newShape = {
-          id: newId(), type: 'point',
-          x: sp.x, y: sp.y,
-          pointId:  newRowId,
-          ptNum:    String(newPtNum),
-          northing: '', easting: '', elev: '', desc: '',
-          symbol:      lastSym,
-          showNum:     true, showNorthing: false,
-          showEasting: false, showElev: false, showDesc: true,
-          stroke: '#1C3829', strokeWidth: 1.5, layerId,
-        };
-        commitShapes([...shapes, newShape]);
-        setSelectedIds([newShape.id]);
-        setLastManualPtNum(newPtNum);
+      // Capture the placement action as a closure so it can be deferred for touch.
+      // Touch events defer to onPointerUp so the action can be cancelled if a second
+      // finger arrives (pinch start). Mouse/pen events execute immediately.
+      const executePlacePoint = () => {
+        if (pendingPoint) {
+          // ── Place a specific existing point chosen from PointSelectModal ──────
+          const newShape = {
+            id: newId(), type: 'point',
+            x: sp.x, y: sp.y,
+            pointId:     pendingPoint.pointId,
+            ptNum:       pendingPoint.ptNum,
+            northing:    pendingPoint.northing,
+            easting:     pendingPoint.easting,
+            elev:        pendingPoint.elev,
+            desc:        pendingPoint.desc,
+            symbol:      lastSym,
+            showNum:     true, showNorthing: false,
+            showEasting: false, showElev: false, showDesc: true,
+            stroke: '#1C3829', strokeWidth: 1.5, layerId,
+          };
+          commitShapes([...shapes, newShape]);
+          setSelectedIds([newShape.id]);
+          // Auto-advance to the next sequential point in the list
+          const allPts = pendingPoint._allPoints || [];
+          const curIdx = pendingPoint._currentIdx ?? allPts.findIndex(p => p.pointId === pendingPoint.pointId);
+          const next   = allPts[curIdx + 1] ?? null;
+          setPendingPoint(next ? { ...next, _allPoints: allPts, _currentIdx: curIdx + 1 } : null);
+        } else {
+          // ── Auto-create: ensure Points page exists, add row, place shape ──────
+          ensurePointsPage(); // no-op if already exists; triggers onReload if created
+          const newPtNum = window._fb?.getNextManualPtNum?.(projectId, lastManualPtNum)
+            ?? (shapes.filter(s => s.type === 'point').length + 1);
+          const newRowId = 'r_' + Date.now();
+          window._fb?.addPointRow?.(projectId, {
+            id: newRowId,
+            cells: { col_ptnum: String(newPtNum), col_north: '', col_east: '', col_elev: '', col_desc: '' },
+          });
+          const newShape = {
+            id: newId(), type: 'point',
+            x: sp.x, y: sp.y,
+            pointId:  newRowId,
+            ptNum:    String(newPtNum),
+            northing: '', easting: '', elev: '', desc: '',
+            symbol:      lastSym,
+            showNum:     true, showNorthing: false,
+            showEasting: false, showElev: false, showDesc: true,
+            stroke: '#1C3829', strokeWidth: 1.5, layerId,
+          };
+          commitShapes([...shapes, newShape]);
+          setSelectedIds([newShape.id]);
+          setLastManualPtNum(newPtNum);
+        }
+      };
+
+      if (e.pointerType === 'touch') {
+        touchTapRef.current = executePlacePoint; // defer — execute on pointerUp if no pinch
+        return;
       }
+      executePlacePoint();
       return;
     }
 
@@ -4758,6 +4786,29 @@ function SketchPage({ page, projectId, onReload }) {
 
     // ── Still in two-finger mode → don't process single-pointer events ────
     if (activePtrsRef.current.size >= 2) return;
+
+    // ── Multi-touch gesture guard ─────────────────────────────────────────
+    // wasMultiTouchRef is set when a second finger arrives (pinch/pan starts).
+    // It remains true through ALL finger-lift events until the last finger lifts,
+    // then clears. This suppresses accidental tool commits on every pointerUp
+    // that was part of a pinch — the last finger-lift no longer triggers draws,
+    // point placements, text boxes, dim measurements, or select actions.
+    if (wasMultiTouchRef.current) {
+      if (activePtrsRef.current.size === 0) wasMultiTouchRef.current = false;
+      touchTapRef.current = null; // discard deferred tap — it was part of a gesture
+      return;
+    }
+
+    // ── Execute deferred touch-tap action ────────────────────────────────
+    // touchTapRef is set in onPointerDown for "instant-commit" tools when
+    // pointerType === 'touch'. We now know no second finger arrived, so it
+    // was a genuine single-tap — execute the stored action.
+    if (touchTapRef.current) {
+      const execute = touchTapRef.current;
+      touchTapRef.current = null;
+      execute();
+      return;
+    }
 
     setSnapPoint(null);
 
