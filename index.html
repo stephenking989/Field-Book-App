@@ -1958,11 +1958,21 @@
       return t<=0.5 ? Math.atan2(dy,dx) : Math.atan2(-dy,-dx);
     }
 
-    // ── Render shapes ─────────────────────────────────────────────────────────
+    // ── Render shapes — in layer order (bottom to top), matching canvas draw order ──
+    // Build a layer-index lookup so shapes can be sorted by their layer position.
+    // Within each layer, shapes keep their original array order (stable sort).
+    const _layerOrder = (layers || []).map(l => l.id);
+    const _layerIdx = id => { const i = _layerOrder.indexOf(id); return i === -1 ? 0 : i; };
+    const _sortedShapes = [...(shapes || [])].sort((a, b) => {
+      const ai = _layerIdx(a.layerId || defaultLayerId);
+      const bi = _layerIdx(b.layerId || defaultLayerId);
+      return ai - bi;  // lower layer index = rendered first = appears behind
+    });
+
     let shapesSVG = '';
     let dimsSVG   = '';
 
-    for (const s of (shapes || [])) {
+    for (const s of _sortedShapes) {
       const lid = s.layerId || defaultLayerId;
       if (lid && !visLayers.has(lid)) continue;
       if (s.visible === false) continue;  // per-shape visibility
