@@ -1674,12 +1674,17 @@ function ColorWheel({ color, onChange, onCommit }) {
 // COLOR PANEL COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ColorPanel({ colorTarget, onTargetChange, activeColor, recentColors, onColorChange, onColorCommit }) {
-  const [hexInput, setHexInput] = useState(activeColor === 'none' ? '' : (activeColor || ''));
+function ColorPanel({ colorTarget, onTargetChange, activeColor, activeOpacity, recentColors, onColorChange, onColorCommit, onOpacityChange }) {
+  const [hexInput,    setHexInput]    = useState(activeColor === 'none' ? '' : (activeColor || ''));
+  const [opacityPct,  setOpacityPct]  = useState(Math.round((activeOpacity ?? 1) * 100));
 
   useEffect(() => {
     setHexInput(activeColor === 'none' ? '' : (activeColor || ''));
   }, [activeColor]);
+
+  useEffect(() => {
+    setOpacityPct(Math.round((activeOpacity ?? 1) * 100));
+  }, [activeOpacity]);
 
   function handleHexCommit(val) {
     const clean = val.trim();
@@ -1688,6 +1693,8 @@ function ColorPanel({ colorTarget, onTargetChange, activeColor, recentColors, on
       (onColorCommit || onColorChange)(colorTarget, hex);
     }
   }
+
+  const colorValue = (!activeColor || activeColor === 'none') ? '#000000' : activeColor;
 
   const btnBase = {
     height: 24, borderRadius: 4, fontSize: 10, fontWeight: 700,
@@ -1715,15 +1722,27 @@ function ColorPanel({ colorTarget, onTargetChange, activeColor, recentColors, on
         }}>∅</button>
       </div>
 
-      {/* Color wheel */}
-      <ColorWheel
-        color={!activeColor || activeColor === 'none' ? '#1a1a2e' : activeColor}
-        onChange={c => onColorChange(colorTarget, c)}
-        onCommit={c => onColorCommit && onColorCommit(colorTarget, c)}
-      />
+      {/* Native color picker */}
+      <div style={{ marginBottom: 6 }}>
+        <input
+          type="color"
+          value={colorValue}
+          onChange={e => {
+            const c = e.target.value;
+            setHexInput(c);
+            onColorChange(colorTarget, c);
+          }}
+          onBlur={e => onColorCommit && onColorCommit(colorTarget, e.target.value)}
+          style={{
+            width: '100%', height: 36, padding: 2, borderRadius: 6, cursor: 'pointer',
+            border: '1px solid rgba(255,255,255,0.18)',
+            background: 'rgba(255,255,255,0.05)', display: 'block',
+          }}
+        />
+      </div>
 
       {/* Hex input row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
         <div style={{
           width: 20, height: 20, borderRadius: 3, flexShrink: 0,
           border: '1px solid rgba(255,255,255,0.25)',
@@ -1744,9 +1763,56 @@ function ColorPanel({ colorTarget, onTargetChange, activeColor, recentColors, on
         />
       </div>
 
+      {/* Opacity slider */}
+      {activeColor !== 'none' && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+            <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              Opacity
+            </span>
+            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.55)', fontFamily: 'Courier New, monospace' }}>
+              {opacityPct}%
+            </span>
+          </div>
+          {/* Track: checkerboard base + color-to-transparent gradient overlay + invisible range input */}
+          <div style={{ position: 'relative', height: 14, borderRadius: 3,
+            background: 'repeating-conic-gradient(#555 0% 25%, #333 0% 50%) 0 0 / 8px 8px',
+            border: '1px solid rgba(255,255,255,0.15)' }}>
+            <div style={{
+              position: 'absolute', inset: 0, borderRadius: 3,
+              background: `linear-gradient(to right, transparent, ${colorValue})`,
+            }} />
+            {/* Thumb indicator */}
+            <div style={{
+              position: 'absolute',
+              top: 1,
+              left: `calc(${opacityPct} * (100% - 12px) / 100)`,
+              width: 12, height: 10,
+              borderRadius: 2,
+              background: '#fff',
+              border: '1px solid rgba(0,0,0,0.45)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+              pointerEvents: 'none',
+              zIndex: 1,
+            }} />
+            <input type="range" min={0} max={100} step={1} value={opacityPct}
+              onChange={e => {
+                const pct = Number(e.target.value);
+                setOpacityPct(pct);
+                onOpacityChange && onOpacityChange(colorTarget, pct / 100);
+              }}
+              style={{
+                position: 'absolute', inset: 0, width: '100%', height: '100%',
+                opacity: 0, cursor: 'pointer', margin: 0, padding: 0,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Recent colors — 2 rows of 10 */}
       {recentColors.length > 0 && (
-        <div style={{ marginTop: 8, borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: 6 }}>
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: 6 }}>
           <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase',
             letterSpacing: '0.08em', marginBottom: 5 }}>Recent</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 3 }}>
@@ -2646,11 +2712,13 @@ function SketchPage({ page, projectId, onReload }) {
   // radius, arc length, width×height).  Also shown live while drawing.
   const [defaultStrokeW, setDefaultStrokeW] = useState(1.5);
   // ── Active color state ─────────────────────────────────────────────────────
-  const [activeStrokeColor, setActiveStrokeColor] = useState(STROKE);
-  const [activeFillColor,   setActiveFillColor]   = useState('none');
-  const [colorTarget,       setColorTarget]       = useState('stroke'); // 'stroke' | 'fill'
-  const [recentColors,      setRecentColors]      = useState([]);       // up to 10
-  const [colorPanelOpen,    setColorPanelOpen]    = useState(true);
+  const [activeStrokeColor,   setActiveStrokeColor]   = useState(STROKE);
+  const [activeFillColor,     setActiveFillColor]     = useState('none');
+  const [activeStrokeOpacity, setActiveStrokeOpacity] = useState(1);
+  const [activeFillOpacity,   setActiveFillOpacity]   = useState(1);
+  const [colorTarget,         setColorTarget]         = useState('stroke'); // 'stroke' | 'fill'
+  const [recentColors,        setRecentColors]        = useState([]);       // up to 10
+  const [colorPanelOpen,      setColorPanelOpen]      = useState(true);
   const [bgColor,           setBgColor]           = useState(page.bgColor || null);
 
   // Add a color to the recent history (prepend, deduplicate, cap at 20)
@@ -2675,6 +2743,17 @@ function SketchPage({ page, projectId, onReload }) {
   function commitColorToSelection(target, color) {
     pushRecentColor(color);
     applyColorToSelection(target, color);
+  }
+
+  function applyOpacityToSelection(target, opacity) {
+    const key = target === 'stroke' ? 'strokeOpacity' : 'fillOpacity';
+    if (target === 'stroke') setActiveStrokeOpacity(opacity);
+    else setActiveFillOpacity(opacity);
+    if (selectedIds.length > 0) {
+      commitShapes(shapes.map(s =>
+        selectedIds.includes(s.id) ? { ...s, [key]: opacity } : s
+      ));
+    }
   }
 
   const [showDims,      setShowDims]      = useState(page.showDims      !== false);
@@ -6243,21 +6322,25 @@ function SketchPage({ page, projectId, onReload }) {
     switch (s.type) {
       case 'line':
         inner = <line x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2}
-          stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} strokeLinecap="round" style={sel} />;
+          stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} strokeLinecap="round"
+          strokeOpacity={s.strokeOpacity ?? 1} style={sel} />;
         break;
       case 'curve': {
         const { px: rpx, py: rpy } = getCurvePI(s);
         inner = <path d={arcPath(s.x1, s.y1, s.x2, s.y2, rpx, rpy)}
-          stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill="none" strokeLinecap="round" style={sel} />;
+          stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill="none" strokeLinecap="round"
+          strokeOpacity={s.strokeOpacity ?? 1} style={sel} />;
         break;
       }
       case 'circle':
         inner = <circle cx={s.cx} cy={s.cy} r={s.r}
-          stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill={s.fill || 'none'} style={sel} />;
+          stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill={s.fill || 'none'}
+          strokeOpacity={s.strokeOpacity ?? 1} fillOpacity={s.fillOpacity ?? 1} style={sel} />;
         break;
       case 'rect':
         inner = <rect x={s.x} y={s.y} width={s.w} height={s.h}
-          stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill={s.fill || 'none'} style={sel} />;
+          stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill={s.fill || 'none'}
+          strokeOpacity={s.strokeOpacity ?? 1} fillOpacity={s.fillOpacity ?? 1} style={sel} />;
         break;
       case 'image':
         if (!s.dataUrl) return null;
@@ -6286,7 +6369,7 @@ function SketchPage({ page, projectId, onReload }) {
         const maxChars  = Math.max(1, Math.floor((swPx - 6) / charW));
         const lines     = wrapText(s.content || '', maxChars);
         inner = (
-          <g style={sel}>
+          <g style={sel} opacity={s.strokeOpacity ?? 1}>
             {/* Border box — fully transparent bg; border only when selected */}
             <rect x={rx} y={ry} width={tw} height={th}
               fill="none"
@@ -6332,6 +6415,8 @@ function SketchPage({ page, projectId, onReload }) {
             fill={s.fill || 'none'}
             strokeLinecap="round"
             strokeLinejoin="round"
+            strokeOpacity={s.strokeOpacity ?? 1}
+            fillOpacity={s.fillOpacity ?? 1}
           />
         );
         break;
@@ -8983,13 +9068,13 @@ function SketchPage({ page, projectId, onReload }) {
                 {colorPanelOpen && (
                   <ColorPanel
                     colorTarget={colorTarget}
-                    onTargetChange={t => {
-                      setColorTarget(t);
-                    }}
+                    onTargetChange={t => setColorTarget(t)}
                     activeColor={colorTarget === 'stroke' ? activeStrokeColor : activeFillColor}
+                    activeOpacity={colorTarget === 'stroke' ? activeStrokeOpacity : activeFillOpacity}
                     recentColors={recentColors}
                     onColorChange={(target, color) => applyColorToSelection(target, color)}
                     onColorCommit={(target, color) => commitColorToSelection(target, color)}
+                    onOpacityChange={(target, opacity) => applyOpacityToSelection(target, opacity)}
                   />
                 )}
               </div>

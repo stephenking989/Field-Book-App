@@ -1980,7 +1980,9 @@
       const stroke = s.stroke || '#1C3829';
       const sw     = (s.strokeWidth || 1.5) * ps;  // multiply by ps so lines match screen thickness
       const fill   = s.fill || 'none';
-      const base   = `stroke="${stroke}" stroke-width="${sw.toFixed(3)}" fill="${fill}" stroke-linecap="round" stroke-linejoin="round"`;
+      const sOp    = s.strokeOpacity ?? 1;
+      const fOp    = s.fillOpacity   ?? 1;
+      const base   = `stroke="${stroke}" stroke-width="${sw.toFixed(3)}" fill="${fill}" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${sOp}" fill-opacity="${fOp}"`;
 
       let el = '';
       switch (s.type) {
