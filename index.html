@@ -2008,7 +2008,8 @@
         }
         case 'image':
           if (s.dataUrl) {
-            el = `<image href="${s.dataUrl}" x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" preserveAspectRatio="none"/>`;
+            const imgOp = s.strokeOpacity ?? s.fillOpacity ?? 1;
+            el = `<image href="${s.dataUrl}" x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" preserveAspectRatio="none" opacity="${imgOp}"/>`;
           }
           break;
         case 'text': {

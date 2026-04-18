@@ -6345,7 +6345,7 @@ function SketchPage({ page, projectId, onReload }) {
       case 'image':
         if (!s.dataUrl) return null;
         inner = <image href={s.dataUrl} x={s.x} y={s.y} width={s.w} height={s.h}
-          preserveAspectRatio="none" style={sel} />;
+          preserveAspectRatio="none" opacity={s.strokeOpacity ?? s.fillOpacity ?? 1} style={sel} />;
         break;
       case 'text': {
         // Text is rendered as counter-scaled SVG text elements so it stays the
@@ -6426,7 +6426,7 @@ function SketchPage({ page, projectId, onReload }) {
         // selGlow applied on the symbol group so labels don't bloom.
         const _pps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
         return (
-          <g key={s.id} transform={undefined}>
+          <g key={s.id} transform={undefined} opacity={s.strokeOpacity ?? s.fillOpacity ?? 1}>
             <g style={selGlow}>
               {renderPointSymbolSVG(s, _pps)}
             </g>
