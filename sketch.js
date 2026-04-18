@@ -2603,6 +2603,13 @@ function SketchPage({ page, projectId, onReload }) {
   const [shapesHistory, setShapesHistory] = useState({ past: [], future: [] }); // undo/redo
   const [marquee,       setMarquee]       = useState(null);        // lasso { ox,oy,x,y,w,h }
   const shapeClipRef = useRef(null);                               // shape clipboard
+  // Refs that always hold the latest committed shapes/history — used in the
+  // keydown listener so undo/redo work even before the useEffect re-registers.
+  const shapesRef        = useRef(shapes);
+  const shapesHistoryRef = useRef({ past: [], future: [] });
+  // Tracks the last key-triggered tool switch so pressing the same key again
+  // toggles back to the previous tool.
+  const lastKeyToolRef = useRef({ key: null, tool: null });
   const [drawState,   setDrawState]   = useState(null);  // in-progress shape
   const [dragNode,    setDragNode]    = useState(null);  // {shapeId, nodeKey}
   const [dragStart,   setDragStart]   = useState(null);  // {svgX, svgY, snapshot}
@@ -2982,6 +2989,10 @@ function SketchPage({ page, projectId, onReload }) {
     setPencilPreview(null);
   }, [page.id]);
 
+  // Keep shapesRef current for any setShapes calls that bypass commitShapes (drag live-update,
+  // page reload, etc.) so the undo/redo keyboard handler is never stale.
+  useEffect(() => { shapesRef.current = shapes; }, [shapes]);
+
   // Keyboard shortcuts — undo/redo, delete, escape, clipboard, pen/pencil/node tools
   useEffect(() => {
     function handleKeyDown(e) {
@@ -2991,12 +3002,15 @@ function SketchPage({ page, projectId, onReload }) {
       // ── Undo: Ctrl+Z / Cmd+Z ──────────────────────────────────────────────
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
         e.preventDefault();
-        if (shapesHistory.past.length > 0) {
-          const prev = shapesHistory.past[shapesHistory.past.length - 1];
-          setShapesHistory(h => ({
-            past: h.past.slice(0, -1),
-            future: [shapes, ...h.future.slice(0, 49)],
-          }));
+        if (shapesHistoryRef.current.past.length > 0) {
+          const prev = shapesHistoryRef.current.past[shapesHistoryRef.current.past.length - 1];
+          const newHist = {
+            past: shapesHistoryRef.current.past.slice(0, -1),
+            future: [shapesRef.current, ...shapesHistoryRef.current.future.slice(0, 49)],
+          };
+          shapesHistoryRef.current = newHist;
+          shapesRef.current = prev;
+          setShapesHistory(newHist);
           setShapes(prev);
           persist(prev, undefined);
           setSelectedIds([]);
@@ -3007,12 +3021,15 @@ function SketchPage({ page, projectId, onReload }) {
       // ── Redo: Ctrl+Y / Cmd+Y / Ctrl+Shift+Z / Cmd+Shift+Z ───────────────
       if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
         e.preventDefault();
-        if (shapesHistory.future.length > 0) {
-          const next = shapesHistory.future[0];
-          setShapesHistory(h => ({
-            past: [...h.past.slice(-49), shapes],
-            future: h.future.slice(1),
-          }));
+        if (shapesHistoryRef.current.future.length > 0) {
+          const next = shapesHistoryRef.current.future[0];
+          const newHist = {
+            past: [...shapesHistoryRef.current.past.slice(-49), shapesRef.current],
+            future: shapesHistoryRef.current.future.slice(1),
+          };
+          shapesHistoryRef.current = newHist;
+          shapesRef.current = next;
+          setShapesHistory(newHist);
           setShapes(next);
           persist(next, undefined);
           setSelectedIds([]);
@@ -3067,6 +3084,9 @@ function SketchPage({ page, projectId, onReload }) {
         }
         setDrawState(null);
         setSelectedIds([]);
+        setNodeSelectedId(null);
+        setNodeSelectedIdx(null);
+        setNodeSelectedIndices(new Set());
         setMarquee(null);
         return;
       }
@@ -3117,11 +3137,39 @@ function SketchPage({ page, projectId, onReload }) {
           a: 'node',   r: 'rect', o: 'circle', t: 'text', e: 'eraser', f: 'fill',
           m: 'dim-linear', g: 'dim-angle', k: 'dim-bearing', q: 'dim-radius',
         };
-        const newTool = TOOL_KEYS[e.key.toLowerCase()];
+        const pressedKey = e.key.toLowerCase();
+        let newTool = TOOL_KEYS[pressedKey];
         if (newTool) {
           // Don't hijack 't' or 'f' etc. while text tool is placing a shape
           if (tool === 'text' && drawState) return;
           e.preventDefault();
+
+          // Toggle: pressing the same key while already on that tool reverts to previous
+          if (tool === newTool && lastKeyToolRef.current.key === pressedKey && lastKeyToolRef.current.tool) {
+            newTool = lastKeyToolRef.current.tool;
+            lastKeyToolRef.current = { key: null, tool: null };
+          } else {
+            lastKeyToolRef.current = { key: pressedKey, tool: tool };
+          }
+
+          // When leaving node tool, carry nodeSelectedId back into selectedIds
+          if (tool === 'node' && newTool !== 'node' && nodeSelectedId) {
+            setSelectedIds([nodeSelectedId]);
+            setNodeSelectedId(null);
+            setNodeSelectedIdx(null);
+            setNodeSelectedIndices(new Set());
+          }
+
+          // When entering node tool, promote a selected path shape to nodeSelectedId
+          if (newTool === 'node' && tool !== 'node') {
+            const selShape = selectedId ? shapes.find(s => s.id === selectedId) : null;
+            if (selShape && selShape.type === 'path') {
+              setNodeSelectedId(selShape.id);
+              setNodeSelectedIdx(null);
+              setSelectedIds([]);
+            }
+          }
+
           setTool(newTool);
           setPrevTool(null);
           setDrawState(null);
@@ -3181,8 +3229,10 @@ function SketchPage({ page, projectId, onReload }) {
   }
 
   function commitShapes(next) {
-    // Push current shapes to history before applying next
-    setShapesHistory(h => ({ past: [...h.past.slice(-49), shapes], future: [] }));
+    const newHist = { past: [...shapesHistoryRef.current.past.slice(-49), shapesRef.current], future: [] };
+    shapesHistoryRef.current = newHist;
+    shapesRef.current = next;
+    setShapesHistory(newHist);
     setShapes(next);
     persist(next, undefined);
   }
