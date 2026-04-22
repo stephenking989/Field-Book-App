@@ -1233,6 +1233,128 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // PAGE TRANSFER HELPERS
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Deep-clone a page with all-new IDs (page, rows, shapes, photos).
+  // Does NOT modify pageChain — callers append chain records themselves.
+  function freshPageIds(page) {
+    let n = Date.now();
+    const uid = () => 'p_' + (++n) + '_' + Math.random().toString(36).slice(2, 7);
+    const cloned = JSON.parse(JSON.stringify(page));
+    cloned.id = uid();
+    if (Array.isArray(cloned.rows)) {
+      cloned.rows = cloned.rows.map(r => ({ ...r, id: uid() }));
+    }
+    if (Array.isArray(cloned.shapes)) {
+      cloned.shapes = cloned.shapes.map(s => ({ ...s, id: uid() }));
+    }
+    if (Array.isArray(cloned.photos)) {
+      cloned.photos = cloned.photos.map(ph => ({ ...ph, id: uid() }));
+    }
+    return cloned;
+  }
+
+  // Copy one page from fromProjectId to toProjectId.
+  // Returns the newly-created page.
+  DB.copyPageToProject = function(fromProjectId, pageId, toProjectId, by) {
+    const src         = DB.getPage(fromProjectId, pageId);
+    const fromProject = DB.getProject(fromProjectId);
+    const toProject   = DB.getProject(toProjectId);
+    if (!src || !fromProject || !toProject) return null;
+
+    const cloned = freshPageIds(src);
+    const chain  = cloned.pageChain || [];
+    chain.push({
+      seq:         chain.length + 1,
+      action:      'copy',
+      timestamp:   new Date().toISOString(),
+      by:          by || '',
+      location:    '',
+      device:      deviceHint(),
+      appVersion:  'fieldbook-v115',
+      fromProject: fromProject.name || '',
+      toProject:   toProject.name   || '',
+    });
+    cloned.pageChain = chain;
+    delete cloned.pageNumber;
+    DB.addPage(toProjectId, cloned);
+    return cloned;
+  };
+
+  // Export a single page to a .fieldbook-page file.
+  // Appends export record to the page's chain and persists it.
+  function exportPageToFile(page, projectName, by, location, toastFn) {
+    const chain = page.pageChain || [];
+    const record = {
+      seq:         chain.length + 1,
+      action:      'export',
+      timestamp:   new Date().toISOString(),
+      by:          by || '',
+      location:    location || '',
+      device:      deviceHint(),
+      appVersion:  'fieldbook-v115',
+      fromProject: projectName || '',
+      toProject:   null,
+    };
+    const updatedChain = [...chain, record];
+    DB.updatePage(page._projectId || '', page.id, { pageChain: updatedChain });
+
+    const exportData = {
+      type:       'fieldbook_page_export',
+      version:    '1',
+      exportedAt: record.timestamp,
+      sourceMeta: {
+        projectName: projectName || '',
+        pageTitle:   page.title  || '',
+        pageType:    page.type   || '',
+      },
+      page: { ...page, pageChain: updatedChain },
+    };
+
+    const safeName = (page.title || 'page').replace(/[^a-z0-9_\-]/gi, '_');
+    const dateStr  = record.timestamp.split('T')[0];
+    const filename = `${safeName}_${dateStr}.fieldbook-page`;
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+    if (toastFn) toastFn({ message: `Page exported as ${filename}`, type: 'success' });
+    return updatedChain;
+  }
+
+  // Import a .fieldbook-page file into a project.
+  // Validates format, assigns fresh IDs, appends import chain record.
+  function importPageFromData(fileData, toProjectId, importerName) {
+    if (fileData.type !== 'fieldbook_page_export') {
+      throw new Error('Not a valid .fieldbook-page file');
+    }
+    const srcPage   = fileData.page;
+    const cloned    = freshPageIds(srcPage);
+    const chain     = cloned.pageChain || [];
+    chain.push({
+      seq:         chain.length + 1,
+      action:      'import',
+      timestamp:   new Date().toISOString(),
+      by:          importerName || '',
+      location:    '',
+      device:      deviceHint(),
+      appVersion:  'fieldbook-v115',
+      fromProject: fileData.sourceMeta?.projectName || '',
+      toProject:   null,
+    });
+    cloned.pageChain = chain;
+    delete cloned.pageNumber;
+    DB.addPage(toProjectId, cloned);
+    return cloned;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // EXPORT MODAL  — collects exporter name + location, triggers download
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2983,7 +3105,14 @@
     const [editingCover, setEditingCover] = useState(false);
     const [coverForm, setCoverForm] = useState({});
     const [exporting, setExporting] = useState(false);
-    const [showSettings, setShowSettings] = useState(false);
+    const [showSettings,    setShowSettings]    = useState(false);
+    const [pageActionTarget, setPageActionTarget] = useState(null); // page object
+    const [pageExportTarget, setPageExportTarget] = useState(null); // page object
+    const [pageCopyToTarget, setPageCopyToTarget] = useState(null); // page object
+    const [copyFromOpen,     setCopyFromOpen]     = useState(false);
+    const [importPageModal,  setImportPageModal]  = useState(null); // { fileData }
+    const [pageChainTarget,  setPageChainTarget]  = useState(null); // page object
+    const pageImportInputRef = useRef(null);
     const toast = useToast();
 
     function reload() { setProject(DB.getProject(projectId)); }
@@ -3226,7 +3355,14 @@
           {/* Pages */}
           {pageCount > 0 && (
             <div className="mb-4">
-              <p className="text-white/45 text-[10px] font-bold uppercase tracking-widest mb-2 px-1">Pages</p>
+              <div className="flex items-center justify-between mb-2 px-1">
+                <p className="text-white/45 text-[10px] font-bold uppercase tracking-widest">Pages</p>
+                <button onClick={() => pageImportInputRef.current && pageImportInputRef.current.click()}
+                  className="text-[10px] font-semibold px-2 py-0.5 rounded-md transition-colors active:bg-fb-mid/20"
+                  style={{ color: 'rgba(99,179,237,0.7)', background: 'rgba(99,179,237,0.1)' }}>
+                  ↑ Import Page
+                </button>
+              </div>
               <div className="space-y-1.5">
                 {project.pages.map((pg, idx) => (
                   <PageListRow key={pg.id} page={pg} projectId={projectId}
@@ -3235,6 +3371,8 @@
                     onMoveUp={() => { DB.reorderPages(projectId, idx, idx - 1); reload(); }}
                     onMoveDown={() => { DB.reorderPages(projectId, idx, idx + 1); reload(); }}
                     onDuplicate={() => { DB.duplicatePage(projectId, pg.id); reload(); }}
+                    onPageAction={pg2 => setPageActionTarget(pg2)}
+                    onChainBadge={pg2 => setPageChainTarget(pg2)}
                   />
                 ))}
               </div>
@@ -3248,7 +3386,8 @@
         </div>
 
         {addStep === 'type' && (
-          <AddPageTypeModal onSelect={handleTypeSelect} onClose={() => setAddStep(null)} />
+          <AddPageTypeModal onSelect={handleTypeSelect} onClose={() => setAddStep(null)}
+            onCopyFrom={() => { setAddStep(null); setCopyFromOpen(true); }} />
         )}
         {showSettings && (
           <ProjectSettingsModal
@@ -3258,17 +3397,93 @@
             onReload={reload}
           />
         )}
+
+        {/* hidden file input for page import */}
+        <input ref={pageImportInputRef} type="file" accept=".fieldbook-page"
+          style={{ display: 'none' }}
+          onChange={e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = ev => {
+              try {
+                const data = JSON.parse(ev.target.result);
+                setImportPageModal({ fileData: data });
+              } catch {
+                toast({ message: 'Invalid .fieldbook-page file', type: 'error' });
+              }
+            };
+            reader.readAsText(file);
+            e.target.value = '';
+          }} />
+
+        {pageActionTarget && (
+          <PageActionsSheet
+            page={pageActionTarget}
+            projectId={projectId}
+            onClose={() => setPageActionTarget(null)}
+            onCopyTo={pg => { setPageActionTarget(null); setPageCopyToTarget(pg); }}
+            onExport={pg => { setPageActionTarget(null); setPageExportTarget(pg); }}
+            onChain={pg => { setPageActionTarget(null); setPageChainTarget(pg); }}
+            onDelete={pg => {
+              if (!window.confirm(`Delete "${pg.title || 'Untitled'}"? This cannot be undone.`)) return;
+              DB.deletePage(projectId, pg.id);
+              setPageActionTarget(null);
+              reload();
+            }}
+          />
+        )}
+        {pageCopyToTarget && (
+          <CopyToProjectModal
+            page={pageCopyToTarget}
+            fromProjectId={projectId}
+            onClose={() => setPageCopyToTarget(null)}
+            onDone={() => { setPageCopyToTarget(null); toast({ message: 'Page copied!', type: 'success' }); }}
+            toast={toast}
+          />
+        )}
+        {pageExportTarget && (
+          <PageExportModal
+            page={pageExportTarget}
+            project={project}
+            onClose={() => setPageExportTarget(null)}
+            onDone={() => setPageExportTarget(null)}
+            toast={toast}
+          />
+        )}
+        {importPageModal && (
+          <ImportPageModal
+            fileData={importPageModal.fileData}
+            toProjectId={projectId}
+            onClose={() => setImportPageModal(null)}
+            onDone={() => { setImportPageModal(null); reload(); toast({ message: 'Page imported!', type: 'success' }); }}
+          />
+        )}
+        {copyFromOpen && (
+          <CopyFromProjectModal
+            toProjectId={projectId}
+            onClose={() => setCopyFromOpen(false)}
+            onDone={() => { setCopyFromOpen(false); reload(); toast({ message: 'Page(s) copied!', type: 'success' }); }}
+          />
+        )}
+        {pageChainTarget && (
+          <PageChainSheet
+            page={pageChainTarget}
+            onClose={() => setPageChainTarget(null)}
+          />
+        )}
       </div>
     );
   }
 
-  function PageListRow({ page, projectId, canMoveUp, canMoveDown, onMoveUp, onMoveDown, onDuplicate }) {
+  function PageListRow({ page, projectId, canMoveUp, canMoveDown, onMoveUp, onMoveDown, onDuplicate, onPageAction, onChainBadge }) {
     const meta = TYPE_META[page.type] || TYPE_META.data;
     const rowCount = page.rows?.length || 0;
     const displayTitle = page.title && page.title.trim() ? page.title.trim() : null;
+    const hasChain = (page.pageChain || []).length > 0;
     return (
       <div className="flex items-stretch gap-1">
-        {/* Reorder + duplicate buttons */}
+        {/* Reorder + duplicate + actions buttons */}
         <div className="flex flex-col gap-0.5 flex-shrink-0 justify-center">
           <button
             onClick={canMoveUp ? onMoveUp : undefined}
@@ -3291,6 +3506,13 @@
             style={{ color: 'rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.05)', fontSize: 13 }}>
             ⧉
           </button>
+          <button
+            onClick={() => onPageAction && onPageAction(page)}
+            title="Page actions"
+            className="w-7 h-7 flex items-center justify-center rounded-lg transition-colors"
+            style={{ color: 'rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.05)', fontSize: 15, letterSpacing: '-1px' }}>
+            ···
+          </button>
         </div>
         {/* Main row */}
         <button onClick={() => navigate(`#/project/${projectId}/page/${page.id}`)}
@@ -3312,8 +3534,65 @@
               {(page.type === 'data' || page.type === 'points') && rowCount > 0 ? ` · ${rowCount} pts` : ''}
             </p>
           </div>
+          {hasChain && (
+            <button
+              onClick={e => { e.stopPropagation(); onChainBadge && onChainBadge(page); }}
+              title="Page history"
+              className="flex-shrink-0 text-xs px-1 py-0.5 rounded"
+              style={{ background: 'rgba(99,179,237,0.2)', color: 'rgba(99,179,237,0.9)', fontSize: 11 }}>
+              🔗
+            </button>
+          )}
           <span className="text-white/25 flex-shrink-0"><Ico.ChevR /></span>
         </button>
+      </div>
+    );
+  }
+
+  function PageActionsSheet({ page, projectId, onClose, onCopyTo, onExport, onChain, onDelete }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const hasChain = (page.pageChain || []).length > 0;
+    const meta = TYPE_META[page.type] || TYPE_META.data;
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider"
+              style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
+            <span className="text-fb-text font-semibold text-sm truncate">{page.title || 'Untitled'}</span>
+          </div>
+          <div className="space-y-2">
+            <button onClick={() => onCopyTo(page)}
+              className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-fb-mid/20"
+              style={{ background: 'rgba(255,255,255,0.06)' }}>
+              → Copy to Project…
+            </button>
+            <button onClick={() => onExport(page)}
+              className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-fb-mid/20"
+              style={{ background: 'rgba(255,255,255,0.06)' }}>
+              ↓ Export Page…
+            </button>
+            {hasChain && (
+              <button onClick={() => onChain(page)}
+                className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-fb-mid/20"
+                style={{ background: 'rgba(255,255,255,0.06)' }}>
+                🕐 Page History
+              </button>
+            )}
+            <button onClick={() => onDelete(page)}
+              className="w-full text-left px-4 py-3 rounded-xl font-medium transition-colors active:bg-red-900/30"
+              style={{ background: 'rgba(255,255,255,0.06)', color: '#f87171' }}>
+              🗑 Delete Page
+            </button>
+          </div>
+          <button onClick={onClose}
+            className="w-full mt-4 py-3 rounded-xl text-fb-muted font-medium transition-colors active:bg-fb-mid/10"
+            style={{ background: 'rgba(255,255,255,0.04)' }}>
+            Cancel
+          </button>
+        </div>
       </div>
     );
   }
@@ -3328,10 +3607,367 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // PAGE SHARING MODALS
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function CopyToProjectModal({ page, fromProjectId, onClose, onDone, toast }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const [by, setBy] = useState(() => localStorage.getItem('fb_lastExportName') || '');
+    const allProjects = DB.getProjects()
+      .filter(p => p.id !== fromProjectId)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    const meta = TYPE_META[page.type] || TYPE_META.data;
+
+    function doCopy(toProject) {
+      localStorage.setItem('fb_lastExportName', by.trim());
+      DB.copyPageToProject(fromProjectId, page.id, toProject.id, by.trim());
+      toast({ message: `Copied to "${toProject.name}"`, type: 'success' });
+      onDone();
+    }
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-fb-text mb-1">Copy Page to Project</h2>
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider"
+              style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
+            <span className="text-fb-muted text-sm truncate">{page.title || 'Untitled'}</span>
+          </div>
+          <div className="mb-4">
+            <label className="text-fb-muted text-xs font-semibold uppercase tracking-wider block mb-1">Your name (optional)</label>
+            <input value={by} onChange={e => setBy(e.target.value)}
+              placeholder="e.g. Steve"
+              className="w-full rounded-xl px-3 py-2 text-sm border border-gray-200 focus:outline-none focus:border-fb-accent"
+              style={{ background: '#f8f8f8' }} />
+          </div>
+          {allProjects.length === 0 ? (
+            <p className="text-fb-muted text-sm text-center py-6">No other projects found.</p>
+          ) : (
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {allProjects.map(p => (
+                <div key={p.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl"
+                  style={{ background: 'rgba(0,0,0,0.04)' }}>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-fb-text text-sm truncate">{p.name || 'Unnamed'}</p>
+                    <p className="text-fb-muted text-xs truncate">
+                      {p.jobNumber ? `#${p.jobNumber} · ` : ''}{(p.pages||[]).length} page{(p.pages||[]).length !== 1 ? 's' : ''}
+                    </p>
+                  </div>
+                  <button onClick={() => doCopy(p)}
+                    className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors active:bg-fb-accent/80"
+                    style={{ background: '#2D6A4F', color: '#fff' }}>
+                    Copy here
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <button onClick={onClose}
+            className="w-full mt-4 py-3 rounded-xl text-fb-muted font-medium transition-colors active:bg-gray-100"
+            style={{ background: 'rgba(0,0,0,0.04)' }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function PageExportModal({ page, project, onClose, onDone, toast }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const [by,       setBy]       = useState(() => localStorage.getItem('fb_lastExportName') || '');
+    const [location, setLocation] = useState('');
+
+    function doExport() {
+      localStorage.setItem('fb_lastExportName', by.trim());
+      exportPageToFile({ ...page, _projectId: project.id }, project.name || '', by.trim(), location.trim(), toast);
+      onDone();
+    }
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
+          <h2 className="text-xl font-bold text-fb-text mb-1">Export Page</h2>
+          <p className="text-sm text-fb-muted mb-5">
+            Creates a <code className="font-data text-fb-mid">.fieldbook-page</code> file you can import on another device.
+          </p>
+          <div className="space-y-3 mb-5">
+            <div>
+              <label className="text-fb-muted text-xs font-semibold uppercase tracking-wider block mb-1">Your name (optional)</label>
+              <input value={by} onChange={e => setBy(e.target.value)}
+                placeholder="e.g. Steve"
+                className="w-full rounded-xl px-3 py-2 text-sm border border-gray-200 focus:outline-none focus:border-fb-accent"
+                style={{ background: '#f8f8f8' }} />
+            </div>
+            <div>
+              <label className="text-fb-muted text-xs font-semibold uppercase tracking-wider block mb-1">Location (optional)</label>
+              <input value={location} onChange={e => setLocation(e.target.value)}
+                placeholder="e.g. Office, Job site"
+                className="w-full rounded-xl px-3 py-2 text-sm border border-gray-200 focus:outline-none focus:border-fb-accent"
+                style={{ background: '#f8f8f8' }} />
+            </div>
+          </div>
+          <button onClick={doExport}
+            className="w-full py-3 rounded-xl font-bold text-white mb-2 transition-colors active:opacity-80"
+            style={{ background: '#2D6A4F' }}>
+            Export Page
+          </button>
+          <button onClick={onClose}
+            className="w-full py-3 rounded-xl text-fb-muted font-medium transition-colors active:bg-gray-100"
+            style={{ background: 'rgba(0,0,0,0.04)' }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function ImportPageModal({ fileData, toProjectId, onClose, onDone }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const [importerName, setImporterName] = useState(() => localStorage.getItem('fb_lastExportName') || '');
+    const [chainOpen, setChainOpen] = useState(false);
+
+    if (fileData.type !== 'fieldbook_page_export') {
+      return (
+        <div className="modal-backdrop" onClick={onClose}>
+          <div className="modal-sheet">
+            <p className="text-red-500 font-semibold">Invalid file — not a .fieldbook-page export.</p>
+            <button onClick={onClose} className="w-full mt-4 py-3 rounded-xl text-fb-muted">Close</button>
+          </div>
+        </div>
+      );
+    }
+
+    const { sourceMeta, page } = fileData;
+    const chain = page.pageChain || [];
+    const meta = TYPE_META[sourceMeta.pageType] || TYPE_META.data;
+
+    function doImport() {
+      localStorage.setItem('fb_lastExportName', importerName.trim());
+      importPageFromData(fileData, toProjectId, importerName.trim());
+      onDone();
+    }
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-fb-text mb-3">Import Page</h2>
+          <div className="rounded-xl p-3 mb-4" style={{ background: 'rgba(0,0,0,0.05)' }}>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider"
+                style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
+              <span className="font-semibold text-fb-text text-sm truncate">{sourceMeta.pageTitle || 'Untitled'}</span>
+            </div>
+            <p className="text-fb-muted text-xs">From: <span className="font-medium">{sourceMeta.projectName || 'Unknown project'}</span></p>
+          </div>
+          {chain.length > 0 && (
+            <div className="mb-4">
+              <button onClick={() => setChainOpen(v => !v)}
+                className="text-xs font-semibold text-fb-mid flex items-center gap-1 mb-1">
+                {chainOpen ? '▾' : '▸'} Page history ({chain.length} record{chain.length !== 1 ? 's' : ''})
+              </button>
+              {chainOpen && (
+                <div className="space-y-1">
+                  {chain.map(r => (
+                    <div key={r.seq} className="text-xs text-fb-muted px-2 py-1 rounded-lg"
+                      style={{ background: 'rgba(0,0,0,0.04)' }}>
+                      <span className="font-semibold text-fb-text capitalize">{r.action}</span>
+                      {' · '}{new Date(r.timestamp).toLocaleDateString('en-CA')}
+                      {r.by ? ` · ${r.by}` : ''}
+                      {r.device ? ` · ${r.device}` : ''}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <div className="mb-5">
+            <label className="text-fb-muted text-xs font-semibold uppercase tracking-wider block mb-1">Your name (optional)</label>
+            <input value={importerName} onChange={e => setImporterName(e.target.value)}
+              placeholder="e.g. Steve"
+              className="w-full rounded-xl px-3 py-2 text-sm border border-gray-200 focus:outline-none focus:border-fb-accent"
+              style={{ background: '#f8f8f8' }} />
+          </div>
+          <button onClick={doImport}
+            className="w-full py-3 rounded-xl font-bold text-white mb-2 transition-colors active:opacity-80"
+            style={{ background: '#2D6A4F' }}>
+            Import into this project
+          </button>
+          <button onClick={onClose}
+            className="w-full py-3 rounded-xl text-fb-muted font-medium transition-colors active:bg-gray-100"
+            style={{ background: 'rgba(0,0,0,0.04)' }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function CopyFromProjectModal({ toProjectId, onClose, onDone }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const [step, setStep]             = useState(1); // 1=pick project, 2=pick pages
+    const [srcProject, setSrcProject] = useState(null);
+    const [selected, setSelected]     = useState(new Set());
+    const [by, setBy]                 = useState(() => localStorage.getItem('fb_lastExportName') || '');
+
+    const allProjects = DB.getProjects()
+      .filter(p => p.id !== toProjectId)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+    function togglePage(id) {
+      setSelected(prev => {
+        const next = new Set(prev);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
+      });
+    }
+
+    function doCopy() {
+      localStorage.setItem('fb_lastExportName', by.trim());
+      selected.forEach(pageId => DB.copyPageToProject(srcProject.id, pageId, toProjectId, by.trim()));
+      onDone();
+    }
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+          {step === 1 ? (
+            <>
+              <h2 className="text-xl font-bold text-fb-text mb-1">Copy from Project</h2>
+              <p className="text-fb-muted text-sm mb-4">Pick a project to copy pages from:</p>
+              {allProjects.length === 0 ? (
+                <p className="text-fb-muted text-sm text-center py-6">No other projects found.</p>
+              ) : (
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                  {allProjects.map(p => (
+                    <button key={p.id} onClick={() => { setSrcProject(p); setSelected(new Set()); setStep(2); }}
+                      className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left transition-colors active:bg-fb-mid/10"
+                      style={{ background: 'rgba(0,0,0,0.04)' }}>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-fb-text text-sm truncate">{p.name || 'Unnamed'}</p>
+                        <p className="text-fb-muted text-xs">{p.jobNumber ? `#${p.jobNumber} · ` : ''}{(p.pages||[]).length} pages</p>
+                      </div>
+                      <Ico.ChevR />
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button onClick={onClose}
+                className="w-full mt-4 py-3 rounded-xl text-fb-muted font-medium transition-colors active:bg-gray-100"
+                style={{ background: 'rgba(0,0,0,0.04)' }}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => setStep(1)} className="text-fb-mid text-sm font-semibold mb-3 flex items-center gap-1">
+                ← {srcProject.name || 'Back'}
+              </button>
+              <h2 className="text-xl font-bold text-fb-text mb-1">Select Pages</h2>
+              <p className="text-fb-muted text-sm mb-3">Tap to select pages to copy:</p>
+              <div className="space-y-1.5 max-h-60 overflow-y-auto mb-4">
+                {(srcProject.pages || []).map(pg => {
+                  const m = TYPE_META[pg.type] || TYPE_META.data;
+                  const sel = selected.has(pg.id);
+                  return (
+                    <button key={pg.id} onClick={() => togglePage(pg.id)}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors"
+                      style={{ background: sel ? 'rgba(45,106,79,0.12)' : 'rgba(0,0,0,0.04)', outline: sel ? '2px solid #2D6A4F' : 'none' }}>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider flex-shrink-0"
+                        style={{ background: m.bg, color: m.color }}>{m.label}</span>
+                      <span className="text-sm text-fb-text truncate flex-1">{pg.title || 'Untitled'}</span>
+                      {sel && <span style={{ color: '#2D6A4F', fontWeight: 700, fontSize: 16 }}>✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mb-4">
+                <label className="text-fb-muted text-xs font-semibold uppercase tracking-wider block mb-1">Your name (optional)</label>
+                <input value={by} onChange={e => setBy(e.target.value)}
+                  placeholder="e.g. Steve"
+                  className="w-full rounded-xl px-3 py-2 text-sm border border-gray-200 focus:outline-none focus:border-fb-accent"
+                  style={{ background: '#f8f8f8' }} />
+              </div>
+              <button onClick={doCopy} disabled={selected.size === 0}
+                className="w-full py-3 rounded-xl font-bold text-white mb-2 transition-colors active:opacity-80 disabled:opacity-40"
+                style={{ background: '#2D6A4F' }}>
+                Copy {selected.size > 0 ? `${selected.size} page${selected.size !== 1 ? 's' : ''}` : 'pages'} here
+              </button>
+              <button onClick={onClose}
+                className="w-full py-3 rounded-xl text-fb-muted font-medium transition-colors active:bg-gray-100"
+                style={{ background: 'rgba(0,0,0,0.04)' }}>
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function PageChainSheet({ page, onClose }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const chain = page.pageChain || [];
+    const meta  = TYPE_META[page.type] || TYPE_META.data;
+    const actionLabel = { export: 'Exported', import: 'Imported', copy: 'Copied' };
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider"
+              style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
+            <h2 className="text-lg font-bold text-fb-text truncate">Page History — {page.title || 'Untitled'}</h2>
+          </div>
+          {chain.length === 0 ? (
+            <p className="text-fb-muted text-sm text-center py-6">No history recorded yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {chain.map(r => (
+                <div key={r.seq} className="flex gap-3 px-3 py-2.5 rounded-xl items-start"
+                  style={{ background: 'rgba(0,0,0,0.04)' }}>
+                  <span className="text-fb-muted text-xs font-data w-5 flex-shrink-0 pt-0.5">{r.seq}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-fb-text text-sm font-semibold">
+                      {actionLabel[r.action] || r.action}
+                      {r.action === 'copy' && r.toProject ? ` → "${r.toProject}"` : ''}
+                      {r.action === 'import' && r.fromProject ? ` from "${r.fromProject}"` : ''}
+                    </p>
+                    <p className="text-fb-muted text-xs mt-0.5">
+                      {new Date(r.timestamp).toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      {r.by ? ` · ${r.by}` : ''}
+                      {r.location ? ` · ${r.location}` : ''}
+                      {r.device ? ` · ${r.device}` : ''}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <button onClick={onClose}
+            className="w-full mt-4 py-3 rounded-xl text-fb-muted font-medium transition-colors active:bg-gray-100"
+            style={{ background: 'rgba(0,0,0,0.04)' }}>
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // ADD PAGE MODALS
   // ─────────────────────────────────────────────────────────────────────────────
 
-  function AddPageTypeModal({ onSelect, onClose }) {
+  function AddPageTypeModal({ onSelect, onClose, onCopyFrom }) {
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
     const types = [
@@ -3363,6 +3999,23 @@
                 <Ico.ChevR />
               </button>
             ))}
+            {onCopyFrom && (
+              <>
+                <hr className="border-gray-100" />
+                <button onClick={onCopyFrom}
+                  className="w-full flex items-center gap-4 p-4 rounded-2xl border-2 border-gray-100 active:border-gray-300 text-left transition-colors">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                    style={{ background: '#2D6A4F18', color: '#2D6A4F', fontSize: 20 }}>
+                    ⊕
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-fb-text text-sm">Copy from another project…</p>
+                    <p className="text-fb-muted text-xs mt-0.5 leading-snug">Browse your other projects and copy a page into this one</p>
+                  </div>
+                  <Ico.ChevR />
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
