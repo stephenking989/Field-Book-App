@@ -2832,6 +2832,9 @@ function SketchPage({ page, projectId, onReload }) {
   const [penPhase,        setPenPhase]        = useState('point');
   // penCursor: current mouse position for rubber band preview
   const [penCursor,       setPenCursor]       = useState(null);
+  // penNodeTimerRef: short deferred timer for touch node placement so a second finger
+  // arriving within 80ms cancels the pending node (preventing pinch-zoom from adding nodes).
+  const penNodeTimerRef = useRef(null);
 
   // ── Node tool state ──────────────────────────────────────────────────────────────────────────────
   // nodeSelectedId: which path shape is being edited with the Node tool
@@ -2883,7 +2886,10 @@ function SketchPage({ page, projectId, onReload }) {
   // Cleared immediately if a second pointer arrives (pinch detected).
   const touchTapRef        = useRef(null);          // null | () => void
   // midPanRef: anchor data captured at middle-mouse button-down for smooth pan.
-  const midPanRef     = useRef(null);           // { startX, startY, vbX, vbY, ps }
+  const midPanRef          = useRef(null);      // { startX, startY, vbX, vbY, ps }
+  // singleFingerPanRef: set when a single touch on empty canvas/locked shape starts a pan
+  // in select or node mode. Cleared on pointer-up or when a second finger arrives.
+  const singleFingerPanRef = useRef(null);      // null | { startX, startY, vbX, vbY, ps }
   const [isPanActive, setIsPanActive] = useState(false); // drives 'grab' cursor
 
   // viewBox state: { x, y, w, h } — the SVG camera window in world coordinates.
@@ -3866,6 +3872,8 @@ function SketchPage({ page, projectId, onReload }) {
       setDrawState(null);           // cancel any in-progress text/dim/drawing state
       setMarquee(null);             // cancel any rubber-band marquee
       touchTapRef.current = null;   // cancel any deferred single-touch action
+      singleFingerPanRef.current = null; // cancel single-finger pan — this is now a pinch
+      if (penNodeTimerRef.current) { clearTimeout(penNodeTimerRef.current); penNodeTimerRef.current = null; penNodeTimerRef._pending = null; }
       wasMultiTouchRef.current = true; // suppress tool commits in onPointerUp
       const pts  = [...activePtrsRef.current.values()];
       const midX = (pts[0].x + pts[1].x) / 2;
@@ -3886,6 +3894,23 @@ function SketchPage({ page, projectId, onReload }) {
     // ps: world-units per CSS pixel — scales all fixed-screen-size thresholds so
     // they remain constant in screen pixels regardless of zoom level.
     const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+
+    // ── Single-finger pan (select / node tool, touch only) ────────────────────
+    // A touch on empty canvas or a locked shape starts a pan instead of a
+    // selection. Two-finger pinch and middle-mouse pan are handled elsewhere.
+    if (e.pointerType === 'touch' && (tool === 'select' || tool === 'node') && prevTool === null) {
+      const hitThreshPan = 24 * ps;
+      const hit = hitTest(pt, shapes, hitThreshPan);
+      const isLocked = hit && (hit.locked || layers.find(l => l.id === (hit.layerId || layers[0]?.id))?.locked);
+      if (!hit || isLocked) {
+        singleFingerPanRef.current = {
+          startX: e.clientX, startY: e.clientY,
+          vbX: viewBox.x, vbY: viewBox.y,
+          ps,
+        };
+        return;
+      }
+    }
 
     // ── Select mode: active when tool is 'select', when prevTool is set
     // (shape just created — handles stay interactive), or when tool is 'text'
@@ -4438,21 +4463,41 @@ function SketchPage({ page, projectId, onReload }) {
         return;
       }
 
-      // penPhase === 'point': place a new node
-      // Check if clicking near first node to close the path
-      if (penNodes.length >= 2) {
-        const firstNode = penNodes[0];
-        const closeDist = 14 * ps;
-        if (Math.hypot(sp.x - firstNode.x, sp.y - firstNode.y) < closeDist) {
-          commitPenPath(true);
-          return;
-        }
+      // penPhase === 'point': place a new node.
+      // For touch, defer 80ms so a second finger arriving for pinch-zoom can cancel
+      // the pending node before it is committed (prevents pinch adding ghost nodes).
+      // Mouse/stylus: place immediately — no risk of accidental second pointer.
+      const placePenNode = () => {
+        penNodeTimerRef.current = null;
+        // Re-check close-path condition at fire time (state may have updated)
+        setPenNodes(prev => {
+          if (prev.length >= 2) {
+            const firstNode = prev[0];
+            const closeDist = 14 * ps;
+            if (Math.hypot(sp.x - firstNode.x, sp.y - firstNode.y) < closeDist) {
+              // Close the path — commitPenPath reads penNodes state; schedule after this update
+              setTimeout(() => commitPenPath(true), 0);
+              return prev;
+            }
+          }
+          const newNode = { x: sp.x, y: sp.y, type: 'sharp',
+            cp1x: sp.x, cp1y: sp.y, cp2x: sp.x, cp2y: sp.y };
+          return [...prev, newNode];
+        });
+        // Enter handle phase only in bézier mode
+        setPenPhase(ph => (ph === 'point' && penMode === 'bezier') ? 'handle' : ph);
+      };
+
+      if (e.pointerType === 'touch') {
+        if (penNodeTimerRef.current) { clearTimeout(penNodeTimerRef.current); penNodeTimerRef.current = null; }
+        penNodeTimerRef._pending = placePenNode;
+        penNodeTimerRef.current = setTimeout(() => {
+          penNodeTimerRef._pending = null;
+          placePenNode();
+        }, 80);
+      } else {
+        placePenNode();
       }
-      const newNode = { x: sp.x, y: sp.y, type: 'sharp',
-        cp1x: sp.x, cp1y: sp.y, cp2x: sp.x, cp2y: sp.y };
-      setPenNodes(prev => [...prev, newNode]);
-      // Enter handle phase only in bézier mode — corner + smart skip it
-      if (penNodes.length >= 1 && penMode === 'bezier') setPenPhase('handle');
     }
     // ── Node Tool ─────────────────────────────────────────────────────────────────────────────────
     if (tool === 'node') {
@@ -4673,6 +4718,15 @@ function SketchPage({ page, projectId, onReload }) {
         };
       });
       lastPinchRef.current = { dist, midX, midY };
+      return;
+    }
+
+    // ── Single-finger pan (select/node tools, touch) ──────────────────────────
+    if (singleFingerPanRef.current && activePtrsRef.current.size === 1) {
+      const { startX, startY, vbX, vbY, ps } = singleFingerPanRef.current;
+      const dx = (e.clientX - startX) * ps;
+      const dy = (e.clientY - startY) * ps;
+      setViewBox(vb => ({ ...vb, x: vbX - dx, y: vbY - dy }));
       return;
     }
 
@@ -5144,6 +5198,34 @@ function SketchPage({ page, projectId, onReload }) {
     // early in onPointerDown), so this delete is always safe.
     activePtrsRef.current.delete(e.pointerId);
     if (activePtrsRef.current.size < 2) lastPinchRef.current = null;
+
+    // ── Single-finger pan cleanup ─────────────────────────────────────────
+    if (singleFingerPanRef.current) {
+      singleFingerPanRef.current = null;
+      return;
+    }
+
+    // ── Pen tool: fire deferred node immediately on fast touch-lift ──────────
+    // If the 80ms timer is still pending the finger lifted before it fired — this
+    // is a valid fast tap so run the placement now rather than waiting.
+    if (penNodeTimerRef.current && e.pointerType === 'touch') {
+      clearTimeout(penNodeTimerRef.current);
+      penNodeTimerRef.current = null;
+      // The placement callback captured sp in its closure — re-invoke by dispatching
+      // a synthetic equivalent: trigger a programmatic placement using the pointer's
+      // last known world position (already set in penCursor from onPointerMove).
+      // Since penCursor is updated on every move and the finger barely moved for a tap,
+      // the position is accurate.  The placement itself is state-only (no DOM events).
+      // NOTE: if penCursor is null (no prior move) we skip — the finger never moved
+      // enough to register a position worth committing.
+      // This is handled: the timer's placePenNode closure already captured sp at
+      // pointerDown time, which is exactly what we want. Re-fire it inline here via
+      // a stored ref rather than duplicating the logic.
+      if (penNodeTimerRef._pending) {
+        penNodeTimerRef._pending();
+        penNodeTimerRef._pending = null;
+      }
+    }
 
     // ── Still in two-finger mode → don't process single-pointer events ────
     if (activePtrsRef.current.size >= 2) return;
@@ -6009,6 +6091,49 @@ function SketchPage({ page, projectId, onReload }) {
     [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
     setLayers(next);
     persist(undefined, undefined, next);
+  }
+
+  // Move selected shape(s) up (+1) or down (-1) within the layers panel.
+  // "Up" in the panel = higher Z-order = higher index in the shapes array within a layer.
+  // For multi-select: moves all selected shapes as a group, preserving relative order.
+  function moveShapeInStack(shapeId, dir) {
+    // Build the panel display order: layers reversed (top layer first), shapes within each layer reversed (highest Z first)
+    const slots = [...layers].reverse().flatMap(l => {
+      const ls = shapes.filter(s => (s.layerId || layers[0]?.id) === l.id);
+      return [...ls].reverse().map((s, ri) => ({ shapeId: s.id, layerId: l.id, arrIdx: ls.length - 1 - ri }));
+    });
+
+    // Determine the set of shape IDs to move: if the clicked shape is in the selection, move all selected; else move just this one
+    const moveSet = selectedIds.includes(shapeId) && selectedIds.length > 1 ? selectedIds : [shapeId];
+
+    // Find the flat indices of all shapes to move
+    const moveSlots = slots.map((sl, fi) => ({ ...sl, fi })).filter(sl => moveSet.includes(sl.shapeId));
+    if (!moveSlots.length) return;
+
+    // Check boundary: moving up (dir=+1 in Z) = moving toward index 0 in the panel
+    // The shape at panel index 0 is already the topmost — can't go higher within layer
+    const topFi    = Math.min(...moveSlots.map(s => s.fi));
+    const bottomFi = Math.max(...moveSlots.map(s => s.fi));
+    if (dir > 0 && topFi === 0) return;
+    if (dir < 0 && bottomFi === slots.length - 1) return;
+
+    // For each shape, swap with the neighbour in the same layer
+    const next = [...shapes];
+    for (const sl of moveSlots) {
+      // Find the neighbour slot in the same layer that is adjacent in panel direction
+      const panelDir = -dir; // panel "up" (fi-1) = higher Z in array
+      const neighbourFi = sl.fi + panelDir;
+      if (neighbourFi < 0 || neighbourFi >= slots.length) continue;
+      const nb = slots[neighbourFi];
+      if (nb.layerId !== sl.layerId) continue; // don't cross layer boundaries with ▲▼
+
+      // Swap in the shapes array
+      const idxA = next.findIndex(s => s.id === sl.shapeId);
+      const idxB = next.findIndex(s => s.id === nb.shapeId);
+      if (idxA === -1 || idxB === -1) continue;
+      [next[idxA], next[idxB]] = [next[idxB], next[idxA]];
+    }
+    commitShapes(next);
   }
 
   function reorderLayer(layerId, fromIdx, toIdx) {
@@ -8862,7 +8987,6 @@ function SketchPage({ page, projectId, onReload }) {
                                 if(panelDragTimerRef.current) clearTimeout(panelDragTimerRef.current);
                                 const _startLayerDrag=()=>{
                                   panelDragTimerRef.current=null;
-                                  if(e.pointerType==='touch'&&navigator.vibrate) navigator.vibrate(40);
                                   const _i=layers.findIndex(l=>l.id===layer.id);
                                   const _wasC=collapsedLayers.has(layer.id);
                                   setCollapsedLayers(prev=>new Set([...prev,layer.id]));
@@ -8971,11 +9095,11 @@ function SketchPage({ page, projectId, onReload }) {
                                 if(e.button!==0&&e.pointerType==='mouse')return;
                                 const _startX=e.clientX,_startY=e.clientY,_pType=e.pointerType;
                                 panelRowGestureRef.current={startX:_startX,startY:_startY,shapeId:s.id,swiped:false};
-                                // Long-press anywhere on the row to initiate drag
+                                // Mouse-only long-press drag (150ms). Touch uses ▲▼ buttons instead.
+                                if(_pType!=='mouse')return;
                                 if(panelDragTimerRef.current)clearTimeout(panelDragTimerRef.current);
                                 panelDragTimerRef.current=setTimeout(()=>{
                                   panelDragTimerRef.current=null;
-                                  if(_pType==='touch'&&navigator.vibrate)navigator.vibrate(40);
                                   const _slots=[...layers].reverse().flatMap(_l=>{
                                     if(collapsedLayers.has(_l.id))return[];
                                     const _ls=shapes.filter(_s=>(_s.layerId||layers[0]?.id)===_l.id);
@@ -8985,7 +9109,7 @@ function SketchPage({ page, projectId, onReload }) {
                                   if(_origFi<0)return;
                                   setPanelDrag({type:'shape',id:s.id,startY:_startY,slots:_slots,origFlatIdx:_origFi,targetFlatIdx:_origFi});
                                   panelRowGestureRef.current=null;
-                                },_pType==='touch'?400:150);
+                                },150);
                               }}
                               onPointerMove={e=>{
                                 const g=panelRowGestureRef.current;
@@ -9041,6 +9165,19 @@ function SketchPage({ page, projectId, onReload }) {
                                 color:s.visible===false?'rgba(255,255,255,0.2)':(selectedIds.includes(s.id)?'#93C5FD':'rgba(255,255,255,0.4)')}}>
                                 {s.customName||(s.type.charAt(0).toUpperCase()+s.type.slice(1)+' '+(layerShapes.length-ri))}{s.locked&&<span style={{marginLeft:2,fontSize:7,opacity:0.7}}>🔒</span>}
                               </span>
+                              {/* ▲▼ shape stack order buttons */}
+                              <div style={{display:'flex',flexDirection:'column',gap:1,flexShrink:0}}>
+                                {[{dir:1,lbl:'▲',ttl:'Move up'},{dir:-1,lbl:'▼',ttl:'Move down'}].map(({dir,lbl,ttl})=>(
+                                  <button key={dir}
+                                    onClick={ev=>{ev.stopPropagation();moveShapeInStack(s.id,dir);}}
+                                    onPointerDown={ev=>ev.stopPropagation()}
+                                    title={ttl}
+                                    style={{width:14,height:10,display:'flex',alignItems:'center',justifyContent:'center',
+                                      background:'none',border:'none',cursor:'pointer',fontSize:8,lineHeight:1,padding:0,
+                                      color:'rgba(255,255,255,0.35)',outline:'none'}}
+                                  >{lbl}</button>
+                                ))}
+                              </div>
                             </div>
                             {_sDrop&&!_sUp&&<div style={{height:2,background:'#3B82F6',margin:'0 14px'}}/>}
                           </React.Fragment>);
@@ -9201,6 +9338,7 @@ window._fbSketchUtils = {
   pxToReal, realToPx, formatReal, fmtPxAsReal,
   niceScaleBarValue, normAng, toDMS,
   PIXELS_PER_METER,
+  wrapText,
 };
 window.SketchPage = SketchPage;
 window._resolveSketch();

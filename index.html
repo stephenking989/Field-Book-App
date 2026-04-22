@@ -2013,12 +2013,35 @@
           }
           break;
         case 'text': {
-          const fs = s.fontSize || 16;
-          const lines = (s.content || '').split('\n');
+          // s.x/s.y is the CENTRE of the text box (matches sketch.js rendering).
+          // Convert to top-left corner using the same counter-scaling as sketch.js:
+          // tw = screen-px width * ps, th = screen-px height * ps.
+          const sw = s.w || 180;
+          const sh = s.h || 80;
+          const tw = sw * ps;
+          const th = sh * ps;
+          const rx = s.x - tw / 2;
+          const ry = s.y - th / 2;
+          const tFontSize = 9.5 * ps;
+          const tLineH = tFontSize * 1.55;
+          const charW = 9.5 * 0.601;
+          const maxChars = Math.max(1, Math.floor((sw - 6) / charW));
+          const _wt = (utils && utils.wrapText) ? utils.wrapText : (t, n) => {
+            const out = [];
+            for (const para of t.split('\n')) {
+              if (para.length <= n) { out.push(para); continue; }
+              let rem = para;
+              while (rem.length > n) { out.push(rem.slice(0, n)); rem = rem.slice(n); }
+              out.push(rem);
+            }
+            return out;
+          };
+          const lines = _wt(s.content || '', maxChars);
+          const esc = t => t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
           const tspans = lines.map((ln, i) =>
-            `<tspan x="${s.x}" dy="${i === 0 ? 0 : fs*1.3}">${ln.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</tspan>`
+            `<tspan x="${(rx + 3*ps).toFixed(3)}" dy="${i === 0 ? (tFontSize*1.25).toFixed(3) : tLineH.toFixed(3)}">${esc(ln) || '\u00a0'}</tspan>`
           ).join('');
-          el = `<text x="${s.x}" y="${s.y}" font-size="${fs}" fill="${stroke}" font-family="Courier New,monospace">${tspans}</text>`;
+          el = `<text x="${(rx + 3*ps).toFixed(3)}" y="${ry.toFixed(3)}" font-size="${tFontSize.toFixed(3)}" fill="${stroke}" font-family="Courier New,monospace">${tspans}</text>`;
           break;
         }
         // ── Dimension shapes ────────────────────────────────────────────────
@@ -3052,6 +3075,9 @@
           };
         }
       }
+      if (type === 'notes') {
+        pageData = { type: 'notes', notesHtml: '' };
+      }
       if (type === 'photo') {
         pageData = { type: 'photo', photos: [] };
       }
@@ -3311,6 +3337,7 @@
     const types = [
       { id: 'data',   Icon: Ico.Table,  label: 'Data Page',   desc: 'Tabular columns with custom headers — your field observations',         color: '#2D6A4F' },
       { id: 'sketch', Icon: Ico.Grid,   label: 'Sketch Page', desc: 'Fine grid paper for diagrams, site sketches, and notes',                  color: '#3B82F6' },
+      { id: 'notes',  Icon: Ico.Pencil, label: 'Notes Page',  desc: 'Rich-text notes — bold, italic, lists, headings. Fast field entry.',      color: '#B45309' },
       { id: 'title',  Icon: Ico.File,   label: 'Title Page',  desc: 'Job info, equipment, datum settings, crew and summary',                   color: '#D97706' },
       { id: 'photo',  Icon: Ico.Camera, label: 'Photos Page', desc: 'Site photos, equipment shots, and setup images with notes',               color: '#7C3AED' },
       { id: 'points', Icon: Ico.Pin,    label: 'Points Page', desc: 'PNEZD point list — links to sketch canvas for placing survey points',     color: '#0E7490' },
@@ -3593,6 +3620,137 @@
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO PAGE
   // ─────────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
+  // NOTES PAGE
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function NotesPage({ page, projectId, onReload, onRegisterExports }) {
+    const editorRef  = useRef(null);
+    const saveTimer  = useRef(null);
+    const toast      = useToast();
+
+    // Restore saved HTML into the contenteditable on mount / page change
+    useEffect(() => {
+      if (editorRef.current && page.notesHtml !== undefined) {
+        editorRef.current.innerHTML = page.notesHtml || '';
+      }
+    }, [page.id]);
+
+    // Register PDF export
+    useEffect(() => {
+      if (!onRegisterExports) return;
+      onRegisterExports({ exportPage: () => exportNotesPDF(page, toast) });
+    }, [page]);
+
+    function scheduleSave() {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => {
+        const html = editorRef.current ? editorRef.current.innerHTML : '';
+        DB.updatePage(projectId, page.id, { notesHtml: html });
+        onReload?.();
+      }, 800);
+    }
+
+    function execCmd(cmd, val) {
+      editorRef.current?.focus();
+      document.execCommand(cmd, false, val ?? null);
+    }
+
+    // Toolbar button definitions
+    const tbBtns = [
+      { label: 'B',  title: 'Bold',        cmd: 'bold',        style: { fontWeight: 700 } },
+      { label: 'I',  title: 'Italic',       cmd: 'italic',      style: { fontStyle: 'italic' } },
+      { label: 'H1', title: 'Heading 1',    cmd: 'formatBlock', val: 'H2' },
+      { label: 'H2', title: 'Heading 2',    cmd: 'formatBlock', val: 'H3' },
+      { label: '•',  title: 'Bullet list',  cmd: 'insertUnorderedList' },
+      { label: '1.', title: 'Numbered list',cmd: 'insertOrderedList' },
+      { label: '—',  title: 'Horizontal rule', cmd: 'insertHorizontalRule' },
+      { label: 'Tx', title: 'Clear formatting', cmd: 'removeFormat' },
+    ];
+
+    return (
+      <div className="flex flex-col h-full" style={{ background: '#FDFAF4' }}>
+        <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
+        {/* Formatting toolbar */}
+        <div style={{
+          display: 'flex', gap: 4, padding: '6px 10px', overflowX: 'auto',
+          borderBottom: '1px solid #E5E1D8', background: '#F5F1E8', flexShrink: 0,
+        }}>
+          {tbBtns.map(btn => (
+            <button key={btn.label}
+              onPointerDown={e => { e.preventDefault(); execCmd(btn.cmd, btn.val); }}
+              title={btn.title}
+              style={{
+                minWidth: 32, height: 32, padding: '0 8px', borderRadius: 7,
+                border: '1px solid #D4CFCA', background: '#FDFAF4', cursor: 'pointer',
+                fontSize: 13, fontFamily: 'Courier New, monospace', color: '#1C3829',
+                flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                ...btn.style,
+              }}>
+              {btn.label}
+            </button>
+          ))}
+        </div>
+        {/* Editor */}
+        <div
+          ref={editorRef}
+          contentEditable
+          suppressContentEditableWarning
+          onInput={scheduleSave}
+          spellCheck
+          style={{
+            flex: 1, minHeight: 0, overflowY: 'auto',
+            padding: '16px 18px', outline: 'none',
+            fontFamily: 'Courier New, monospace', fontSize: 14,
+            lineHeight: 1.7, color: '#1C3829',
+            caretColor: '#2D6A4F',
+          }}
+        />
+      </div>
+    );
+  }
+
+  async function exportNotesPDF(page, toast) {
+    try {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
+      const margin = 18, pageW = doc.internal.pageSize.getWidth();
+      const usableW = pageW - margin * 2;
+      let y = margin;
+
+      // Page header
+      doc.setFont('Courier', 'bold');
+      doc.setFontSize(13);
+      doc.text(page.title || 'Notes', margin, y); y += 7;
+      doc.setFont('Courier', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(120);
+      doc.text([page.date || '', page.weather || ''].filter(Boolean).join('  ·  '), margin, y); y += 8;
+      doc.setTextColor(0);
+      doc.setLineWidth(0.3);
+      doc.line(margin, y, pageW - margin, y); y += 6;
+
+      // Render HTML content as plain text (strip tags)
+      const tmp = document.createElement('div');
+      tmp.innerHTML = page.notesHtml || '';
+      const text = tmp.innerText || tmp.textContent || '';
+      doc.setFont('Courier', 'normal');
+      doc.setFontSize(10);
+      const lines = doc.splitTextToSize(text, usableW);
+      for (const ln of lines) {
+        if (y > doc.internal.pageSize.getHeight() - margin) {
+          doc.addPage(); y = margin;
+        }
+        doc.text(ln, margin, y); y += 6;
+      }
+
+      doc.save((page.title || 'Notes') + '.pdf');
+      toast({ message: 'PDF exported.', type: 'success' });
+    } catch(err) {
+      toast({ message: 'Export failed: ' + (err.message || 'unknown error'), type: 'error' });
+    }
+  }
+
   function PhotoPage({ page, projectId, onReload, onRegisterExports }) {
     const [photos, setPhotos] = useState(page.photos || []);
     const [expandedId, setExpandedId] = useState(null);
@@ -3663,21 +3821,21 @@
             <Ico.Download /> Upload
           </button>
         </div>
-        {/* Photo cards */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {/* Photo cards — minHeight:0 lets the flex child scroll instead of shrink */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
           {photos.length === 0 && (
             <div style={{ textAlign: 'center', padding: '60px 16px', color: '#A0948A', fontSize: 14 }}>
               No photos yet — tap Camera or Upload to add one.
             </div>
           )}
           {photos.map((ph, i) => (
-            <div key={ph.id} style={{ borderRadius: 16, overflow: 'hidden', border: '1px solid #E5E1D8',
+            <div key={ph.id} style={{ flexShrink: 0, borderRadius: 16, overflow: 'hidden', border: '1px solid #E5E1D8',
                                       background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-              <div style={{ position: 'relative' }}>
+              <div style={{ position: 'relative', flexShrink: 0 }}>
                 <img src={ph.dataUrl} alt={`Photo ${i + 1}`}
                      onClick={() => setExpandedId(ph.id)}
-                     style={{ width: '100%', height: 120, display: 'block', cursor: 'zoom-in',
-                              objectFit: 'cover', objectPosition: 'center' }} />
+                     style={{ width: '100%', height: 160, minHeight: 160, display: 'block', cursor: 'zoom-in',
+                              objectFit: 'cover', objectPosition: 'center', flexShrink: 0 }} />
                 <button onClick={() => deletePhoto(ph.id)}
                   style={{ position: 'absolute', top: 8, right: 8, width: 32, height: 32,
                            borderRadius: '50%', background: 'rgba(0,0,0,0.5)', border: 'none',
@@ -3686,7 +3844,7 @@
                   <Ico.Trash />
                 </button>
               </div>
-              <div style={{ padding: 12 }}>
+              <div style={{ padding: 12, flexShrink: 0 }}>
                 <textarea
                   value={ph.note}
                   onChange={e => updateNote(ph.id, e.target.value)}
@@ -3782,6 +3940,7 @@
     if (type === 'sketch') return window.SketchPage;  // defined by sketch.js
     if (type === 'title')  return TitlePage;
     if (type === 'photo')  return PhotoPage;
+    if (type === 'notes')  return NotesPage;
     if (type === 'points') return DataPage;           // DataPage with locked PNEZD columns
     return DataPage;
   }
@@ -4254,6 +4413,7 @@
     const [templateModal, setTemplateModal] = useState(false);
     const [customTemplates, setCustomTemplates] = useState(() => DB.getCustomTemplates());
     const [openTbMenu, setOpenTbMenu]   = useState(null); // 'insert' | 'formulas' | 'view' | null
+    const [csvImportModal, setCsvImportModal] = useState(null); // null | { parsed, useHeader }
     const [menuPos, setMenuPos]         = useState({ top: 0, left: 0 }); // fixed-position for open dropdown
     // DMS keyboard — global setting persisted in localStorage, OFF by default
     const [dmsKeyboard, setDmsKeyboard] = useState(() => {
@@ -4991,6 +5151,87 @@
       inp.click();
     }
 
+    // ── CSV Import (generic data pages) ─────────────────────────────────────
+    function parseCSV(text) {
+      const lines = text.split(/\r?\n/);
+      const result = [];
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const row = [];
+        let cur = '', inQ = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') {
+            if (inQ && line[i+1] === '"') { cur += '"'; i++; }
+            else inQ = !inQ;
+          } else if (ch === ',' && !inQ) {
+            row.push(cur.trim()); cur = '';
+          } else {
+            cur += ch;
+          }
+        }
+        row.push(cur.trim());
+        result.push(row);
+      }
+      return result;
+    }
+
+    function importDataCSV() {
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = '.csv,.txt';
+      inp.onchange = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          try {
+            const parsed = parseCSV(ev.target.result);
+            if (!parsed.length) { toast({ message: 'CSV file appears to be empty.', type: 'error' }); return; }
+            // Auto-detect header: first row has non-numeric values
+            const firstRow = parsed[0];
+            const looksLikeHeader = firstRow.some(c => c && isNaN(Number(c)));
+            setCsvImportModal({ parsed, useHeader: looksLikeHeader });
+          } catch(err) {
+            toast({ message: 'Failed to parse CSV: ' + (err.message || 'unknown error'), type: 'error' });
+          }
+        };
+        reader.readAsText(file);
+      };
+      inp.click();
+    }
+
+    function confirmDataCSVImport(parsed, useHeader) {
+      if (rows.length > 0 || columns.length > 0) {
+        if (!window.confirm('This will replace all existing columns and rows. Continue?')) return;
+      }
+      const headerRow = useHeader ? parsed[0] : null;
+      const dataRows  = useHeader ? parsed.slice(1) : parsed;
+      if (!dataRows.length) { toast({ message: 'No data rows found.', type: 'error' }); setCsvImportModal(null); return; }
+      const colCount = Math.max(...parsed.map(r => r.length));
+      // Generate column labels: A, B, C … Z, AA, AB …
+      function colLabel(n) {
+        let s = '';
+        n++;
+        while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+        return s;
+      }
+      const newCols = Array.from({ length: colCount }, (_, i) => ({
+        id: 'ci_' + Date.now() + '_' + i,
+        label: (headerRow && headerRow[i]) ? headerRow[i] : colLabel(i),
+        colType: 'text',
+        width: 100,
+      }));
+      const newRows = dataRows.map((cols, ri) => {
+        const cells = {};
+        newCols.forEach((c, ci) => { cells[c.id] = cols[ci] ?? ''; });
+        return { id: 'r_' + (Date.now() + ri), cells };
+      });
+      DB.updatePage(projectId, page.id, { columns: newCols, rows: newRows });
+      onReload();
+      setCsvImportModal(null);
+      toast({ message: `Imported ${newRows.length} row${newRows.length !== 1 ? 's' : ''} with ${newCols.length} column${newCols.length !== 1 ? 's' : ''}.`, type: 'success' });
+    }
+
     // ── Column drag-and-drop ─────────────────────────────────────────
 
     function handleColDragStart(e, ci) {
@@ -5371,6 +5612,9 @@
               )}
               {page.type !== 'points' && (
                 <>
+                  <div className="dp-drop-sep" />
+                  <div className="dp-drop-section">Import</div>
+                  <button onClick={() => { importDataCSV(); setOpenTbMenu(null); }}>⬆ Import CSV…</button>
                   <div className="dp-drop-sep" />
                   <div className="dp-drop-section">Templates</div>
                   <button onClick={() => { setTemplateModal(true); setOpenTbMenu(null); }}>Apply Template…</button>
@@ -5838,6 +6082,56 @@
                 </button>
                 <button onClick={() => setColModal(null)} className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold text-sm">Cancel</button>
                 <button onClick={saveColModal} className="flex-1 py-3 rounded-xl text-white font-semibold text-sm" style={{ background: '#2D6A4F' }}>Save</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── CSV Import modal ── */}
+        {csvImportModal && (
+          <div className="modal-backdrop" onClick={() => setCsvImportModal(null)}>
+            <div className="modal-sheet" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+              <h2 className="text-lg font-bold text-fb-dark mb-1">Import CSV</h2>
+              <p className="text-fb-muted text-xs mb-4">
+                {csvImportModal.parsed.length} row{csvImportModal.parsed.length !== 1 ? 's' : ''} detected,&nbsp;
+                {Math.max(...csvImportModal.parsed.map(r => r.length))} column{Math.max(...csvImportModal.parsed.map(r => r.length)) !== 1 ? 's' : ''}.
+              </p>
+              {/* Header preview */}
+              <div style={{ background: '#F5F1E8', borderRadius: 8, padding: '8px 10px', marginBottom: 16,
+                            fontSize: 12, fontFamily: 'Courier New, monospace', color: '#1C3829',
+                            overflowX: 'auto', whiteSpace: 'nowrap' }}>
+                <strong>Row 1:</strong> {csvImportModal.parsed[0].map(c => `"${c}"`).join(', ')}
+              </div>
+              {/* Use first row as headers toggle */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            padding: '10px 12px', borderRadius: 10, background: '#F5F1E8', marginBottom: 20 }}>
+                <span style={{ fontSize: 14, color: '#1C3829', fontWeight: 500 }}>Use first row as column headers</span>
+                <button
+                  onClick={() => setCsvImportModal(m => ({ ...m, useHeader: !m.useHeader }))}
+                  style={{ padding: '4px 14px', borderRadius: 20, border: 'none', cursor: 'pointer',
+                           fontWeight: 700, fontSize: 12,
+                           background: csvImportModal.useHeader ? '#1C3829' : '#E5E1D8',
+                           color:      csvImportModal.useHeader ? '#FDFAF4'  : '#6B6560' }}>
+                  {csvImportModal.useHeader ? 'ON' : 'OFF'}
+                </button>
+              </div>
+              <p className="text-fb-muted text-xs mb-4" style={{ marginTop: -12 }}>
+                {csvImportModal.useHeader
+                  ? `Will import ${csvImportModal.parsed.length - 1} data row${csvImportModal.parsed.length - 1 !== 1 ? 's' : ''} using row 1 as headers.`
+                  : `Will import all ${csvImportModal.parsed.length} rows with auto-labelled columns (A, B, C…).`}
+              </p>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={() => setCsvImportModal(null)}
+                  style={{ flex: 1, padding: '12px 0', borderRadius: 12, border: '2px solid #E5E1D8',
+                           background: 'transparent', color: '#6B6560', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
+                  Cancel
+                </button>
+                <button onClick={() => confirmDataCSVImport(csvImportModal.parsed, csvImportModal.useHeader)}
+                  style={{ flex: 2, padding: '12px 0', borderRadius: 12, border: 'none',
+                           background: '#1C3829', color: '#FDFAF4', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
+                  Import
+                </button>
               </div>
             </div>
           </div>
