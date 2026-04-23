@@ -3565,31 +3565,31 @@
           </div>
           <div className="space-y-2">
             <button onClick={() => onCopyTo(page)}
-              className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-fb-mid/20"
-              style={{ background: 'rgba(255,255,255,0.06)' }}>
+              className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-gray-100"
+              style={{ background: '#f4f4f4' }}>
               → Copy to Project…
             </button>
             <button onClick={() => onExport(page)}
-              className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-fb-mid/20"
-              style={{ background: 'rgba(255,255,255,0.06)' }}>
+              className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-gray-100"
+              style={{ background: '#f4f4f4' }}>
               ↓ Export Page…
             </button>
             {hasChain && (
               <button onClick={() => onChain(page)}
-                className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-fb-mid/20"
-                style={{ background: 'rgba(255,255,255,0.06)' }}>
+                className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-gray-100"
+                style={{ background: '#f4f4f4' }}>
                 🕐 Page History
               </button>
             )}
             <button onClick={() => onDelete(page)}
-              className="w-full text-left px-4 py-3 rounded-xl font-medium transition-colors active:bg-red-900/30"
-              style={{ background: 'rgba(255,255,255,0.06)', color: '#f87171' }}>
+              className="w-full text-left px-4 py-3 rounded-xl font-medium transition-colors active:bg-red-100"
+              style={{ background: '#fff1f0', color: '#dc2626' }}>
               🗑 Delete Page
             </button>
           </div>
           <button onClick={onClose}
-            className="w-full mt-4 py-3 rounded-xl text-fb-muted font-medium transition-colors active:bg-fb-mid/10"
-            style={{ background: 'rgba(255,255,255,0.04)' }}>
+            className="w-full mt-4 py-3 rounded-xl text-fb-muted font-medium transition-colors active:bg-gray-100"
+            style={{ background: '#f4f4f4' }}>
             Cancel
           </button>
         </div>
@@ -3657,7 +3657,7 @@
                     </p>
                   </div>
                   <button onClick={() => doCopy(p)}
-                    className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors active:bg-fb-accent/80"
+                    className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg transition-opacity active:opacity-60"
                     style={{ background: '#2D6A4F', color: '#fff' }}>
                     Copy here
                   </button>
@@ -3849,8 +3849,8 @@
                 <div className="space-y-2 max-h-80 overflow-y-auto">
                   {allProjects.map(p => (
                     <button key={p.id} onClick={() => { setSrcProject(p); setSelected(new Set()); setStep(2); }}
-                      className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left transition-colors active:bg-fb-mid/10"
-                      style={{ background: 'rgba(0,0,0,0.04)' }}>
+                      className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left transition-colors active:bg-gray-200"
+                      style={{ background: '#f4f4f4' }}>
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-fb-text text-sm truncate">{p.name || 'Unnamed'}</p>
                         <p className="text-fb-muted text-xs">{p.jobNumber ? `#${p.jobNumber} · ` : ''}{(p.pages||[]).length} pages</p>
@@ -3879,8 +3879,8 @@
                   const sel = selected.has(pg.id);
                   return (
                     <button key={pg.id} onClick={() => togglePage(pg.id)}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors"
-                      style={{ background: sel ? 'rgba(45,106,79,0.12)' : 'rgba(0,0,0,0.04)', outline: sel ? '2px solid #2D6A4F' : 'none' }}>
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all active:opacity-70"
+                      style={{ background: sel ? 'rgba(45,106,79,0.12)' : '#f4f4f4', outline: sel ? '2px solid #2D6A4F' : 'none' }}>
                       <span className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider flex-shrink-0"
                         style={{ background: m.bg, color: m.color }}>{m.label}</span>
                       <span className="text-sm text-fb-text truncate flex-1">{pg.title || 'Untitled'}</span>
