@@ -4227,7 +4227,7 @@
             scrollable ancestor (which the browser prefers over canvas wheel handlers).
             All other page types keep overflow-y-auto + the safe-area bottom spacer. */}
         <div
-          className={`flex-1 screen-enter${page.type === 'sketch' ? ' overflow-hidden flex flex-col' : ' overflow-y-auto'}`}
+          className={`flex-1 screen-enter${(page.type === 'sketch' || page.type === 'photo') ? ' overflow-hidden flex flex-col' : ' overflow-y-auto'}`}
           onClick={() => showExportMenu && setShowExportMenu(false)}>
           <PageContent
             page={page}
@@ -4429,7 +4429,6 @@
         return;
       }
       setPhotos(next);
-      onReload?.();
     }
 
     async function handleFileInput(e) {
