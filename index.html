@@ -546,6 +546,12 @@
 <script type="text/babel">
   const { useState, useEffect, useRef, useCallback } = React;
 
+  // App version — shown in HomePage footer so Steve can visually confirm which
+  // build the PWA is actually running (SW caching on Android makes this
+  // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
+  // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
+  const APP_VERSION = '1.118';
+
   // Sketch engine (sketch.js) loads async. This promise gates the ReactDOM mount
   // so SketchPage is guaranteed to be defined before the app first renders.
   const _sketchPromise = new Promise(resolve => { window._resolveSketch = resolve; });
@@ -949,11 +955,20 @@
   function ToastProvider({ children }) {
     const [toasts, setToasts] = useState([]);
     const add = (msg, type = 'success') => {
-      const id = Date.now();
+      const id = Date.now() + Math.random();
       setToasts(prev => [...prev, { id, msg, type }]);
       setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3500);
     };
-    const toast = { success: msg => add(msg, 'success'), error: msg => add(msg, 'error') };
+    // `toast` is both callable AND has .success / .error — different callsites
+    // throughout the app use both patterns. Before this was an object-only API,
+    // which meant every `toast({message, type})` call silently threw and
+    // swallowed errors — a huge class of invisible failures on mobile.
+    const toast = (arg, maybeType) => {
+      if (arg && typeof arg === 'object') add(arg.message || '', arg.type || 'success');
+      else add(arg, maybeType || 'success');
+    };
+    toast.success = msg => add(msg, 'success');
+    toast.error   = msg => add(msg, 'error');
     return (
       <ToastContext.Provider value={toast}>
         {children}
@@ -1690,23 +1705,35 @@
             </>
           }
         />
-        <div className="flex-1 overflow-y-auto" style={{ background: '#F4F0E8' }}>
-          {projects.length === 0
-            ? <EmptyState onNew={() => setShowNew(true)} />
-            : (
-              <div className="p-4 space-y-3 screen-enter">
-                <p className="text-xs font-semibold text-fb-muted uppercase tracking-widest px-1 pt-1">
-                  {projects.length} Project{projects.length !== 1 ? 's' : ''}
-                </p>
-                {projects.map(p => (
-                  <ProjectCard key={p.id} project={p}
-                    onDelete={(e) => { e.stopPropagation(); setDelTarget(p.id); }}
-                    onRename={handleRename}
-                    onDuplicate={handleDuplicate} />
-                ))}
-              </div>
-            )
-          }
+        <div className="flex-1 overflow-y-auto flex flex-col" style={{ background: '#F4F0E8' }}>
+          <div className="flex-1">
+            {projects.length === 0
+              ? <EmptyState onNew={() => setShowNew(true)} />
+              : (
+                <div className="p-4 space-y-3 screen-enter">
+                  <p className="text-xs font-semibold text-fb-muted uppercase tracking-widest px-1 pt-1">
+                    {projects.length} Project{projects.length !== 1 ? 's' : ''}
+                  </p>
+                  {projects.map(p => (
+                    <ProjectCard key={p.id} project={p}
+                      onDelete={(e) => { e.stopPropagation(); setDelTarget(p.id); }}
+                      onRename={handleRename}
+                      onDuplicate={handleDuplicate} />
+                  ))}
+                </div>
+              )
+            }
+          </div>
+          {/* Version footer — visible build stamp. Bump APP_VERSION + sw.js
+              CACHE_NAME together on every deploy so Steve can confirm the
+              installed PWA is on the new build. */}
+          <footer style={{
+            textAlign: 'center', padding: '16px 16px max(16px, env(safe-area-inset-bottom))',
+            fontSize: 11, color: '#A0948A', fontFamily: 'Courier New, monospace',
+            letterSpacing: '0.05em',
+          }}>
+            FieldBook v{APP_VERSION}
+          </footer>
         </div>
 
         <input
@@ -4447,7 +4474,7 @@
       try {
         DB.updatePage(projectId, page.id, { photos: next });
       } catch (err) {
-        toast({ message: 'Photo not saved — storage full. Delete photos or old projects to free space.', type: 'error' });
+        toast.error('Photo not saved — storage full. Delete photos or old projects to free space.');
         return false;
       }
       photosRef.current = next;
@@ -4462,6 +4489,7 @@
       setUploading(true);
       let savedCount = 0;
       let failedCount = 0;
+      let quotaHit = false;
       // Process one at a time — parallel decode of multi-MP images via
       // Promise.all is what was OOM-killing the PWA on phones (camera capture
       // green-screen) and causing the "second photo vanishes" bug.
@@ -4474,18 +4502,25 @@
             dataUrl,
             note: '',
           }];
-          if (savePhotos(next)) savedCount++;
-          else { failedCount++; break; } // quota hit — no point continuing
+          if (savePhotos(next)) {
+            savedCount++;
+          } else {
+            // Quota hit — savePhotos already surfaced its own toast.
+            // Stop the loop; don't double-toast from the summary below.
+            quotaHit = true;
+            break;
+          }
         } catch (err) {
           failedCount++;
           console.error('Photo import failed:', err);
         }
       }
       setUploading(false);
+      if (quotaHit) return;
       if (failedCount > 0 && savedCount === 0) {
-        toast({ message: 'Failed to import image.', type: 'error' });
+        toast.error('Failed to import image.');
       } else if (failedCount > 0) {
-        toast({ message: `Imported ${savedCount} of ${savedCount + failedCount} photos.`, type: 'error' });
+        toast.error(`Imported ${savedCount} of ${savedCount + failedCount} photos.`);
       }
     }
 
