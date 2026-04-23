@@ -4244,29 +4244,42 @@
   // ─────────────────────────────────────────────────────────────────────────────
   // IMAGE COMPRESSION UTILITY
   // Resizes + compresses an image File to a JPEG base64 data URI.
+  // Uses a Blob URL (not FileReader.readAsDataURL) to avoid allocating a huge
+  // base64 string in memory before decode — critical on mobile where a 12MP
+  // camera JPEG otherwise doubles peak RAM and can OOM-kill the PWA.
+  // maxDim 1600 + quality 0.65 = good fieldbook quality at ~150-300KB per photo.
   // Used by PhotoPage and exposed via window._fb so sketch.js can call it.
   // ─────────────────────────────────────────────────────────────────────────────
-  function compressImage(file, maxDim = 1920, quality = 0.7) {
+  function compressImage(file, maxDim = 1600, quality = 0.65) {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = reject;
-      reader.onload = (e) => {
-        const img = new Image();
-        img.onerror = reject;
-        img.onload = () => {
-          let { width: w, height: h } = img;
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      const cleanup = () => URL.revokeObjectURL(url);
+      img.onerror = (e) => { cleanup(); reject(e); };
+      img.onload = () => {
+        try {
+          let w = img.naturalWidth || img.width;
+          let h = img.naturalHeight || img.height;
+          if (!w || !h) { cleanup(); reject(new Error('Image has no dimensions')); return; }
           if (w > maxDim || h > maxDim) {
             if (w >= h) { h = Math.round(h * maxDim / w); w = maxDim; }
             else        { w = Math.round(w * maxDim / h); h = maxDim; }
           }
           const c = document.createElement('canvas');
           c.width = w; c.height = h;
-          c.getContext('2d').drawImage(img, 0, 0, w, h);
-          resolve(c.toDataURL('image/jpeg', quality));
-        };
-        img.src = e.target.result;
+          const ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          const dataUrl = c.toDataURL('image/jpeg', quality);
+          // Free the canvas immediately (helps on iOS where canvas buffers are limited)
+          c.width = 0; c.height = 0;
+          cleanup();
+          resolve(dataUrl);
+        } catch (err) {
+          cleanup();
+          reject(err);
+        }
       };
-      reader.readAsDataURL(file);
+      img.src = url;
     });
   }
 
@@ -4407,9 +4420,16 @@
   function PhotoPage({ page, projectId, onReload, onRegisterExports }) {
     const [photos, setPhotos] = useState(page.photos || []);
     const [expandedId, setExpandedId] = useState(null);
+    const [uploading, setUploading] = useState(false);
     const fileRef = useRef(null);
     const camRef  = useRef(null);
     const toast   = useToast();
+
+    // Ref mirrors the photos state so async handlers always see the latest
+    // array after awaits, avoiding the stale-closure bug that caused the
+    // second upload to clobber or drop the first.
+    const photosRef = useRef(photos);
+    useEffect(() => { photosRef.current = photos; }, [photos]);
 
     useEffect(() => { setPhotos(page.photos || []); }, [page.id]);
 
@@ -4421,38 +4441,60 @@
       });
     }, [page, photos]);
 
+    // Persist a specific `next` array to both DB and component state.
+    // Returns true on success, false if localStorage threw (quota exceeded).
     function savePhotos(next) {
       try {
         DB.updatePage(projectId, page.id, { photos: next });
       } catch (err) {
         toast({ message: 'Photo not saved — storage full. Delete photos or old projects to free space.', type: 'error' });
-        return;
+        return false;
       }
+      photosRef.current = next;
       setPhotos(next);
+      return true;
     }
 
     async function handleFileInput(e) {
       const files = Array.from(e.target.files || []);
       e.target.value = '';
       if (!files.length) return;
-      try {
-        const added = await Promise.all(files.map(async f => ({
-          id: 'ph_' + Date.now() + '_' + Math.random().toString(36).slice(2),
-          dataUrl: await compressImage(f),
-          note: '',
-        })));
-        savePhotos([...photos, ...added]);
-      } catch (err) {
+      setUploading(true);
+      let savedCount = 0;
+      let failedCount = 0;
+      // Process one at a time — parallel decode of multi-MP images via
+      // Promise.all is what was OOM-killing the PWA on phones (camera capture
+      // green-screen) and causing the "second photo vanishes" bug.
+      // Save after each photo so a mid-batch crash still retains earlier ones.
+      for (const f of files) {
+        try {
+          const dataUrl = await compressImage(f);
+          const next = [...photosRef.current, {
+            id: 'ph_' + Date.now() + '_' + Math.random().toString(36).slice(2),
+            dataUrl,
+            note: '',
+          }];
+          if (savePhotos(next)) savedCount++;
+          else { failedCount++; break; } // quota hit — no point continuing
+        } catch (err) {
+          failedCount++;
+          console.error('Photo import failed:', err);
+        }
+      }
+      setUploading(false);
+      if (failedCount > 0 && savedCount === 0) {
         toast({ message: 'Failed to import image.', type: 'error' });
+      } else if (failedCount > 0) {
+        toast({ message: `Imported ${savedCount} of ${savedCount + failedCount} photos.`, type: 'error' });
       }
     }
 
     function updateNote(id, note) {
-      savePhotos(photos.map(p => p.id === id ? { ...p, note } : p));
+      savePhotos(photosRef.current.map(p => p.id === id ? { ...p, note } : p));
     }
 
     function deletePhoto(id) {
-      savePhotos(photos.filter(p => p.id !== id));
+      savePhotos(photosRef.current.filter(p => p.id !== id));
     }
 
     return (
@@ -4465,17 +4507,21 @@
                onChange={handleFileInput} />
         {/* Add buttons */}
         <div style={{ display: 'flex', gap: 12, padding: '12px 16px', borderBottom: '1px solid #E5E1D8' }}>
-          <button onClick={() => camRef.current?.click()}
+          <button onClick={() => !uploading && camRef.current?.click()}
+            disabled={uploading}
             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                      padding: '12px 0', borderRadius: 14, background: '#1C3829', color: '#FDFAF4',
-                     fontWeight: 600, fontSize: 14, border: 'none', cursor: 'pointer' }}>
-            <Ico.Camera /> Camera
+                     fontWeight: 600, fontSize: 14, border: 'none',
+                     cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? 0.6 : 1 }}>
+            <Ico.Camera /> {uploading ? 'Importing…' : 'Camera'}
           </button>
-          <button onClick={() => fileRef.current?.click()}
+          <button onClick={() => !uploading && fileRef.current?.click()}
+            disabled={uploading}
             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                      padding: '12px 0', borderRadius: 14, background: 'transparent', color: '#1C3829',
-                     fontWeight: 600, fontSize: 14, border: '2px solid #1C3829', cursor: 'pointer' }}>
-            <Ico.Download /> Upload
+                     fontWeight: 600, fontSize: 14, border: '2px solid #1C3829',
+                     cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? 0.6 : 1 }}>
+            <Ico.Download /> {uploading ? 'Importing…' : 'Upload'}
           </button>
         </div>
         {/* Photo cards — minHeight:0 lets the flex child scroll instead of shrink */}
