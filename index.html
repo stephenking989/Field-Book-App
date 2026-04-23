@@ -550,7 +550,153 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.118';
+  const APP_VERSION = '1.119';
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PHOTO STORAGE — IndexedDB
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Photos used to live inside each project's JSON in localStorage. That caps
+  // at ~5–10 MB per origin on mobile browsers, and a single fieldbook with a
+  // few dozen photos blows past it. `photoDB` stores JPEG dataUrls in a
+  // dedicated IndexedDB so the localStorage budget is freed up for everything
+  // else (projects, pages, shapes, notes, data rows).
+  //
+  // Page schema change:
+  //   OLD: photos = [{ id, note, dataUrl }]
+  //   NEW: photos = [{ id, note, photoRef }]
+  // `photoRef` is a string key into the IDB `photos` store. The dataUrl is
+  // resolved lazily in the UI and inlined for export/PDF.
+  const photoDB = (() => {
+    const DB_NAME  = 'fieldbook-photos';
+    const STORE    = 'photos';
+    const VERSION  = 1;
+    let _dbPromise = null;
+
+    function open() {
+      if (_dbPromise) return _dbPromise;
+      _dbPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, VERSION);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror   = () => reject(req.error);
+      });
+      return _dbPromise;
+    }
+
+    function tx(mode) {
+      return open().then(db => db.transaction(STORE, mode).objectStore(STORE));
+    }
+
+    function newRef() {
+      return 'p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+    }
+
+    async function put(ref, dataUrl) {
+      const store = await tx('readwrite');
+      return new Promise((resolve, reject) => {
+        const r = store.put(dataUrl, ref);
+        r.onsuccess = () => resolve(ref);
+        r.onerror   = () => reject(r.error);
+      });
+    }
+
+    async function get(ref) {
+      if (!ref) return null;
+      const store = await tx('readonly');
+      return new Promise((resolve, reject) => {
+        const r = store.get(ref);
+        r.onsuccess = () => resolve(r.result || null);
+        r.onerror   = () => reject(r.error);
+      });
+    }
+
+    async function getMany(refs) {
+      if (!refs || refs.length === 0) return {};
+      const store = await tx('readonly');
+      const out = {};
+      await Promise.all(refs.map(ref => new Promise((resolve) => {
+        const r = store.get(ref);
+        r.onsuccess = () => { if (r.result) out[ref] = r.result; resolve(); };
+        r.onerror   = () => resolve();
+      })));
+      return out;
+    }
+
+    async function del(ref) {
+      if (!ref) return;
+      const store = await tx('readwrite');
+      return new Promise((resolve, reject) => {
+        const r = store.delete(ref);
+        r.onsuccess = () => resolve();
+        r.onerror   = () => reject(r.error);
+      });
+    }
+
+    async function deleteMany(refs) {
+      if (!refs || refs.length === 0) return;
+      const store = await tx('readwrite');
+      return new Promise((resolve, reject) => {
+        let remaining = refs.length;
+        let failed = false;
+        refs.forEach(ref => {
+          const r = store.delete(ref);
+          r.onsuccess = () => { if (--remaining === 0 && !failed) resolve(); };
+          r.onerror   = () => { if (!failed) { failed = true; reject(r.error); } };
+        });
+      });
+    }
+
+    async function keys() {
+      const store = await tx('readonly');
+      return new Promise((resolve, reject) => {
+        const r = store.getAllKeys();
+        r.onsuccess = () => resolve(r.result || []);
+        r.onerror   = () => reject(r.error);
+      });
+    }
+
+    async function getUsageBytes() {
+      // Sum all dataUrl lengths. dataUrls are strings, so this is bytes-as-chars.
+      // Good enough for a storage gauge; exact byte count isn't worth another pass.
+      const store = await tx('readonly');
+      return new Promise((resolve, reject) => {
+        let total = 0;
+        const req = store.openCursor();
+        req.onsuccess = (e) => {
+          const cur = e.target.result;
+          if (cur) {
+            if (typeof cur.value === 'string') total += cur.value.length;
+            cur.continue();
+          } else {
+            resolve(total);
+          }
+        };
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    // Walk all projects' photo arrays and delete any IDB entries no longer
+    // referenced. Called after bulk deletes (project/page removal, import).
+    async function pruneOrphans(allProjects) {
+      const live = new Set();
+      (allProjects || []).forEach(proj => {
+        (proj.pages || []).forEach(pg => {
+          (pg.photos || []).forEach(ph => {
+            if (ph && ph.photoRef) live.add(ph.photoRef);
+          });
+        });
+      });
+      const all = await keys();
+      const orphans = all.filter(k => !live.has(k));
+      if (orphans.length) await deleteMany(orphans);
+      return orphans.length;
+    }
+
+    return { open, put, get, getMany, del, deleteMany, keys, getUsageBytes, pruneOrphans, newRef };
+  })();
 
   // Sketch engine (sketch.js) loads async. This promise gates the ReactDOM mount
   // so SketchPage is guaranteed to be defined before the app first renders.
@@ -1082,6 +1228,47 @@
     const fileInputRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
 
+    // Storage usage gauge: localStorage bytes for projects/pages/shapes/etc
+    // vs IndexedDB bytes for photos. Tracked separately because they have
+    // independent caps (localStorage ~5-10 MB, IDB 60%+ of free disk).
+    const [usage, setUsage] = useState({ ls: 0, idb: 0, quota: null });
+
+    useEffect(() => {
+      (async () => {
+        let lsBytes = 0;
+        try { lsBytes = (localStorage.getItem('fb_projects') || '').length; } catch {}
+        let idbBytes = 0;
+        try { idbBytes = await photoDB.getUsageBytes(); } catch {}
+        let quota = null;
+        try {
+          if (navigator.storage?.estimate) {
+            const est = await navigator.storage.estimate();
+            quota = est.quota || null;
+          }
+        } catch {}
+        setUsage({ ls: lsBytes, idb: idbBytes, quota });
+      })();
+    }, []);
+
+    function fmtMB(bytes) {
+      if (bytes < 1024)   return `${bytes} B`;
+      if (bytes < 1e6)    return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / 1e6).toFixed(1)} MB`;
+    }
+
+    async function doPrune() {
+      try {
+        const n = await photoDB.pruneOrphans(DB.getProjects());
+        if (n > 0) toast.success(`Cleaned up ${n} orphan photo${n === 1 ? '' : 's'}`);
+        else       toast.success('No orphan photos found');
+        // Refresh gauge
+        const idbBytes = await photoDB.getUsageBytes();
+        setUsage(u => ({ ...u, idb: idbBytes }));
+      } catch (err) {
+        toast.error('Cleanup failed');
+      }
+    }
+
     function exportBackup() {
       const data = localStorage.getItem('fb_projects') || '[]';
       const date = new Date().toISOString().split('T')[0];
@@ -1129,7 +1316,35 @@
         <div ref={trapRef} className="modal-sheet">
           <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
           <h2 className="text-xl font-bold text-fb-dark mb-1">Data Management</h2>
-          <p className="text-fb-muted text-sm mb-5">Back up or restore all projects as a JSON file stored on your device.</p>
+          <p className="text-fb-muted text-sm mb-4">Back up or restore all projects. Photos live in a separate IndexedDB with its own storage budget.</p>
+
+          {/* Storage gauge */}
+          <div style={{ borderRadius: 12, border: '1px solid #DDD6C8', background: '#F7F3EA', padding: 12, marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#2C2C2C', marginBottom: 8 }}>Storage</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6B7280', marginBottom: 4 }}>
+              <span>Projects &amp; data (localStorage)</span>
+              <span style={{ fontFamily: 'Courier New, monospace', color: '#2C2C2C' }}>{fmtMB(usage.ls)}</span>
+            </div>
+            <div style={{ height: 6, borderRadius: 4, background: '#E5E1D8', overflow: 'hidden', marginBottom: 10 }}>
+              <div style={{ height: '100%', width: `${Math.min(100, usage.ls / 5e6 * 100)}%`, background: '#2D6A4F' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6B7280', marginBottom: 4 }}>
+              <span>Photos (IndexedDB)</span>
+              <span style={{ fontFamily: 'Courier New, monospace', color: '#2C2C2C' }}>
+                {fmtMB(usage.idb)}{usage.quota ? ` / ${fmtMB(usage.quota)}` : ''}
+              </span>
+            </div>
+            <div style={{ height: 6, borderRadius: 4, background: '#E5E1D8', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${usage.quota ? Math.min(100, usage.idb / usage.quota * 100) : 0}%`, background: '#7C3AED' }} />
+            </div>
+            <button onClick={doPrune}
+              style={{ marginTop: 10, width: '100%', padding: '8px 0', borderRadius: 8,
+                       border: '1px solid #DDD6C8', background: '#FDFAF4', fontSize: 12,
+                       fontWeight: 600, color: '#2C2C2C', cursor: 'pointer' }}>
+              Clean up unused photos
+            </button>
+          </div>
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <button onClick={exportBackup} style={btnStyle}>
               <span style={{ fontSize: 22 }}>⬇</span>
@@ -1172,9 +1387,62 @@
     return 'Unknown';
   }
 
+  // Walk a project|page shape and inline photoRef → dataUrl from photoDB so
+  // the exported file is self-contained across devices. Returns a mutated
+  // *copy* of the input; photoRef is dropped from the copy, dataUrl is set.
+  async function inlinePhotosForExport(projOrPage) {
+    const clone = JSON.parse(JSON.stringify(projOrPage));
+    const pages = clone.pages ? clone.pages : [clone];
+    const allRefs = [];
+    pages.forEach(pg => (pg.photos || []).forEach(ph => {
+      if (ph && ph.photoRef) allRefs.push(ph.photoRef);
+    }));
+    if (allRefs.length === 0) return clone;
+    const map = await photoDB.getMany(allRefs);
+    pages.forEach(pg => {
+      if (!Array.isArray(pg.photos)) return;
+      pg.photos = pg.photos.map(ph => {
+        if (ph && ph.photoRef && map[ph.photoRef]) {
+          const { photoRef, ...rest } = ph;
+          return { ...rest, dataUrl: map[photoRef] };
+        }
+        return ph;
+      });
+    });
+    return clone;
+  }
+
+  // Reverse of inlinePhotosForExport — after importing, move any inline
+  // dataUrls into photoDB and replace with fresh photoRef keys. Mutates in
+  // place. Returns the mutated input.
+  async function extractPhotosFromImport(projOrPage) {
+    const pages = projOrPage.pages ? projOrPage.pages : [projOrPage];
+    for (const pg of pages) {
+      if (!Array.isArray(pg.photos)) continue;
+      const next = [];
+      for (const ph of pg.photos) {
+        if (ph && ph.dataUrl && !ph.photoRef) {
+          try {
+            const ref = photoDB.newRef();
+            await photoDB.put(ref, ph.dataUrl);
+            const { dataUrl, ...rest } = ph;
+            next.push({ ...rest, photoRef: ref });
+          } catch (err) {
+            console.error('Photo extract-on-import failed:', err);
+            next.push(ph); // fall back to keeping inline
+          }
+        } else {
+          next.push(ph);
+        }
+      }
+      pg.photos = next;
+    }
+    return projOrPage;
+  }
+
   // Build and trigger a .fieldbook file download for a project.
   // Appends an export record to the chain and persists it locally too.
-  function exportProjectToFile(project, by, location) {
+  async function exportProjectToFile(project, by, location) {
     const chain = project.exportChain || [];
     const record = {
       seq:       chain.length + 1,
@@ -1190,11 +1458,14 @@
     // Persist the updated chain on this device
     DB.updateProject(project.id, { exportChain: updatedChain });
 
+    // Inline photo dataUrls so the exported file is portable across devices.
+    const projectWithPhotos = await inlinePhotosForExport({ ...project, exportChain: updatedChain });
+
     const exportData = {
       type:       'fieldbook_project_export',
       version:    '1',
       exportedAt: record.timestamp,
-      project:    { ...project, exportChain: updatedChain },
+      project:    projectWithPhotos,
     };
 
     const safeName = (project.name || 'project').replace(/[^a-z0-9_\-]/gi, '_');
@@ -1214,7 +1485,7 @@
 
   // Import a .fieldbook file's project into local storage.
   // Appends an import record and assigns new IDs so it doesn't collide.
-  function importProjectFromData(fileData, importerName) {
+  async function importProjectFromData(fileData, importerName) {
     const srcProject = fileData.project;
     const chain      = srcProject.exportChain || [];
     const importRecord = {
@@ -1241,6 +1512,10 @@
         rows: (pg.rows || []).map(r => ({ ...r, id: uid() })),
       })),
     };
+
+    // Move any inline photo dataUrls into photoDB so the project lives under
+    // the new photoRef scheme after import.
+    await extractPhotosFromImport(newProject);
 
     const existing = DB.getProjects();
     DB.saveProjects([newProject, ...existing]);
@@ -1299,7 +1574,7 @@
 
   // Export a single page to a .fieldbook-page file.
   // Appends export record to the page's chain and persists it.
-  function exportPageToFile(page, projectName, by, location, toastFn) {
+  async function exportPageToFile(page, projectName, by, location, toastFn) {
     const chain = page.pageChain || [];
     const record = {
       seq:         chain.length + 1,
@@ -1315,6 +1590,9 @@
     const updatedChain = [...chain, record];
     DB.updatePage(page._projectId || '', page.id, { pageChain: updatedChain });
 
+    // Inline photoRef dataUrls so the .fieldbook-page file is self-contained.
+    const pageWithPhotos = await inlinePhotosForExport({ ...page, pageChain: updatedChain });
+
     const exportData = {
       type:       'fieldbook_page_export',
       version:    '1',
@@ -1324,7 +1602,7 @@
         pageTitle:   page.title  || '',
         pageType:    page.type   || '',
       },
-      page: { ...page, pageChain: updatedChain },
+      page: pageWithPhotos,
     };
 
     const safeName = (page.title || 'page').replace(/[^a-z0-9_\-]/gi, '_');
@@ -1345,7 +1623,7 @@
 
   // Import a .fieldbook-page file into a project.
   // Validates format, assigns fresh IDs, appends import chain record.
-  function importPageFromData(fileData, toProjectId, importerName) {
+  async function importPageFromData(fileData, toProjectId, importerName) {
     if (fileData.type !== 'fieldbook_page_export') {
       throw new Error('Not a valid .fieldbook-page file');
     }
@@ -1365,6 +1643,8 @@
     });
     cloned.pageChain = chain;
     delete cloned.pageNumber;
+    // Move inlined photo dataUrls into photoDB.
+    await extractPhotosFromImport(cloned);
     DB.addPage(toProjectId, cloned);
     return cloned;
   }
@@ -1379,8 +1659,8 @@
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
 
-    function doExport() {
-      exportProjectToFile(project, by.trim(), location.trim());
+    async function doExport() {
+      await exportProjectToFile(project, by.trim(), location.trim());
       onDone();
     }
 
@@ -1429,8 +1709,8 @@
     const lastExp   = [...chain].reverse().find(r => r.action === 'export');
     const pageCount = src.pages?.length || 0;
 
-    function doImport() {
-      const proj = importProjectFromData(fileData, importerName.trim());
+    async function doImport() {
+      const proj = await importProjectFromData(fileData, importerName.trim());
       onImported(proj);
     }
 
@@ -2759,19 +3039,23 @@
             let py = contentY + 4;
             const fullImgW = W - margin * 2;
             const maxPhotoH = 180; // mm — portrait images scale down and centre
+            const urls = await resolvePhotoUrls(pagePhotos);
             for (const ph of pagePhotos) {
-              try {
-                const tmp = new Image();
-                await new Promise(res => { tmp.onload = res; tmp.onerror = res; tmp.src = ph.dataUrl; });
-                const aspect = (tmp.naturalWidth || 4) / (tmp.naturalHeight || 3);
-                let imgW = fullImgW;
-                let imgH = imgW / aspect;
-                if (imgH > maxPhotoH) { imgH = maxPhotoH; imgW = imgH * aspect; }
-                const x = margin + (fullImgW - imgW) / 2; // centre portrait images
-                if (py + imgH > H - margin - 10) { pdf.addPage(); py = margin + 4; }
-                pdf.addImage(ph.dataUrl, 'JPEG', x, py, imgW, imgH);
-                py += imgH + 2;
-              } catch { /* skip unloadable image */ }
+              const url = urls[ph.id];
+              if (url) {
+                try {
+                  const tmp = new Image();
+                  await new Promise(res => { tmp.onload = res; tmp.onerror = res; tmp.src = url; });
+                  const aspect = (tmp.naturalWidth || 4) / (tmp.naturalHeight || 3);
+                  let imgW = fullImgW;
+                  let imgH = imgW / aspect;
+                  if (imgH > maxPhotoH) { imgH = maxPhotoH; imgW = imgH * aspect; }
+                  const x = margin + (fullImgW - imgW) / 2; // centre portrait images
+                  if (py + imgH > H - margin - 10) { pdf.addPage(); py = margin + 4; }
+                  pdf.addImage(url, 'JPEG', x, py, imgW, imgH);
+                  py += imgH + 2;
+                } catch { /* skip unloadable image */ }
+              }
               if (ph.note?.trim()) {
                 pdf.setFontSize(8); pdf.setTextColor(60, 60, 60);
                 const lines = pdf.splitTextToSize(ph.note.trim(), fullImgW);
@@ -3708,9 +3992,9 @@
     const [by,       setBy]       = useState(() => localStorage.getItem('fb_lastExportName') || '');
     const [location, setLocation] = useState('');
 
-    function doExport() {
+    async function doExport() {
       localStorage.setItem('fb_lastExportName', by.trim());
-      exportPageToFile({ ...page, _projectId: project.id }, project.name || '', by.trim(), location.trim(), toast);
+      await exportPageToFile({ ...page, _projectId: project.id }, project.name || '', by.trim(), location.trim(), toast);
       onDone();
     }
 
@@ -3774,9 +4058,9 @@
     const chain = page.pageChain || [];
     const meta = TYPE_META[sourceMeta.pageType] || TYPE_META.data;
 
-    function doImport() {
+    async function doImport() {
       localStorage.setItem('fb_lastExportName', importerName.trim());
-      importPageFromData(fileData, toProjectId, importerName.trim());
+      await importPageFromData(fileData, toProjectId, importerName.trim());
       onDone();
     }
 
@@ -4277,7 +4561,7 @@
   // maxDim 1600 + quality 0.65 = good fieldbook quality at ~150-300KB per photo.
   // Used by PhotoPage and exposed via window._fb so sketch.js can call it.
   // ─────────────────────────────────────────────────────────────────────────────
-  function compressImage(file, maxDim = 1600, quality = 0.65) {
+  function compressImage(file, maxDim = 1400, quality = 0.6) {
     return new Promise((resolve, reject) => {
       const url = URL.createObjectURL(file);
       const img = new Image();
@@ -4446,6 +4730,7 @@
 
   function PhotoPage({ page, projectId, onReload, onRegisterExports }) {
     const [photos, setPhotos] = useState(page.photos || []);
+    const [urlMap, setUrlMap] = useState({}); // photoRef -> dataUrl, for rendering
     const [expandedId, setExpandedId] = useState(null);
     const [uploading, setUploading] = useState(false);
     const fileRef = useRef(null);
@@ -4458,15 +4743,69 @@
     const photosRef = useRef(photos);
     useEffect(() => { photosRef.current = photos; }, [photos]);
 
-    useEffect(() => { setPhotos(page.photos || []); }, [page.id]);
+    // On page mount: (1) lazy-migrate any legacy inline-dataUrl photos into
+    // photoDB (IDB) so they share the same photoRef model as new photos, and
+    // (2) load all referenced dataUrls into `urlMap` for rendering.
+    useEffect(() => {
+      let cancelled = false;
+      (async () => {
+        const raw = page.photos || [];
+        let migrated = raw;
+        let didMigrate = false;
+
+        // Migrate legacy entries — those with a dataUrl but no photoRef.
+        const legacy = raw.filter(p => p && p.dataUrl && !p.photoRef);
+        if (legacy.length) {
+          const updates = {};
+          for (const ph of legacy) {
+            try {
+              const ref = photoDB.newRef();
+              await photoDB.put(ref, ph.dataUrl);
+              updates[ph.id] = ref;
+            } catch (err) {
+              console.error('Photo migration failed:', err);
+            }
+          }
+          migrated = raw.map(p => {
+            if (updates[p.id]) {
+              const { dataUrl, ...rest } = p;
+              return { ...rest, photoRef: updates[p.id] };
+            }
+            return p;
+          });
+          try {
+            DB.updatePage(projectId, page.id, { photos: migrated });
+            didMigrate = true;
+          } catch (err) {
+            console.error('Failed to save migrated photos:', err);
+          }
+        }
+
+        // Resolve all current refs into the urlMap.
+        const refs = migrated.map(p => p.photoRef).filter(Boolean);
+        const map  = await photoDB.getMany(refs);
+
+        // Also keep any inline dataUrls from unmigrated entries so they still render.
+        migrated.forEach(p => {
+          if (!p.photoRef && p.dataUrl) map[p.id] = p.dataUrl;
+        });
+
+        if (cancelled) return;
+        photosRef.current = migrated;
+        setPhotos(migrated);
+        setUrlMap(map);
+        if (didMigrate) toast.success(`Upgraded ${legacy.length} photo${legacy.length === 1 ? '' : 's'} to new storage.`);
+      })();
+      return () => { cancelled = true; };
+    }, [page.id]);
 
     // Register per-page PDF export so the header export button works
     useEffect(() => {
       if (!onRegisterExports) return;
       onRegisterExports({
-        exportPage: () => exportPhotoPDF(page, photos, toast),
+        exportPage: () => exportPhotoPDF(page, photos, urlMap, toast),
       });
-    }, [page, photos]);
+    }, [page, photos, urlMap]);
 
     // Persist a specific `next` array to both DB and component state.
     // Returns true on success, false if localStorage threw (quota exceeded).
@@ -4480,6 +4819,14 @@
       photosRef.current = next;
       setPhotos(next);
       return true;
+    }
+
+    // Resolve a photo record to its dataUrl for rendering/export.
+    function photoUrl(ph) {
+      if (!ph) return null;
+      if (ph.photoRef && urlMap[ph.photoRef]) return urlMap[ph.photoRef];
+      if (ph.dataUrl) return ph.dataUrl; // unmigrated legacy fallback
+      return null;
     }
 
     async function handleFileInput(e) {
@@ -4497,16 +4844,20 @@
       for (const f of files) {
         try {
           const dataUrl = await compressImage(f);
+          const ref = photoDB.newRef();
+          await photoDB.put(ref, dataUrl);
           const next = [...photosRef.current, {
             id: 'ph_' + Date.now() + '_' + Math.random().toString(36).slice(2),
-            dataUrl,
+            photoRef: ref,
             note: '',
           }];
           if (savePhotos(next)) {
+            setUrlMap(m => ({ ...m, [ref]: dataUrl }));
             savedCount++;
           } else {
-            // Quota hit — savePhotos already surfaced its own toast.
-            // Stop the loop; don't double-toast from the summary below.
+            // localStorage quota hit — the page-level save failed, so the ref
+            // would be orphaned. Clean up the IDB entry we just wrote.
+            try { await photoDB.del(ref); } catch {}
             quotaHit = true;
             break;
           }
@@ -4529,7 +4880,28 @@
     }
 
     function deletePhoto(id) {
-      savePhotos(photosRef.current.filter(p => p.id !== id));
+      const toRemove = photosRef.current.find(p => p.id === id);
+      const next = photosRef.current.filter(p => p.id !== id);
+      if (!savePhotos(next)) return;
+      // Lazy IDB cleanup — pruneOrphans handles this safely at app-level, so
+      // we don't need to worry about duplicate pages sharing a ref. Only
+      // remove if we're confident no other page references it on this project.
+      // Simplest correct behaviour: don't delete from IDB here. pruneOrphans
+      // (DataManagementModal button + app launch) will sweep unreferenced
+      // entries. Photos deleted here just drop from page.photos in localStorage.
+      if (toRemove && toRemove.photoRef) {
+        // Non-blocking best-effort cleanup if the ref appears nowhere else.
+        // Safe because pruneOrphans will catch anything we miss.
+        queueMicrotask(() => {
+          try {
+            const projects = DB.getProjects();
+            const stillReferenced = projects.some(pr =>
+              (pr.pages || []).some(pg =>
+                (pg.photos || []).some(ph => ph.photoRef === toRemove.photoRef)));
+            if (!stillReferenced) photoDB.del(toRemove.photoRef).catch(() => {});
+          } catch {}
+        });
+      }
     }
 
     return (
@@ -4570,7 +4942,7 @@
             <div key={ph.id} style={{ flexShrink: 0, borderRadius: 16, overflow: 'hidden', border: '1px solid #E5E1D8',
                                       background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
               <div style={{ position: 'relative', flexShrink: 0 }}>
-                <img src={ph.dataUrl} alt={`Photo ${i + 1}`}
+                <img src={photoUrl(ph) || ''} alt={`Photo ${i + 1}`}
                      onClick={() => setExpandedId(ph.id)}
                      style={{ width: '100%', height: 160, minHeight: 160, display: 'block', cursor: 'zoom-in',
                               objectFit: 'cover', objectPosition: 'center', flexShrink: 0 }} />
@@ -4608,7 +4980,7 @@
                           display: 'flex', flexDirection: 'column',
                           alignItems: 'center', justifyContent: 'center',
                           cursor: 'zoom-out', padding: '12px 8px' }}>
-              <img src={lbPhoto.dataUrl}
+              <img src={photoUrl(lbPhoto) || ''}
                    style={{ maxWidth: '96vw', maxHeight: '80vh',
                             objectFit: 'contain', borderRadius: 6,
                             boxShadow: '0 4px 32px rgba(0,0,0,0.6)',
@@ -4630,8 +5002,35 @@
     );
   }
 
+  // Resolve a list of photo records into a `{ id -> dataUrl }` map for export.
+  // Prefers the caller's urlMap (already loaded in PhotoPage) and falls back
+  // to a photoDB lookup for each missing ref. Legacy inline dataUrl photos
+  // pass through unchanged.
+  async function resolvePhotoUrls(photos, urlMap) {
+    urlMap = urlMap || {};
+    const out = {};
+    const missing = [];
+    for (const ph of (photos || [])) {
+      if (!ph) continue;
+      if (ph.photoRef && urlMap[ph.photoRef]) {
+        out[ph.id] = urlMap[ph.photoRef];
+      } else if (ph.photoRef) {
+        missing.push(ph);
+      } else if (ph.dataUrl) {
+        out[ph.id] = ph.dataUrl;
+      }
+    }
+    if (missing.length) {
+      const map = await photoDB.getMany(missing.map(p => p.photoRef));
+      for (const ph of missing) {
+        if (map[ph.photoRef]) out[ph.id] = map[ph.photoRef];
+      }
+    }
+    return out;
+  }
+
   // Single-page photo PDF export (used by per-page export button)
-  async function exportPhotoPDF(page, photos, toast) {
+  async function exportPhotoPDF(page, photos, urlMap, toast) {
     if (!window.jspdf) { toast({ message: 'PDF library not loaded.', type: 'error' }); return; }
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
@@ -4643,23 +5042,27 @@
     const fullImgW = W - margin * 2;
     const maxPhotoH = 180; // mm — max height per photo; portrait images scale down and centre
     let py = contentY + 4;
+    const urls = await resolvePhotoUrls(photos, urlMap);
     if (!photos || photos.length === 0) {
       pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
       pdf.text('(No photos)', W / 2, py + 10, { align: 'center' });
     } else {
       for (const ph of photos) {
-        try {
-          const tmp = new Image();
-          await new Promise(res => { tmp.onload = res; tmp.onerror = res; tmp.src = ph.dataUrl; });
-          const aspect = (tmp.naturalWidth || 4) / (tmp.naturalHeight || 3);
-          let imgW = fullImgW;
-          let imgH = imgW / aspect;
-          if (imgH > maxPhotoH) { imgH = maxPhotoH; imgW = imgH * aspect; }
-          const x = margin + (fullImgW - imgW) / 2; // centre portrait images
-          if (py + imgH > H - margin - 10) { pdf.addPage(); py = margin + 4; }
-          pdf.addImage(ph.dataUrl, 'JPEG', x, py, imgW, imgH);
-          py += imgH + 2;
-        } catch { /* skip unloadable */ }
+        const url = urls[ph.id];
+        if (url) {
+          try {
+            const tmp = new Image();
+            await new Promise(res => { tmp.onload = res; tmp.onerror = res; tmp.src = url; });
+            const aspect = (tmp.naturalWidth || 4) / (tmp.naturalHeight || 3);
+            let imgW = fullImgW;
+            let imgH = imgW / aspect;
+            if (imgH > maxPhotoH) { imgH = maxPhotoH; imgW = imgH * aspect; }
+            const x = margin + (fullImgW - imgW) / 2; // centre portrait images
+            if (py + imgH > H - margin - 10) { pdf.addPage(); py = margin + 4; }
+            pdf.addImage(url, 'JPEG', x, py, imgW, imgH);
+            py += imgH + 2;
+          } catch { /* skip unloadable */ }
+        }
         if (ph.note?.trim()) {
           pdf.setFontSize(8); pdf.setTextColor(60, 60, 60);
           const lines = pdf.splitTextToSize(ph.note.trim(), fullImgW);
@@ -7211,6 +7614,15 @@
         navigator.serviceWorker.register('./sw.js')
           .catch(err => toast.error('Service worker failed to register'));
       }
+      // Sweep any IDB photos no longer referenced by any project. Covers
+      // leftovers from project/page deletes and failed migrations. Safe to
+      // run here because it only deletes entries not referenced anywhere.
+      (async () => {
+        try {
+          const n = await photoDB.pruneOrphans(DB.getProjects());
+          if (n > 0) console.log(`[photoDB] pruned ${n} orphan${n === 1 ? '' : 's'}`);
+        } catch (err) { console.error('[photoDB] prune failed:', err); }
+      })();
       const handler = e => { e.preventDefault(); setInstallPrompt(e); };
       window.addEventListener('beforeinstallprompt', handler);
 
