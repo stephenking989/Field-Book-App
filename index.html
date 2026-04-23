@@ -4422,8 +4422,13 @@
     }, [page, photos]);
 
     function savePhotos(next) {
+      try {
+        DB.updatePage(projectId, page.id, { photos: next });
+      } catch (err) {
+        toast({ message: 'Photo not saved — storage full. Delete photos or old projects to free space.', type: 'error' });
+        return;
+      }
       setPhotos(next);
-      DB.updatePage(projectId, page.id, { photos: next });
       onReload?.();
     }
 
