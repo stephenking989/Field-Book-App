@@ -550,7 +550,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.119';
+  const APP_VERSION = '1.124';
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO STORAGE — IndexedDB
@@ -1451,7 +1451,7 @@
       by:        by || 'Unknown',
       location:  location || '',
       device:    deviceHint(),
-      appVersion: 'fieldbook-v47',
+      appVersion: 'fieldbook-v' + APP_VERSION,
     };
     const updatedChain = [...chain, record];
 
@@ -1497,7 +1497,7 @@
       by:        importerName || '',
       location:  '',
       device:    deviceHint(),
-      appVersion: 'fieldbook-v47',
+      appVersion: 'fieldbook-v' + APP_VERSION,
     };
 
     // Generate fresh IDs so the imported project doesn't collide with existing ones
@@ -1564,7 +1564,7 @@
       by:          by || '',
       location:    '',
       device:      deviceHint(),
-      appVersion:  'fieldbook-v115',
+      appVersion:  'fieldbook-v' + APP_VERSION,
       fromProject: fromProject.name || '',
       toProject:   toProject.name   || '',
     });
@@ -1585,7 +1585,7 @@
       by:          by || '',
       location:    location || '',
       device:      deviceHint(),
-      appVersion:  'fieldbook-v115',
+      appVersion:  'fieldbook-v' + APP_VERSION,
       fromProject: projectName || '',
       toProject:   null,
     };
@@ -1639,7 +1639,7 @@
       by:          importerName || '',
       location:    '',
       device:      deviceHint(),
-      appVersion:  'fieldbook-v115',
+      appVersion:  'fieldbook-v' + APP_VERSION,
       fromProject: fileData.sourceMeta?.projectName || '',
       toProject:   null,
     });
