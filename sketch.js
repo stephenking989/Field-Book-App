@@ -3872,6 +3872,7 @@ function SketchPage({ page, projectId, onReload }) {
       setDrawState(null);           // cancel any in-progress text/dim/drawing state
       setMarquee(null);             // cancel any rubber-band marquee
       touchTapRef.current = null;   // cancel any deferred single-touch action
+      if (singleFingerPanRef.current?.timerId) clearTimeout(singleFingerPanRef.current.timerId);
       singleFingerPanRef.current = null; // cancel single-finger pan — this is now a pinch
       if (penNodeTimerRef.current) { clearTimeout(penNodeTimerRef.current); penNodeTimerRef.current = null; penNodeTimerRef._pending = null; }
       wasMultiTouchRef.current = true; // suppress tool commits in onPointerUp
@@ -3895,19 +3896,38 @@ function SketchPage({ page, projectId, onReload }) {
     // they remain constant in screen pixels regardless of zoom level.
     const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
 
-    // ── Single-finger pan (select / node tool, touch only) ────────────────────
-    // A touch on empty canvas or a locked shape starts a pan instead of a
-    // selection. Two-finger pinch and middle-mouse pan are handled elsewhere.
+    // ── Single-finger pan / long-press box-select (select / node tool, touch) ─
+    // Empty-canvas or locked-shape touch: node mode pans immediately; select mode
+    // waits 400 ms — finger moves first → pan, stays still → box-select marquee.
     if (e.pointerType === 'touch' && (tool === 'select' || tool === 'node') && prevTool === null) {
       const hitThreshPan = 24 * ps;
       const hit = hitTest(pt, shapes, hitThreshPan);
       const isLocked = hit && (hit.locked || layers.find(l => l.id === (hit.layerId || layers[0]?.id))?.locked);
       if (!hit || isLocked) {
-        singleFingerPanRef.current = {
-          startX: e.clientX, startY: e.clientY,
-          vbX: viewBox.x, vbY: viewBox.y,
-          ps,
-        };
+        if (tool === 'node') {
+          // Node tool: immediate pan — no long-press box select in node edit
+          singleFingerPanRef.current = {
+            mode: 'pan',
+            startX: e.clientX, startY: e.clientY,
+            vbX: viewBox.x, vbY: viewBox.y,
+            ps, pt,
+          };
+        } else {
+          // Select tool: long-press decides pan vs box-select
+          const timerId = setTimeout(() => {
+            const sfp = singleFingerPanRef.current;
+            if (!sfp || sfp.mode !== 'waiting') return;
+            singleFingerPanRef.current = { ...sfp, mode: 'marquee', timerId: null };
+            if (navigator.vibrate) navigator.vibrate(30);
+            setMarquee({ ox: sfp.pt.x, oy: sfp.pt.y, x: sfp.pt.x, y: sfp.pt.y, w: 0, h: 0, dir: 'right' });
+          }, 400);
+          singleFingerPanRef.current = {
+            mode: 'waiting',
+            startX: e.clientX, startY: e.clientY,
+            vbX: viewBox.x, vbY: viewBox.y,
+            ps, pt, timerId,
+          };
+        }
         return;
       }
     }
@@ -3947,23 +3967,13 @@ function SketchPage({ page, projectId, onReload }) {
         const selShapes = shapes.filter(s => selectedIds.includes(s.id));
         const bb = getBoundingBox(selShapes);
 
+        // Compute group rotate handle position — used after body check below
+        let _grpCx = 0, _grpCy = 0, _grpRhPos = null;
         if (bb) {
-          const PAD     = 10 * ps;
-          const cx      = (bb.minX + bb.maxX) / 2;
-          const cy      = (bb.minY + bb.maxY) / 2;
-          const rotDist = ROT_HANDLE_DIST * ps;
-          const rhPos   = { x: cx, y: bb.minY - PAD - rotDist };
-
-          // Check group rotate handle
-          if (Math.hypot(pt.x - rhPos.x, pt.y - rhPos.y) < Math.max(nodeThresh, (ROT_R + 4) * ps)) {
-            setDragNode({ shapeId: null, nodeKey: 'group-rotate' });
-            setDragStart({
-              svgX: pt.x, svgY: pt.y, snapshot: shapes,
-              pivX: cx, pivY: cy,
-              multiIds: selectedIds.slice(),
-            });
-            return;
-          }
+          const PAD = 10 * ps;
+          _grpCx = (bb.minX + bb.maxX) / 2;
+          _grpCy = (bb.minY + bb.maxY) / 2;
+          _grpRhPos = { x: _grpCx, y: bb.minY - PAD - ROT_HANDLE_DIST * ps };
         }
 
         // Check individual shape nodes for each selected shape
@@ -3982,12 +3992,26 @@ function SketchPage({ page, projectId, onReload }) {
           }
         }
 
-        // Check body hit on any selected shape → multi-body drag
+        // Check body hit on any selected shape → multi-body drag.
+        // Body drag takes priority over the group rotate handle so that small
+        // or zoomed-out selections can always be moved without the rotate
+        // handle intercepting.
         const bodyHit = hitTest(pt, selShapes, hitThresh);
         if (bodyHit) {
           setDragNode({ shapeId: bodyHit.id, nodeKey: 'body' });
           setDragStart({
             svgX: pt.x, svgY: pt.y, snapshot: shapes,
+            multiIds: selectedIds.slice(),
+          });
+          return;
+        }
+
+        // Check group rotate handle — only fires when pointer is not on any body
+        if (_grpRhPos && Math.hypot(pt.x - _grpRhPos.x, pt.y - _grpRhPos.y) < Math.max(nodeThresh, (ROT_R + 4) * ps)) {
+          setDragNode({ shapeId: null, nodeKey: 'group-rotate' });
+          setDragStart({
+            svgX: pt.x, svgY: pt.y, snapshot: shapes,
+            pivX: _grpCx, pivY: _grpCy,
             multiIds: selectedIds.slice(),
           });
           return;
@@ -4047,16 +4071,6 @@ function SketchPage({ page, projectId, onReload }) {
           const rot = sel._rot || 0;
           const piv = getShapePivot(sel);
 
-          // ── Check rotate handle ──────────────────────────────────────
-          const rhRaw = { x: piv.x, y: piv.y - ROT_HANDLE_DIST * ps };
-          const rhPos = rot ? rotatePoint(rhRaw.x, rhRaw.y, piv.x, piv.y, rot) : rhRaw;
-          if (Math.hypot(pt.x - rhPos.x, pt.y - rhPos.y) < Math.max(nodeThresh, (ROT_R + 4) * ps)) {
-            setDragNode({ shapeId: sel.id, nodeKey: 'rotate' });
-            setDragStart({ svgX: pt.x, svgY: pt.y, snapshot: shapes,
-              pivX: piv.x, pivY: piv.y, startRot: sel._rot || 0 });
-            return;
-          }
-
           // ── Check pivot handle ───────────────────────────────────────
           if (Math.hypot(pt.x - piv.x, pt.y - piv.y) < Math.max(nodeThresh, (PIVOT_R + 6) * ps)) {
             setDragNode({ shapeId: sel.id, nodeKey: 'pivot' });
@@ -4076,6 +4090,9 @@ function SketchPage({ page, projectId, onReload }) {
           }
 
           // ── Click on shape body → body drag (or edit if text tool) ─────
+          // Body drag is checked BEFORE the rotate handle so that small or
+          // zoomed-out shapes can always be moved. The rotate handle only
+          // activates when the pointer is clearly above/away from the body.
           if (hitTest(pt, [sel], hitThresh)) {
             if (textToolWithSelection) {
               // Text tool + click on selected text → open for editing immediately
@@ -4086,6 +4103,16 @@ function SketchPage({ page, projectId, onReload }) {
             }
             setDragNode({ shapeId: sel.id, nodeKey: 'body' });
             setDragStart({ svgX: pt.x, svgY: pt.y, snapshot: shapes });
+            return;
+          }
+
+          // ── Check rotate handle — only if pointer is not on body ────────
+          const rhRaw = { x: piv.x, y: piv.y - ROT_HANDLE_DIST * ps };
+          const rhPos = rot ? rotatePoint(rhRaw.x, rhRaw.y, piv.x, piv.y, rot) : rhRaw;
+          if (Math.hypot(pt.x - rhPos.x, pt.y - rhPos.y) < Math.max(nodeThresh, (ROT_R + 4) * ps)) {
+            setDragNode({ shapeId: sel.id, nodeKey: 'rotate' });
+            setDragStart({ svgX: pt.x, svgY: pt.y, snapshot: shapes,
+              pivX: piv.x, pivY: piv.y, startRot: sel._rot || 0 });
             return;
           }
         }
@@ -4721,13 +4748,31 @@ function SketchPage({ page, projectId, onReload }) {
       return;
     }
 
-    // ── Single-finger pan (select/node tools, touch) ──────────────────────────
+    // ── Single-finger pan / long-press box-select (select/node tools, touch) ──
     if (singleFingerPanRef.current && activePtrsRef.current.size === 1) {
-      const { startX, startY, vbX, vbY, ps } = singleFingerPanRef.current;
-      const dx = (e.clientX - startX) * ps;
-      const dy = (e.clientY - startY) * ps;
-      setViewBox(vb => ({ ...vb, x: vbX - dx, y: vbY - dy }));
-      return;
+      const sfp = singleFingerPanRef.current;
+      if (sfp.mode === 'waiting') {
+        if (Math.hypot(e.clientX - sfp.startX, e.clientY - sfp.startY) > 8) {
+          // Finger moved before long-press fired — commit to pan.
+          // Re-anchor to the current position so panning starts with zero offset.
+          if (sfp.timerId) clearTimeout(sfp.timerId);
+          const vb = latestViewBoxRef.current;
+          singleFingerPanRef.current = {
+            mode: 'pan',
+            startX: e.clientX, startY: e.clientY,
+            vbX: vb.x, vbY: vb.y,
+            ps: sfp.ps, pt: sfp.pt, timerId: null,
+          };
+        }
+        return; // hold off on any move during the waiting phase
+      }
+      if (sfp.mode === 'pan') {
+        const dx = (e.clientX - sfp.startX) * sfp.ps;
+        const dy = (e.clientY - sfp.startY) * sfp.ps;
+        setViewBox(vb => ({ ...vb, x: sfp.vbX - dx, y: sfp.vbY - dy }));
+        return;
+      }
+      // mode === 'marquee' — fall through to the marquee update block below
     }
 
     const rawPt = screenToWorld(e);
@@ -5199,10 +5244,17 @@ function SketchPage({ page, projectId, onReload }) {
     activePtrsRef.current.delete(e.pointerId);
     if (activePtrsRef.current.size < 2) lastPinchRef.current = null;
 
-    // ── Single-finger pan cleanup ─────────────────────────────────────────
+    // ── Single-finger pan / long-press box-select cleanup ────────────────────
     if (singleFingerPanRef.current) {
+      const sfp = singleFingerPanRef.current;
+      if (sfp.timerId) clearTimeout(sfp.timerId);
       singleFingerPanRef.current = null;
-      return;
+      if (sfp.mode === 'pan') return;      // pan complete — nothing to commit
+      if (sfp.mode === 'waiting') {        // tap on empty canvas — deselect
+        setSelectedIds([]);
+        return;
+      }
+      // mode === 'marquee' — fall through so the marquee commit code below runs
     }
 
     // ── Pen tool: fire deferred node immediately on fast touch-lift ──────────
@@ -8237,6 +8289,15 @@ function SketchPage({ page, projectId, onReload }) {
                 <button
                   key={t.id}
                   onClick={() => {
+                    // Re-tapping the active select or node tool deselects everything —
+                    // handy for clearing handles/highlights to get a clean view.
+                    if (tool === t.id && (t.id === 'select' || t.id === 'node')) {
+                      setSelectedIds([]);
+                      setNodeSelectedId(null);
+                      setNodeSelectedIdx(null);
+                      setPrevTool(null);
+                      return;
+                    }
                     // Image tool: action button — opens file picker, does not set tool state
                     if (t.action === 'import') { handleImageImport(); return; }
                     // If a pen path is in progress, commit it as an open path before switching

@@ -1472,7 +1472,9 @@
     const dateStr  = record.timestamp.split('T')[0];
     const filename = `${safeName}_${dateStr}.fieldbook`;
 
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    // Use octet-stream so Android/Windows download managers don't append .json
+    // to the filename. application/json caused "foo.fieldbook" → "foo.fieldbook.json".
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/octet-stream' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href = url; a.download = filename;
@@ -1609,7 +1611,7 @@
     const dateStr  = record.timestamp.split('T')[0];
     const filename = `${safeName}_${dateStr}.fieldbook-page`;
 
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/octet-stream' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href = url; a.download = filename;
@@ -2019,7 +2021,7 @@
         <input
           ref={importInputRef}
           type="file"
-          accept=".fieldbook"
+          accept=".fieldbook,.fieldbook.json"
           style={{ display: 'none' }}
           onChange={handleImportFileChange}
         />
@@ -2905,7 +2907,8 @@
         const meta = { data:   { label: 'Data',   color: '#2D6A4F', bg: '#D8F3DC' },
                        sketch: { label: 'Sketch', color: '#3B82F6', bg: '#EFF6FF' },
                        title:  { label: 'Title',  color: '#D97706', bg: '#FEF3C7' },
-                       photo:  { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE' } }[page.type]
+                       photo:  { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE' },
+                       notes:  { label: 'Notes',  color: '#0891B2', bg: '#E0F2FE' } }[page.type]
                    || { label: 'Data', color: '#2D6A4F', bg: '#D8F3DC' };
         const displayTitle = page.title?.trim() || `P.${page.pageNumber} — ${meta.label}`;
         tocEntries.push({ pageNum: page.pageNumber, typeLabel: meta.label, title: displayTitle, pdfPage: pdfPageNum });
@@ -3063,6 +3066,28 @@
                 py += lines.length * 4 + 6;
               }
               py += 4; // gap between cards
+            }
+          }
+
+        } else if (page.type === 'notes') {
+          // ── NOTES PAGE ──────────────────────────────────────────────────────────
+          const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin);
+          const tmpEl = document.createElement('div');
+          tmpEl.innerHTML = page.notesHtml || '';
+          const text = (tmpEl.innerText || tmpEl.textContent || '').trim();
+          if (!text) {
+            pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
+            pdf.text('(No notes)', W/2, contentY + 20, { align: 'center' });
+          } else {
+            let ny = contentY + 4;
+            pdf.setFont('Courier', 'normal');
+            pdf.setFontSize(10);
+            pdf.setTextColor(0);
+            const noteLines = pdf.splitTextToSize(text, W - margin * 2);
+            for (const ln of noteLines) {
+              if (ny > H - margin - 14) { pdf.addPage(); ny = margin + 4; }
+              pdf.text(ln, margin, ny);
+              ny += 5.5;
             }
           }
 
@@ -3240,6 +3265,8 @@
         data:   { label: 'Data',   color: '#2D6A4F', bg: '#D8F3DC' },
         sketch: { label: 'Sketch', color: '#3B82F6', bg: '#EFF6FF' },
         title:  { label: 'Title',  color: '#D97706', bg: '#FEF3C7' },
+        photo:  { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE' },
+        notes:  { label: 'Notes',  color: '#0891B2', bg: '#E0F2FE' },
       };
       const meta = metaMap[page.type] || metaMap.data;
       const pdf  = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -3334,6 +3361,25 @@
         _titleFieldSP('Summary of Work',             page.summary);
         _titleFieldSP('Code List',                   page.codeList, { mono: true });
         _titleFieldSP('Digital File Names',          page.fileNames, { mono: true });
+      } else if (page.type === 'notes') {
+        const tmpEl = document.createElement('div');
+        tmpEl.innerHTML = page.notesHtml || '';
+        const text = (tmpEl.innerText || tmpEl.textContent || '').trim();
+        if (!text) {
+          pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
+          pdf.text('(No notes)', W/2, contentY + 20, { align: 'center' });
+        } else {
+          let ny = contentY + 4;
+          pdf.setFont('Courier', 'normal');
+          pdf.setFontSize(10);
+          pdf.setTextColor(0);
+          const noteLines = pdf.splitTextToSize(text, W - margin * 2);
+          for (const ln of noteLines) {
+            if (ny > H - margin - 14) { pdf.addPage(); ny = margin + 4; }
+            pdf.text(ln, margin, ny);
+            ny += 5.5;
+          }
+        }
       } else {
         const cols = page.columns || [], rows = page.rows || [];
         if (cols.length === 0) {
@@ -3710,7 +3756,7 @@
         )}
 
         {/* hidden file input for page import */}
-        <input ref={pageImportInputRef} type="file" accept=".fieldbook-page"
+        <input ref={pageImportInputRef} type="file" accept=".fieldbook-page,.fieldbook-page.json"
           style={{ display: 'none' }}
           onChange={e => {
             const file = e.target.files[0];
@@ -4733,6 +4779,7 @@
     const [urlMap, setUrlMap] = useState({}); // photoRef -> dataUrl, for rendering
     const [expandedId, setExpandedId] = useState(null);
     const [uploading, setUploading] = useState(false);
+    const [camKey, setCamKey] = useState(0);
     const fileRef = useRef(null);
     const camRef  = useRef(null);
     const toast   = useToast();
@@ -4907,11 +4954,21 @@
     return (
       <div className="flex flex-col h-full" style={{ background: '#FDFAF4' }}>
         <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
-        {/* Hidden file inputs */}
-        <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }}
+        {/* Hidden file inputs.
+            Camera input intentionally omits capture="environment": on Android, that
+            attribute launches the camera app directly and backgrounds the PWA, which
+            Samsung's memory manager can kill before the photo is returned — causing the
+            green-splash-screen reload and lost photo. Without capture, Android shows a
+            system picker (Camera / Gallery / Files) that keeps the browser alive as an
+            active task and reliably delivers the photo. One extra tap, zero lost photos.
+            Key remount after each capture forces a fresh input element so rapid repeat
+            shots don't silently skip onChange (a known Android/Chrome quirk). */}
+        <input ref={fileRef} type="file" accept="image/*" multiple
+               style={{ position: 'fixed', top: -9999, left: -9999, width: 1, height: 1, opacity: 0 }}
                onChange={handleFileInput} />
-        <input ref={camRef}  type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
-               onChange={handleFileInput} />
+        <input key={camKey} ref={camRef} type="file" accept="image/*"
+               style={{ position: 'fixed', top: -9999, left: -9999, width: 1, height: 1, opacity: 0 }}
+               onChange={e => { handleFileInput(e); setCamKey(k => k + 1); }} />
         {/* Add buttons */}
         <div style={{ display: 'flex', gap: 12, padding: '12px 16px', borderBottom: '1px solid #E5E1D8' }}>
           <button onClick={() => !uploading && camRef.current?.click()}
