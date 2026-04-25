@@ -574,7 +574,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.125';
+  const APP_VERSION = '1.126';
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO STORAGE — IndexedDB
@@ -2432,7 +2432,7 @@
       if (lid && !visLayers.has(lid)) continue;
       if (s.visible === false) continue;  // per-shape visibility
 
-      const stroke = s.stroke || '#1C3829';
+      const stroke = s.stroke || '#3C5445';
       const sw     = (s.strokeWidth || 1.5) * ps;  // multiply by ps so lines match screen thickness
       const fill   = s.fill || 'none';
       const sOp    = s.strokeOpacity ?? 1;
@@ -2580,7 +2580,7 @@
           // Point symbol — constant screen-size elements scaled by ps
           const r = 10 * ps;
           const sw = (s.strokeWidth || 1.5) * ps;
-          const stroke = s.stroke || '#1C3829';
+          const stroke = s.stroke || '#3C5445';
           const cx = s.x, cy = s.y;
           const sym = s.symbol || 'survey';
           let symEl = '';
@@ -4740,7 +4740,7 @@
               style={{
                 minWidth: 32, height: 32, padding: '0 8px', borderRadius: 7,
                 border: '1px solid #D4CFCA', background: '#FDFAF4', cursor: 'pointer',
-                fontSize: 13, fontFamily: 'Courier New, monospace', color: '#1C3829',
+                fontSize: 13, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", color: '#3C5445',
                 flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
                 ...btn.style,
               }}>
@@ -4758,9 +4758,9 @@
           style={{
             flex: 1, minHeight: 0, overflowY: 'auto',
             padding: '16px 18px', outline: 'none',
-            fontFamily: 'Courier New, monospace', fontSize: 14,
-            lineHeight: 1.7, color: '#1C3829',
-            caretColor: '#2D6A4F',
+            fontFamily: "'Caveat', cursive", fontSize: 18,
+            lineHeight: 1.7, color: '#1A1A1A',
+            caretColor: '#4E7864',
           }}
         />
       </div>
@@ -5008,7 +5008,7 @@
           <button onClick={() => !uploading && camRef.current?.click()}
             disabled={uploading}
             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                     padding: '12px 0', borderRadius: 14, background: '#1C3829', color: '#FDFAF4',
+                     padding: '12px 0', borderRadius: 14, background: '#3C5445', color: '#FDFAF4',
                      fontWeight: 600, fontSize: 14, border: 'none',
                      cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? 0.6 : 1 }}>
             <Ico.Camera /> {uploading ? 'Importing…' : 'Camera'}
@@ -5016,8 +5016,8 @@
           <button onClick={() => !uploading && fileRef.current?.click()}
             disabled={uploading}
             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                     padding: '12px 0', borderRadius: 14, background: 'transparent', color: '#1C3829',
-                     fontWeight: 600, fontSize: 14, border: '2px solid #1C3829',
+                     padding: '12px 0', borderRadius: 14, background: 'transparent', color: '#3C5445',
+                     fontWeight: 600, fontSize: 14, border: '2px solid #3C5445',
                      cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? 0.6 : 1 }}>
             <Ico.Download /> {uploading ? 'Importing…' : 'Upload'}
           </button>
@@ -5053,8 +5053,8 @@
                   rows={2}
                   style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, resize: 'none',
                            borderRadius: 8, border: '1px solid #E5E1D8', padding: '8px 10px',
-                           fontFamily: 'Courier New, monospace', outline: 'none',
-                           background: '#FDFAF4', color: '#1C3829' }}
+                           fontFamily: "'Caveat', cursive", fontSize: 15, outline: 'none',
+                           background: '#F5F0E3', color: '#1A1A1A' }}
                 />
               </div>
             </div>
@@ -5078,7 +5078,7 @@
                             display: 'block' }} />
               {lbPhoto.note?.trim() && (
                 <div style={{ marginTop: 12, maxWidth: '96vw', color: '#E8E4DC',
-                              fontSize: 13, fontFamily: 'Courier New, monospace',
+                              fontSize: 16, fontFamily: "'Caveat', cursive",
                               textAlign: 'center', lineHeight: 1.4 }}>
                   {lbPhoto.note.trim()}
                 </div>
@@ -6765,8 +6765,8 @@
             cursor: 'pointer', outline: 'none', border: 'none', width: '100%',
           }}>
           <span style={{
-            fontSize: 9.5, fontFamily: 'Courier New, monospace',
-            color: 'rgba(60,50,30,0.65)', letterSpacing: '0.03em',
+            fontSize: 10, fontFamily: "'Oswald', sans-serif", fontWeight: 500,
+            color: 'rgba(60,50,30,0.70)', letterSpacing: '0.05em',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             {page.pageNumber ? `Pg ${page.pageNumber}` : ''}
@@ -7152,14 +7152,15 @@
                             onBlur={() => commitEdit(ri, ci, editValue)}
                             onKeyDown={e => handleCellKeyDown(e, ri, ci)}
                             style={{ display: 'block', width: '100%', height: 32, padding: '0 5px',
-                              background: 'rgba(45,106,79,0.06)', border: 'none', outline: 'none',
-                              fontFamily: 'Courier New, monospace', fontSize: 13, textAlign: 'center', color: '#2C2C2C' }}
+                              background: 'rgba(78,120,100,0.06)', border: 'none', outline: 'none',
+                              fontFamily: "'Caveat', cursive", fontSize: 17, textAlign: 'center', color: '#1A1A1A' }}
                           />
                         ) : (
                           <span
                             className={isError ? 'dp-cell-error' : isDMS ? 'dp-cell-dms' : isFormula ? 'dp-cell-formula' : ''}
                             style={{ display: 'block', height: 32, lineHeight: '32px', padding: '0 5px',
                               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                              fontFamily: "'Caveat', cursive", fontSize: 17,
                               cursor: 'default', userSelect: 'none' }}
                             onDoubleClick={() => startEdit(ri, ci)}>
                             {text}
@@ -7331,19 +7332,19 @@
               </p>
               {/* Header preview */}
               <div style={{ background: '#F5F1E8', borderRadius: 8, padding: '8px 10px', marginBottom: 16,
-                            fontSize: 12, fontFamily: 'Courier New, monospace', color: '#1C3829',
+                            fontSize: 12, fontFamily: 'Courier New, monospace', color: '#3C5445',
                             overflowX: 'auto', whiteSpace: 'nowrap' }}>
                 <strong>Row 1:</strong> {csvImportModal.parsed[0].map(c => `"${c}"`).join(', ')}
               </div>
               {/* Use first row as headers toggle */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                             padding: '10px 12px', borderRadius: 10, background: '#F5F1E8', marginBottom: 20 }}>
-                <span style={{ fontSize: 14, color: '#1C3829', fontWeight: 500 }}>Use first row as column headers</span>
+                <span style={{ fontSize: 14, color: '#3C5445', fontWeight: 500 }}>Use first row as column headers</span>
                 <button
                   onClick={() => setCsvImportModal(m => ({ ...m, useHeader: !m.useHeader }))}
                   style={{ padding: '4px 14px', borderRadius: 20, border: 'none', cursor: 'pointer',
                            fontWeight: 700, fontSize: 12,
-                           background: csvImportModal.useHeader ? '#1C3829' : '#E5E1D8',
+                           background: csvImportModal.useHeader ? '#3C5445' : '#E5E1D8',
                            color:      csvImportModal.useHeader ? '#FDFAF4'  : '#6B6560' }}>
                   {csvImportModal.useHeader ? 'ON' : 'OFF'}
                 </button>
@@ -7361,7 +7362,7 @@
                 </button>
                 <button onClick={() => confirmDataCSVImport(csvImportModal.parsed, csvImportModal.useHeader)}
                   style={{ flex: 2, padding: '12px 0', borderRadius: 12, border: 'none',
-                           background: '#1C3829', color: '#FDFAF4', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
+                           background: '#3C5445', color: '#FDFAF4', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
                   Import
                 </button>
               </div>
