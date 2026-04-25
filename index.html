@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <meta name="theme-color" content="#1C3829" />
+  <meta name="theme-color" content="#3C5445" />
   <meta name="description" content="Digital field notebook for land surveyors" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -13,6 +13,11 @@
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="./icon.svg" />
 
+  <!-- Field Book Design System Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Oswald:wght@400;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -20,19 +25,36 @@
         extend: {
           colors: {
             fb: {
-              dark:   '#1C3829',
-              mid:    '#2D6A4F',
-              light:  '#52B788',
-              pale:   '#D8F3DC',
-              cream:  '#FDFAF4',
-              cream2: '#F0EBE0',
-              border: '#DDD6C8',
-              text:   '#2C2C2C',
-              muted:  '#6B7280',
+              // ── Design system tokens ────────────────────────────
+              page:           '#F5F0E3',
+              'page-alt':     '#EBE5D5',
+              'page-deep':    '#E0D9C8',
+              'grid-blue':    '#9BBCD0',
+              border:         '#CEC5B0',
+              ink:            '#1A1A1A',
+              'ink-muted':    '#5A5248',
+              'ink-faint':    '#9A908A',
+              cover:          '#3C5445',
+              heading:        '#3C5445',
+              accent:         '#4E7864',
+              'accent-light': '#7AAE94',
+              'accent-pale':  '#D2E8DA',
+              error:          '#B83C3C',
+              // ── Legacy aliases (keep until all classes migrated) ─
+              dark:    '#3C5445',
+              mid:     '#4E7864',
+              light:   '#7AAE94',
+              pale:    '#D2E8DA',
+              cream:   '#F5F0E3',
+              cream2:  '#EBE5D5',
+              text:    '#1A1A1A',
+              muted:   '#5A5248',
             }
           },
           fontFamily: {
-            data: ['"Courier New"', 'Courier', 'monospace'],
+            data:        ['"Share Tech Mono"', '"Courier New"', 'monospace'],
+            heading:     ['Oswald', '"Segoe UI"', 'sans-serif'],
+            handwritten: ['Caveat', '"Patrick Hand"', 'cursive'],
           }
         }
       }
@@ -53,18 +75,18 @@
     html, body, #root { height: 100%; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #1C3829;
+      background: #3C5445;
       -webkit-tap-highlight-color: transparent;
       overscroll-behavior: none;
     }
 
     /* ── Ruled notebook paper ──────────────────────────────────── */
     .page-ruled {
-      background-color: #FDFAF4;
+      background-color: #F5F0E3;
       background-image: linear-gradient(
         transparent calc(32px - 1px),
-        rgba(180,165,140,0.45) calc(32px - 1px),
-        rgba(180,165,140,0.45) 32px,
+        rgba(184,168,138,0.50) calc(32px - 1px),
+        rgba(184,168,138,0.50) 32px,
         transparent 32px
       );
       background-size: 100% 32px;
@@ -72,12 +94,12 @@
 
     /* ── Fine blue engineering grid ────────────────────────────── */
     .page-grid-blue {
-      background-color: #FEFEFE;
+      background-color: #F5F0E3;
       background-image:
-        linear-gradient(rgba(80,120,200,0.22) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(80,120,200,0.22) 1px, transparent 1px),
-        linear-gradient(rgba(80,120,200,0.08) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(80,120,200,0.08) 1px, transparent 1px);
+        linear-gradient(rgba(155,188,208,0.40) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(155,188,208,0.40) 1px, transparent 1px),
+        linear-gradient(rgba(155,188,208,0.20) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(155,188,208,0.20) 1px, transparent 1px);
       background-size: 25mm 25mm, 25mm 25mm, 5mm 5mm, 5mm 5mm;
     }
 
@@ -85,20 +107,21 @@
     .fb-table {
       width: 100%;
       border-collapse: collapse;
-      font-family: 'Courier New', Courier, monospace;
+      font-family: 'Share Tech Mono', 'Courier New', Courier, monospace;
       font-size: 13px;
     }
     .fb-table th {
-      background: rgba(253,250,244,0.97);
-      border-bottom: 2px solid #2D6A4F;
-      border-right: 1px solid rgba(180,165,140,0.5);
+      background: rgba(245,240,227,0.97);
+      border-bottom: 2px solid #4E7864;
+      border-right: 1px solid rgba(178,162,138,0.50);
       padding: 7px 5px 5px;
       text-align: center;
-      font-weight: 700;
+      font-family: 'Oswald', 'Segoe UI', sans-serif;
+      font-weight: 600;
       font-size: 10px;
       text-transform: uppercase;
-      color: #2D6A4F;
-      letter-spacing: 0.05em;
+      color: #3C5445;
+      letter-spacing: 0.09em;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -109,16 +132,16 @@
     .fb-table th:last-child { border-right: none; }
     .fb-table td {
       padding: 0;
-      border-right: 1px solid rgba(180,165,140,0.38);
-      border-bottom: 1px solid rgba(180,165,140,0.55);
+      border-right: 1px solid rgba(178,162,138,0.38);
+      border-bottom: 1px solid rgba(178,162,138,0.55);
       text-align: center;
-      color: #2C2C2C;
+      color: #1A1A1A;
       vertical-align: middle;
       height: 32px;
     }
     .fb-table td:last-child { border-right: none; }
     .fb-table td.td-action { width: 32px; }
-    .fb-table tr:nth-child(even) td { background: rgba(221,214,200,0.12); }
+    .fb-table tr:nth-child(even) td { background: rgba(206,197,176,0.14); }
     .fb-table td > input {
       display: block;
       width: 100%;
@@ -127,13 +150,13 @@
       background: transparent;
       border: none;
       outline: none;
-      font-family: 'Courier New', Courier, monospace;
-      font-size: 13px;
+      font-family: 'Caveat', cursive;
+      font-size: 16px;
       text-align: center;
-      color: #2C2C2C;
+      color: #1A1A1A;
       -webkit-appearance: none;
     }
-    .fb-table td > input:focus { background: rgba(45,106,79,0.07); }
+    .fb-table td > input:focus { background: rgba(78,120,100,0.08); }
     .fb-table td > span {
       display: block;
       height: 32px;
@@ -146,19 +169,19 @@
 
     /* ── Red left-margin line (fieldbook look) ──────────────────── */
     .page-margin-rule {
-      border-left: 3px solid rgba(200,80,80,0.18);
+      border-left: 3px solid rgba(200,72,72,0.22);
       margin-left: 32px;
     }
 
     /* ── Scrollbar ──────────────────────────────────────────────── */
     ::-webkit-scrollbar { width: 3px; height: 3px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #DDD6C8; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb { background: #CEC5B0; border-radius: 3px; }
 
     /* ── Enhanced Data Page ──────────────────────────────────────── */
     .dp-formula-bar {
-      background: #F0EBE0;
-      border-bottom: 1.5px solid #DDD6C8;
+      background: #EBE5D5;
+      border-bottom: 1.5px solid #CEC5B0;
       display: flex;
       align-items: center;
       padding: 0 8px;
@@ -167,20 +190,20 @@
       flex-shrink: 0;
     }
     .dp-formula-bar .cell-ref {
-      font-family: 'Courier New', monospace;
+      font-family: 'Share Tech Mono', 'Courier New', monospace;
       font-size: 11px;
       font-weight: 700;
-      color: #2D6A4F;
+      color: #3C5445;
       min-width: 36px;
       text-align: center;
-      background: rgba(45,106,79,0.08);
+      background: rgba(60,84,69,0.08);
       border-radius: 4px;
       padding: 2px 5px;
       flex-shrink: 0;
     }
     .dp-formula-bar .fx-label {
       font-size: 12px;
-      color: #9CA3AF;
+      color: #9A908A;
       font-style: italic;
       flex-shrink: 0;
     }
@@ -189,20 +212,20 @@
       background: transparent;
       border: none;
       outline: none;
-      font-family: 'Courier New', monospace;
+      font-family: 'Share Tech Mono', 'Courier New', monospace;
       font-size: 13px;
-      color: #2C2C2C;
+      color: #1A1A1A;
       min-width: 0;
     }
     .dp-cell-active {
-      background: rgba(45,106,79,0.10) !important;
-      outline: 2px solid #2D6A4F;
+      background: rgba(78,120,100,0.10) !important;
+      outline: 2px solid #4E7864;
       outline-offset: -1px;
       z-index: 1;
       position: relative;
     }
     .dp-cell-formula {
-      color: #1a5c3a !important;
+      color: #3C5445 !important;
       font-style: italic;
     }
     .dp-cell-dms {
@@ -216,26 +239,26 @@
       cursor: pointer;
       user-select: none;
     }
-    .dp-col-header:hover { background: rgba(45,106,79,0.08) !important; }
-    .dp-col-header.active-col { background: rgba(45,106,79,0.15) !important; color: #1a3a2a !important; }
+    .dp-col-header:hover { background: rgba(78,120,100,0.08) !important; }
+    .dp-col-header.active-col { background: rgba(78,120,100,0.15) !important; color: #2A3D32 !important; }
     .dp-row-num {
       width: 28px;
       min-width: 28px;
       max-width: 28px;
       text-align: center;
       font-size: 10px;
-      color: #9CA3AF;
-      font-family: 'Courier New', monospace;
-      background: #F0EBE0;
-      border-right: 1.5px solid #DDD6C8 !important;
+      color: #9A908A;
+      font-family: 'Share Tech Mono', 'Courier New', monospace;
+      background: #EBE5D5;
+      border-right: 1.5px solid #CEC5B0 !important;
       padding: 0 2px;
       cursor: default;
       user-select: none;
     }
-    .dp-row-num.active-row { background: rgba(45,106,79,0.12); color: #2D6A4F; font-weight: 700; }
+    .dp-row-num.active-row { background: rgba(78,120,100,0.12); color: #3C5445; font-weight: 700; }
     .dp-toolbar {
-      background: #F0EBE0;
-      border-bottom: 1.5px solid #DDD6C8;
+      background: #EBE5D5;
+      border-bottom: 1.5px solid #CEC5B0;
       display: flex;
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
@@ -251,65 +274,66 @@
       font-size: 11px;
       padding: 3px 10px;
       border-radius: 5px;
-      border: 1px solid #DDD6C8;
-      background: white;
-      color: #2C2C2C;
-      font-family: 'Courier New', monospace;
+      border: 1px solid #CEC5B0;
+      background: #F5F0E3;
+      color: #1A1A1A;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       cursor: pointer;
       white-space: nowrap;
       line-height: 1.4;
       flex-shrink: 0;
     }
-    .dp-toolbar button:active { background: #D8F3DC; border-color: #2D6A4F; }
+    .dp-toolbar button:active { background: #D2E8DA; border-color: #4E7864; }
     .dp-toolbar .dp-drop-btn {
       display: flex; align-items: center; gap: 4px;
-      background: white; border: 1px solid #DDD6C8; border-radius: 6px;
-      padding: 4px 10px; font-size: 11px; font-family: 'Courier New', monospace;
-      color: #2C2C2C; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+      background: #F5F0E3; border: 1px solid #CEC5B0; border-radius: 6px;
+      padding: 4px 10px; font-size: 11px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: #1A1A1A; cursor: pointer; white-space: nowrap; flex-shrink: 0;
     }
-    .dp-toolbar .dp-drop-btn.active { background: #E8F5E9; border-color: #2D6A4F; color: #2D6A4F; }
-    .dp-toolbar .dp-drop-btn:active { background: #D8F3DC; border-color: #2D6A4F; }
-    .dp-toolbar .dp-tb-sep { width: 1px; height: 18px; background: #DDD6C8; margin: 0 2px; flex-shrink: 0; }
+    .dp-toolbar .dp-drop-btn.active { background: #D2E8DA; border-color: #4E7864; color: #3C5445; }
+    .dp-toolbar .dp-drop-btn:active { background: #D2E8DA; border-color: #4E7864; }
+    .dp-toolbar .dp-tb-sep { width: 1px; height: 18px; background: #CEC5B0; margin: 0 2px; flex-shrink: 0; }
     /* Dropdown panel */
     .dp-drop-panel {
       position: fixed; z-index: 500;
-      background: white; border-radius: 10px; min-width: 170px;
+      background: #F5F0E3; border-radius: 10px; min-width: 170px;
       box-shadow: 0 4px 24px rgba(0,0,0,0.16); padding: 5px;
-      border: 1px solid #E5E7EB;
+      border: 1px solid #CEC5B0;
     }
     .dp-drop-panel button {
       display: flex; align-items: center; gap: 8px; width: 100%;
       padding: 8px 12px; border-radius: 7px; text-align: left;
-      font-size: 12.5px; font-family: 'Courier New', monospace;
-      background: none; border: none; color: #1a2e1a; cursor: pointer;
+      font-size: 12.5px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: none; border: none; color: #1A1A1A; cursor: pointer;
       white-space: nowrap;
     }
-    .dp-drop-panel button:active { background: #E8F5E9; }
+    .dp-drop-panel button:active { background: #D2E8DA; }
     .dp-drop-panel .dp-drop-sep {
-      height: 1px; background: #E5E7EB; margin: 4px 6px;
+      height: 1px; background: #CEC5B0; margin: 4px 6px;
     }
     .dp-drop-panel .dp-drop-section {
-      font-size: 9px; color: #9CA3AF; font-weight: 700; letter-spacing: 0.08em;
+      font-size: 9px; color: #9A908A; font-weight: 700; letter-spacing: 0.08em;
       text-transform: uppercase; padding: 6px 12px 2px;
     }
     .dp-drop-toggle {
       display: flex; align-items: center; justify-content: space-between;
       width: 100%; padding: 8px 12px; border-radius: 7px;
-      font-size: 12.5px; font-family: 'Courier New', monospace;
-      background: none; border: none; color: #1a2e1a; cursor: pointer;
+      font-size: 12.5px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: none; border: none; color: #1A1A1A; cursor: pointer;
       gap: 12px;
     }
-    .dp-drop-toggle:active { background: #E8F5E9; }
+    .dp-drop-toggle:active { background: #D2E8DA; }
     .dp-drop-toggle-pill {
       display: inline-flex; align-items: center; gap: 0;
-      border-radius: 20px; overflow: hidden; border: 1.5px solid #DDD6C8;
+      border-radius: 20px; overflow: hidden; border: 1.5px solid #CEC5B0;
       flex-shrink: 0; font-size: 9.5px; font-weight: 700;
     }
     .dp-drop-toggle-pill span {
       padding: 2px 8px; transition: background 0.15s, color 0.15s;
     }
-    .dp-drop-toggle-pill span.on  { background: #2D6A4F; color: white; }
-    .dp-drop-toggle-pill span.off { background: white; color: #9CA3AF; }
+    .dp-drop-toggle-pill span.on  { background: #4E7864; color: white; }
+    .dp-drop-toggle-pill span.off { background: #F5F0E3; color: #9A908A; }
     .dp-col-type-badge {
       display: inline-block;
       font-size: 8px;
@@ -324,24 +348,24 @@
     .dp-col-type-num  { background: #d1fae5; color: #065f46; }
     .dp-col-type-text { background: #f3f4f6; color: #6b7280; }
     .dp-sum-row td {
-      background: #F0EBE0 !important;
+      background: #EBE5D5 !important;
       font-weight: 700;
-      border-top: 2px solid #2D6A4F !important;
+      border-top: 2px solid #4E7864 !important;
       font-size: 12px;
     }
     /* ── Multi-cell selection ─────────────────────────────────── */
     .dp-cell-selected {
-      background: rgba(45,106,79,0.07) !important;
+      background: rgba(78,120,100,0.07) !important;
     }
     /* ── Drag-and-drop visual feedback ───────────────────────── */
     th.dp-drag-over-col {
-      border-left: 2px solid #2D6A4F !important;
-      background: rgba(45,106,79,0.12) !important;
+      border-left: 2px solid #4E7864 !important;
+      background: rgba(78,120,100,0.12) !important;
     }
     .dp-row-num.dp-drag-over-row {
-      border-top: 2px solid #2D6A4F !important;
-      background: rgba(45,106,79,0.10) !important;
-      color: #2D6A4F !important;
+      border-top: 2px solid #4E7864 !important;
+      background: rgba(78,120,100,0.10) !important;
+      color: #3C5445 !important;
     }
     .dp-col-header[draggable="true"] { cursor: grab; }
     .dp-col-header[draggable="true"]:active { cursor: grabbing; }
@@ -363,7 +387,7 @@
       display: flex; align-items: flex-end; justify-content: center;
     }
     .modal-sheet {
-      background: white;
+      background: #F5F0E3;
       width: 100%; max-width: 600px;
       border-radius: 20px 20px 0 0;
       padding: 20px 20px 40px;
@@ -390,23 +414,23 @@
       height: 100%;
       overflow-y: auto;
       scroll-snap-align: start;
-      border-right: 2px solid #DDD6C8;
+      border-right: 2px solid #CEC5B0;
     }
     .spread-panel:last-child { border-right: none; }
 
     /* ── Header strip ───────────────────────────────────────────── */
     .page-header-strip {
-      background: #F0EBE0;
-      border-bottom: 2px solid #2D6A4F;
+      background: #EBE5D5;
+      border-bottom: 2px solid #4E7864;
     }
     .page-header-strip input {
       background: transparent;
       border: none;
-      border-bottom: 1px solid rgba(180,165,140,0.5);
+      border-bottom: 1px solid rgba(178,162,138,0.5);
       outline: none;
-      font-family: 'Courier New', Courier, monospace;
-      font-size: 12px;
-      color: #2C2C2C;
+      font-family: 'Caveat', cursive;
+      font-size: 15px;
+      color: #1A1A1A;
       width: 100%;
       padding: 1px 0;
     }
@@ -415,16 +439,16 @@
     .dp-numpad {
       position: fixed;
       bottom: 0; left: 0; right: 0;
-      background: #1C3829;
-      border-top: 2px solid #2D6A4F;
+      background: #3C5445;
+      border-top: 2px solid #4E7864;
       padding: 8px 8px max(20px, env(safe-area-inset-bottom));
       z-index: 9980;
       box-shadow: 0 -4px 20px rgba(0,0,0,0.42);
     }
     .dp-numpad-preview {
-      font-family: 'Courier New', monospace;
+      font-family: 'Share Tech Mono', 'Courier New', monospace;
       font-size: 18px;
-      color: #D8F3DC;
+      color: #D2E8DA;
       text-align: right;
       padding: 3px 12px;
       margin-bottom: 6px;
@@ -437,7 +461,7 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .dp-numpad-preview.empty { color: rgba(216,243,220,0.3); }
+    .dp-numpad-preview.empty { color: rgba(210,232,218,0.30); }
     .dp-numpad-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -448,7 +472,7 @@
       height: 54px;
       border: none;
       border-radius: 10px;
-      font-family: 'Courier New', monospace;
+      font-family: 'Share Tech Mono', 'Courier New', monospace;
       font-weight: 700;
       color: white;
       cursor: pointer;
@@ -461,17 +485,17 @@
     }
     .dp-numpad-btn:active { opacity: 0.65; }
     .dp-numpad-btn.digit   { background: rgba(255,255,255,0.10); font-size: 20px; }
-    .dp-numpad-btn.sym     { background: #2D6A4F; font-size: 17px; }
+    .dp-numpad-btn.sym     { background: #4E7864; font-size: 17px; }
     .dp-numpad-btn.special { background: rgba(255,255,255,0.06); font-size: 15px; }
     .dp-numpad-btn.del     { background: rgba(127,29,29,0.7); font-size: 18px; }
-    .dp-numpad-btn.confirm { background: #52B788; font-size: 17px; }
+    .dp-numpad-btn.confirm { background: #7AAE94; font-size: 17px; }
     .dp-numpad-space {
       width: 100%; height: 46px;
       border: none; border-radius: 10px;
       background: rgba(255,255,255,0.07);
       color: rgba(255,255,255,0.55);
       font-size: 13px; letter-spacing: 0.12em;
-      cursor: pointer; font-family: 'Courier New', monospace;
+      cursor: pointer; font-family: 'Share Tech Mono', 'Courier New', monospace;
       -webkit-tap-highlight-color: transparent;
       touch-action: manipulation; user-select: none;
       display: flex; align-items: center; justify-content: center;
@@ -489,7 +513,7 @@
       position: absolute;
       bottom: -1px; right: -1px;
       width: 8px; height: 8px;
-      background: #2D6A4F;
+      background: #4E7864;
       border: 1.5px solid white;
       border-radius: 1px;
       cursor: crosshair;
@@ -499,8 +523,8 @@
     }
     /* Preview highlight for cells that will be filled during a handle drag */
     .dp-cell-fill-preview {
-      background: rgba(82,183,136,0.13) !important;
-      outline: 1px dashed #52B788 !important;
+      background: rgba(122,174,148,0.13) !important;
+      outline: 1px dashed #7AAE94 !important;
       outline-offset: -1px !important;
     }
 
@@ -508,8 +532,8 @@
     .dp-ref-chips {
       display: flex; flex-wrap: wrap; gap: 4px;
       padding: 3px 8px 3px;
-      background: #EDE8DF;
-      border-bottom: 1px solid #DDD6C8;
+      background: #EBE5D5;
+      border-bottom: 1px solid #CEC5B0;
       flex-shrink: 0;
       min-height: 24px; align-items: center;
     }
@@ -550,7 +574,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.124';
+  const APP_VERSION = '1.125';
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO STORAGE — IndexedDB
@@ -1123,8 +1147,8 @@
           pointerEvents:'none', width:'calc(100% - 32px)', maxWidth:360 }}>
           {toasts.map(t => (
             <div key={t.id} style={{
-              background: t.type === 'error' ? '#7F1D1D' : '#1C3829',
-              color: t.type === 'error' ? '#FECACA' : '#FDFAF4',
+              background: t.type === 'error' ? '#7F1D1D' : '#3C5445',
+              color: t.type === 'error' ? '#FECACA' : '#F5F0E3',
               padding:'10px 18px', borderRadius:10, fontSize:14, fontWeight:500,
               boxShadow:'0 4px 16px rgba(0,0,0,0.35)', pointerEvents:'auto',
               width:'100%', textAlign:'center'
@@ -1164,7 +1188,7 @@
     return (
       <div ref={ref} style={{
         position:'fixed', top:pos.y, left:pos.x, zIndex:9998,
-        background:'#1C2A20', border:'1px solid rgba(253,250,244,0.13)',
+        background:'#253B2E', border:'1px solid rgba(245,240,227,0.13)',
         borderRadius:10, boxShadow:'0 8px 28px rgba(0,0,0,0.45)',
         minWidth:168, overflow:'hidden'
       }}>
@@ -1173,7 +1197,7 @@
             onClick={() => { item.action(); onClose(); }}
             style={{ width:'100%', padding:'11px 16px', textAlign:'left',
               background:'transparent', border:'none',
-              color: item.danger ? '#FCA5A5' : '#FDFAF4',
+              color: item.danger ? '#FCA5A5' : '#F5F0E3',
               fontSize:14, cursor:'pointer', display:'flex', alignItems:'center', gap:10 }}
             onPointerOver={e => e.currentTarget.style.background='rgba(253,250,244,0.08)'}
             onPointerOut={e => e.currentTarget.style.background='transparent'}
@@ -1307,7 +1331,7 @@
     const btnStyle = {
       width: '100%', display: 'flex', alignItems: 'center', gap: 12,
       padding: '12px 14px', borderRadius: 12,
-      border: '2px solid #DDD6C8', background: '#FDFAF4',
+      border: '2px solid #CEC5B0', background: '#F5F0E3',
       cursor: 'pointer', textAlign: 'left',
     };
 
@@ -1319,28 +1343,28 @@
           <p className="text-fb-muted text-sm mb-4">Back up or restore all projects. Photos live in a separate IndexedDB with its own storage budget.</p>
 
           {/* Storage gauge */}
-          <div style={{ borderRadius: 12, border: '1px solid #DDD6C8', background: '#F7F3EA', padding: 12, marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: '#2C2C2C', marginBottom: 8 }}>Storage</div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6B7280', marginBottom: 4 }}>
+          <div style={{ borderRadius: 12, border: '1px solid #CEC5B0', background: '#EBE5D5', padding: 12, marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#1A1A1A', marginBottom: 8 }}>Storage</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#5A5248', marginBottom: 4 }}>
               <span>Projects &amp; data (localStorage)</span>
-              <span style={{ fontFamily: 'Courier New, monospace', color: '#2C2C2C' }}>{fmtMB(usage.ls)}</span>
+              <span style={{ fontFamily: "'Share Tech Mono', 'Courier New', monospace", color: '#1A1A1A' }}>{fmtMB(usage.ls)}</span>
             </div>
-            <div style={{ height: 6, borderRadius: 4, background: '#E5E1D8', overflow: 'hidden', marginBottom: 10 }}>
-              <div style={{ height: '100%', width: `${Math.min(100, usage.ls / 5e6 * 100)}%`, background: '#2D6A4F' }} />
+            <div style={{ height: 6, borderRadius: 4, background: '#D2C9B7', overflow: 'hidden', marginBottom: 10 }}>
+              <div style={{ height: '100%', width: `${Math.min(100, usage.ls / 5e6 * 100)}%`, background: '#4E7864' }} />
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6B7280', marginBottom: 4 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#5A5248', marginBottom: 4 }}>
               <span>Photos (IndexedDB)</span>
-              <span style={{ fontFamily: 'Courier New, monospace', color: '#2C2C2C' }}>
+              <span style={{ fontFamily: "'Share Tech Mono', 'Courier New', monospace", color: '#1A1A1A' }}>
                 {fmtMB(usage.idb)}{usage.quota ? ` / ${fmtMB(usage.quota)}` : ''}
               </span>
             </div>
-            <div style={{ height: 6, borderRadius: 4, background: '#E5E1D8', overflow: 'hidden' }}>
+            <div style={{ height: 6, borderRadius: 4, background: '#D2C9B7', overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${usage.quota ? Math.min(100, usage.idb / usage.quota * 100) : 0}%`, background: '#7C3AED' }} />
             </div>
             <button onClick={doPrune}
               style={{ marginTop: 10, width: '100%', padding: '8px 0', borderRadius: 8,
-                       border: '1px solid #DDD6C8', background: '#FDFAF4', fontSize: 12,
-                       fontWeight: 600, color: '#2C2C2C', cursor: 'pointer' }}>
+                       border: '1px solid #CEC5B0', background: '#F5F0E3', fontSize: 12,
+                       fontWeight: 600, color: '#1A1A1A', cursor: 'pointer' }}>
               Clean up unused photos
             </button>
           </div>
@@ -1349,15 +1373,15 @@
             <button onClick={exportBackup} style={btnStyle}>
               <span style={{ fontSize: 22 }}>⬇</span>
               <div>
-                <div style={{ fontWeight: 600, fontSize: 14, color: '#2C2C2C' }}>Export Backup</div>
-                <div style={{ fontSize: 12, color: '#6B7280', marginTop: 1 }}>Download all projects as a .json file</div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: '#1A1A1A' }}>Export Backup</div>
+                <div style={{ fontSize: 12, color: '#5A5248', marginTop: 1 }}>Download all projects as a .json file</div>
               </div>
             </button>
             <button onClick={() => fileInputRef.current?.click()} style={btnStyle}>
               <span style={{ fontSize: 22 }}>⬆</span>
               <div>
-                <div style={{ fontWeight: 600, fontSize: 14, color: '#2C2C2C' }}>Import Backup</div>
-                <div style={{ fontSize: 12, color: '#6B7280', marginTop: 1 }}>Restore from a .json backup (overwrites all data)</div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: '#1A1A1A' }}>Import Backup</div>
+                <div style={{ fontSize: 12, color: '#5A5248', marginTop: 1 }}>Restore from a .json backup (overwrites all data)</div>
               </div>
             </button>
             <input ref={fileInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={importBackup} />
@@ -1688,7 +1712,7 @@
             </button>
             <button onClick={doExport}
               className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80"
-              style={{ background: '#2D6A4F' }}>
+              style={{ background: '#4E7864' }}>
               ↓ Download File
             </button>
           </div>
@@ -1723,7 +1747,7 @@
           <h2 className="text-xl font-bold text-fb-text mb-4">Import Project</h2>
 
           {/* Project preview card */}
-          <div className="rounded-xl px-4 py-3 mb-4" style={{ background: '#F0EBE0', border: '1px solid #DDD6C8' }}>
+          <div className="rounded-xl px-4 py-3 mb-4" style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
             <p className="font-bold text-fb-text text-base">{src.name || 'Untitled'}</p>
             {src.jobNumber && <p className="text-xs text-fb-muted mt-0.5">Job #{src.jobNumber}</p>}
             <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-2 text-xs text-fb-muted">
@@ -1735,15 +1759,15 @@
 
           {/* Chain history — collapsible */}
           {chain.length > 0 && (
-            <details className="mb-4 rounded-xl overflow-hidden" style={{ border: '1px solid #DDD6C8' }}>
+            <details className="mb-4 rounded-xl overflow-hidden" style={{ border: '1px solid #CEC5B0' }}>
               <summary className="px-3 py-2 text-xs font-bold text-fb-muted uppercase tracking-widest cursor-pointer select-none"
-                style={{ background: '#F0EBE0', listStyle: 'none' }}>
+                style={{ background: '#EBE5D5', listStyle: 'none' }}>
                 Transfer history · {chain.length} event{chain.length !== 1 ? 's' : ''}
               </summary>
-              <div className="divide-y" style={{ borderColor: '#DDD6C8' }}>
+              <div className="divide-y" style={{ borderColor: '#CEC5B0' }}>
                 {[...chain].reverse().map((rec, i) => (
-                  <div key={i} className="px-3 py-2 text-xs" style={{ background: '#FDFAF4' }}>
-                    <span className="font-semibold" style={{ color: rec.action === 'export' ? '#2D6A4F' : '#1d4ed8' }}>
+                  <div key={i} className="px-3 py-2 text-xs" style={{ background: '#F5F0E3' }}>
+                    <span className="font-semibold" style={{ color: rec.action === 'export' ? '#4E7864' : '#1d4ed8' }}>
                       {rec.action === 'export' ? '↑ Export' : '↓ Import'} #{rec.seq}
                     </span>
                     <span className="text-fb-muted ml-2">{rec.by || 'Unknown'}</span>
@@ -1770,7 +1794,7 @@
             </button>
             <button onClick={doImport}
               className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80"
-              style={{ background: '#2D6A4F' }}>
+              style={{ background: '#4E7864' }}>
               ↓ Import Project
             </button>
           </div>
@@ -1805,13 +1829,13 @@
           <h2 className="text-xl font-bold text-fb-text mb-4">Project Settings</h2>
 
           {/* Tab bar */}
-          <div className="flex gap-1 p-1 rounded-xl mb-5" style={{ background: '#F0EBE0' }}>
+          <div className="flex gap-1 p-1 rounded-xl mb-5" style={{ background: '#EBE5D5' }}>
             {[['transfer', '↔ Transfer'], ['settings', '⚙ Settings']].map(([id, label]) => (
               <button key={id} onClick={() => setTab(id)}
                 className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all"
                 style={{
-                  background:  tab === id ? 'white' : 'transparent',
-                  color:       tab === id ? '#2D6A4F' : '#9CA3AF',
+                  background:  tab === id ? '#F5F0E3' : 'transparent',
+                  color:       tab === id ? '#3C5445' : '#9A908A',
                   boxShadow:   tab === id ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
                 }}>
                 {label}
@@ -1824,7 +1848,7 @@
               {/* Export button */}
               <button onClick={() => setShowExport(true)}
                 className="w-full py-3 rounded-xl font-semibold text-sm text-white active:opacity-80 flex items-center justify-center gap-2 mb-1"
-                style={{ background: '#2D6A4F' }}>
+                style={{ background: '#4E7864' }}>
                 <span style={{ fontSize: 16 }}>↑</span> Export Project File
               </button>
               <p className="text-xs text-fb-muted text-center mb-5">
@@ -1835,7 +1859,7 @@
               <p className="text-xs font-bold text-fb-muted uppercase tracking-widest mb-2">Transfer History</p>
               {chain.length === 0
                 ? (
-                  <p className="text-sm text-fb-muted py-6 text-center rounded-xl" style={{ background: '#F0EBE0' }}>
+                  <p className="text-sm text-fb-muted py-6 text-center rounded-xl" style={{ background: '#EBE5D5' }}>
                     No exports or imports yet.
                   </p>
                 )
@@ -1843,10 +1867,10 @@
                   <div className="space-y-2 max-h-64 overflow-y-auto">
                     {[...chain].reverse().map((rec, i) => (
                       <div key={i} className="rounded-xl px-3 py-2.5"
-                        style={{ background: '#F0EBE0', border: '1px solid #DDD6C8' }}>
+                        style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
                         <div className="flex items-center gap-2 mb-0.5">
                           <span className="text-xs font-bold px-1.5 py-0.5 rounded-md text-white"
-                            style={{ background: rec.action === 'export' ? '#2D6A4F' : '#1d4ed8', fontSize: 9 }}>
+                            style={{ background: rec.action === 'export' ? '#4E7864' : '#1d4ed8', fontSize: 9 }}>
                             {rec.action === 'export' ? '↑ Export' : '↓ Import'} #{rec.seq}
                           </span>
                           <span className="text-xs font-semibold text-fb-text">{rec.by || 'Unknown'}</span>
@@ -2108,7 +2132,7 @@
         </p>
         <button onClick={onNew}
           className="flex items-center gap-2 px-6 py-3 rounded-2xl text-white font-semibold text-base shadow-lg active:scale-95 transition-transform"
-          style={{ background: '#2D6A4F' }}>
+          style={{ background: '#4E7864' }}>
           <Ico.Plus /> New Project
         </button>
       </div>
@@ -2150,7 +2174,7 @@
             <button onClick={onClose} className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold">Cancel</button>
             <button onClick={handleCreate}
               className="flex-1 py-3 rounded-xl text-white font-semibold"
-              style={{ background: form.name.trim() ? '#2D6A4F' : '#9CA3AF' }}>
+              style={{ background: form.name.trim() ? '#4E7864' : '#9A908A' }}>
               Create
             </button>
           </div>
@@ -2348,10 +2372,10 @@
       const bgX = bx - pad, bgY = by - 12 * ps;
       return `<g>
         <rect x="${bgX.toFixed(1)}" y="${bgY.toFixed(1)}" width="${bgW.toFixed(1)}" height="${bgH.toFixed(1)}" rx="${(3*ps).toFixed(1)}" fill="rgba(255,255,255,0.88)" stroke="#DDD6C8" stroke-width="${(0.8*ps).toFixed(1)}"/>
-        <line x1="${bx.toFixed(1)}" y1="${by.toFixed(1)}" x2="${(bx+barPxW).toFixed(1)}" y2="${by.toFixed(1)}" stroke="#1C3829" stroke-width="${(sw*2).toFixed(1)}"/>
-        <line x1="${bx.toFixed(1)}" y1="${(by-bh/2).toFixed(1)}" x2="${bx.toFixed(1)}" y2="${(by+bh/2).toFixed(1)}" stroke="#1C3829" stroke-width="${sw.toFixed(1)}"/>
-        <line x1="${(bx+barPxW).toFixed(1)}" y1="${(by-bh/2).toFixed(1)}" x2="${(bx+barPxW).toFixed(1)}" y2="${(by+bh/2).toFixed(1)}" stroke="#1C3829" stroke-width="${sw.toFixed(1)}"/>
-        <text x="${(bx+barPxW/2).toFixed(1)}" y="${(by-bh/2-2.5*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${fs.toFixed(1)}" fill="#1C3829" font-family="Courier New,monospace" font-weight="bold">${barLabel}</text>
+        <line x1="${bx.toFixed(1)}" y1="${by.toFixed(1)}" x2="${(bx+barPxW).toFixed(1)}" y2="${by.toFixed(1)}" stroke="#3C5445" stroke-width="${(sw*2).toFixed(1)}"/>
+        <line x1="${bx.toFixed(1)}" y1="${(by-bh/2).toFixed(1)}" x2="${bx.toFixed(1)}" y2="${(by+bh/2).toFixed(1)}" stroke="#3C5445" stroke-width="${sw.toFixed(1)}"/>
+        <line x1="${(bx+barPxW).toFixed(1)}" y1="${(by-bh/2).toFixed(1)}" x2="${(bx+barPxW).toFixed(1)}" y2="${(by+bh/2).toFixed(1)}" stroke="#3C5445" stroke-width="${sw.toFixed(1)}"/>
+        <text x="${(bx+barPxW/2).toFixed(1)}" y="${(by-bh/2-2.5*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${fs.toFixed(1)}" fill="#3C5445" font-family="Courier New,monospace" font-weight="bold">${barLabel}</text>
         <text x="${(bx+barPxW/2).toFixed(1)}" y="${(by+bh/2+7*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${(fs*0.85).toFixed(1)}" fill="#555" font-family="Helvetica,Arial,sans-serif" font-style="italic">${scaleLabel}</text>
       </g>`;
     }
@@ -2368,10 +2392,10 @@
       const nFs   = (9.5 * ps).toFixed(1);
       return `<g>
         <circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="${(R+2.5*ps).toFixed(1)}" fill="white" opacity="0.92"/>
-        <circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="${(R+1.5*ps).toFixed(1)}" fill="none" stroke="#1C3829" stroke-width="${(sw*1.2).toFixed(1)}"/>
-        <polygon points="${ax.toFixed(1)},${tipY.toFixed(1)} ${(ax-wingX).toFixed(1)},${ay.toFixed(1)} ${(ax+wingX).toFixed(1)},${ay.toFixed(1)}" fill="#1C3829"/>
-        <polygon points="${ax.toFixed(1)},${baseY.toFixed(1)} ${(ax-wingX).toFixed(1)},${ay.toFixed(1)} ${(ax+wingX).toFixed(1)},${ay.toFixed(1)}" fill="white" stroke="#1C3829" stroke-width="${sw.toFixed(1)}"/>
-        <text x="${ax.toFixed(1)}" y="${(tipY-3.5*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${nFs}" fill="#1C3829" font-family="Helvetica,Arial,sans-serif" font-weight="bold">N</text>
+        <circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="${(R+1.5*ps).toFixed(1)}" fill="none" stroke="#3C5445" stroke-width="${(sw*1.2).toFixed(1)}"/>
+        <polygon points="${ax.toFixed(1)},${tipY.toFixed(1)} ${(ax-wingX).toFixed(1)},${ay.toFixed(1)} ${(ax+wingX).toFixed(1)},${ay.toFixed(1)}" fill="#3C5445"/>
+        <polygon points="${ax.toFixed(1)},${baseY.toFixed(1)} ${(ax-wingX).toFixed(1)},${ay.toFixed(1)} ${(ax+wingX).toFixed(1)},${ay.toFixed(1)}" fill="white" stroke="#3C5445" stroke-width="${sw.toFixed(1)}"/>
+        <text x="${ax.toFixed(1)}" y="${(tipY-3.5*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${nFs}" fill="#3C5445" font-family="Helvetica,Arial,sans-serif" font-weight="bold">N</text>
       </g>`;
     }
 
@@ -2646,19 +2670,20 @@
       if (showDims) dimsSVG += _dimsSVG(s);
     }
 
-    const bgAttr = transparent ? '' : ' style="background:#FDFAF4;"';
+    const bgAttr = transparent ? '' : ' style="background:#F5F0E3;"';
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}" width="${outW}" height="${outH}"${bgAttr}>${shapesSVG}${dimsSVG}</svg>`;
   }
 
   // Draw the notebook-style page header on the current jsPDF page.
   // Returns the y coordinate where content should start below the header.
   function _pdfPageHeader(pdf, page, meta, W, H, margin) {
-    const GD = _hexRgb('#1C3829');
-    const GM = _hexRgb('#2D6A4F');
-    const CR = _hexRgb('#FDFAF4');
-    const GL = _hexRgb('#52B788');
+    const GD  = _hexRgb('#3C5445');  // heading / dark ink
+    const GM  = _hexRgb('#4E7864');  // accent green (rule lines, bars)
+    const CR  = _hexRgb('#F5F0E3');  // page cream
+    const HA  = _hexRgb('#EBE5D5');  // header band (slightly darker cream)
+    const MU  = _hexRgb('#5A5248');  // muted text
 
-    // White page background (print-friendly — no dark ink bleed edge)
+    // White page background (print-friendly)
     pdf.setFillColor(255, 255, 255);
     pdf.rect(0, 0, W, H, 'F');
 
@@ -2666,16 +2691,20 @@
     pdf.setFillColor(...CR);
     pdf.roundedRect(margin, margin, W - 2*margin, H - 2*margin, 4, 4, 'F');
 
-    // Dark green header bar inside the paper — rounded top corners only
-    pdf.setFillColor(...GM);
+    // Light cream header band — printer-friendly (replaces old dark green fill)
+    pdf.setFillColor(...HA);
     pdf.roundedRect(margin, margin, W - 2*margin, 20, 4, 4, 'F');
     pdf.rect(margin, margin + 10, W - 2*margin, 10, 'F');
+    // Thin accent rule at bottom of header band
+    pdf.setDrawColor(...GM);
+    pdf.setLineWidth(0.6);
+    pdf.line(margin, margin + 20, W - margin, margin + 20);
 
-    // Page title — left-aligned in header
+    // Page title — left-aligned in header, dark heading color
     const titleStr = page.title?.trim() || '(Untitled)';
     pdf.setFontSize(11);
     pdf.setFont('helvetica', 'bold');
-    pdf.setTextColor(...CR);
+    pdf.setTextColor(...GD);
     const titleLines = pdf.splitTextToSize(titleStr, W - margin*2 - 50);
     pdf.text(titleLines[0], margin + 4, margin + 13);
 
@@ -2684,7 +2713,7 @@
     if (dateStr) {
       pdf.setFontSize(7.5);
       pdf.setFont('helvetica', 'normal');
-      pdf.setTextColor(...GL);
+      pdf.setTextColor(...MU);
       pdf.text(dateStr, W - margin - 4, margin + 13, { align: 'right' });
     }
 
@@ -2696,7 +2725,7 @@
       const noteH = noteLines.length * 4.5 + 8;
       pdf.setFillColor(248, 245, 238);
       pdf.rect(margin, y, W - 2*margin, noteH, 'F');
-      pdf.setDrawColor(..._hexRgb('#DDD6C8'));
+      pdf.setDrawColor(..._hexRgb('#CEC5B0'));
       pdf.setLineWidth(0.3);
       pdf.line(margin, y, W - margin, y);
       pdf.line(margin, y + noteH, W - margin, y + noteH);
@@ -2803,11 +2832,12 @@
 
       const { jsPDF } = window.jspdf;
       const W = 210, H = 297, margin = 14;
-      const GD = _hexRgb('#1C3829');
-      const GM = _hexRgb('#2D6A4F');
-      const GL = _hexRgb('#52B788');
-      const CR = _hexRgb('#FDFAF4');
-      const BRD = _hexRgb('#DDD6C8');
+      const GD  = _hexRgb('#3C5445');
+      const GM  = _hexRgb('#4E7864');
+      const GL  = _hexRgb('#7AAE94');
+      const CR  = _hexRgb('#F5F0E3');
+      const HA  = _hexRgb('#EBE5D5');
+      const BRD = _hexRgb('#CEC5B0');
 
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       // Export timestamp — used in per-page footer
@@ -2826,22 +2856,24 @@
       pdf.setFillColor(...CR);
       pdf.roundedRect(margin, margin + 10, W - margin*2, H - margin*2 - 20, 4, 4, 'F');
 
-      // Green header inside panel
-      pdf.setFillColor(...GM);
+      // Light cream header band — printer-friendly
+      pdf.setFillColor(...HA);
       pdf.roundedRect(margin, margin + 10, W - margin*2, 42, 4, 4, 'F');
-      // Square off bottom corners of header
       pdf.rect(margin, margin + 10 + 38, W - margin*2, 4, 'F');
+      // Accent rule at bottom of header
+      pdf.setDrawColor(...GM); pdf.setLineWidth(0.8);
+      pdf.line(margin, margin + 52, W - margin, margin + 52);
 
       // "FIELD BOOK" label
       pdf.setFontSize(8);
       pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(...GL);
+      pdf.setTextColor(...GM);
       pdf.text('DIGITAL FIELD BOOK', W/2, margin + 22, { align: 'center', charSpace: 2 });
 
       // Project name
       pdf.setFontSize(20);
       pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(...CR);
+      pdf.setTextColor(...GD);
       const nameLines = pdf.splitTextToSize(proj.name, W - margin*2 - 12);
       pdf.text(nameLines, W/2, margin + 38, { align: 'center' });
 
@@ -2955,10 +2987,10 @@
         } else if (page.type === 'title') {
           // ── TITLE PAGE — professional cover sheet ────────────────────────────
           const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin);
-          const BRD2 = _hexRgb('#DDD6C8');
-          const GD2 = _hexRgb('#1C3829');
-          const GM2 = _hexRgb('#2D6A4F');
-          const GL2 = _hexRgb('#52B788');
+          const BRD2 = _hexRgb('#CEC5B0');
+          const GD2 = _hexRgb('#3C5445');
+          const GM2 = _hexRgb('#4E7864');
+          const GL2 = _hexRgb('#5A5248');
           let ty = contentY + 6;
 
           // Helper: draw a titled field block with left accent bar
@@ -3157,9 +3189,9 @@
         }
 
         // Notebook footer — inside cream paper area
-        pdf.setDrawColor(..._hexRgb('#DDD6C8')); pdf.setLineWidth(0.3);
+        pdf.setDrawColor(..._hexRgb('#CEC5B0')); pdf.setLineWidth(0.3);
         pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
-        pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(..._hexRgb('#2D6A4F'));
+        pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(..._hexRgb('#4E7864'));
         pdf.text(`P.${page.pageNumber}`, margin + 4, H - margin - 4);
         pdf.setFont('helvetica', 'normal'); pdf.setTextColor(150, 150, 150);
         pdf.text(`Exported  ${exportTs}`, W - margin - 4, H - margin - 4, { align: 'right' });
@@ -3200,7 +3232,7 @@
         pdf.text(entry.typeLabel.toUpperCase(), margin + 12, ty + 0.5, { align: 'center' });
 
         // P.n label
-        pdf.setFontSize(7.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(..._hexRgb('#1C3829'));
+        pdf.setFontSize(7.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(..._hexRgb('#3C5445'));
         pdf.text(`P.${entry.pageNum}`, margin + 24, ty + 0.5);
 
         // Title text
@@ -3219,16 +3251,16 @@
         }
 
         // PDF page number
-        pdf.setFontSize(10); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(..._hexRgb('#1C3829'));
+        pdf.setFontSize(10); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(..._hexRgb('#3C5445'));
         pdf.text(String(entry.pdfPage), W - margin - 4, ty + 0.5, { align: 'right' });
 
         ty += 12;
       });
 
       // TOC footer
-      pdf.setDrawColor(..._hexRgb('#DDD6C8')); pdf.setLineWidth(0.3);
+      pdf.setDrawColor(..._hexRgb('#CEC5B0')); pdf.setLineWidth(0.3);
       pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
-      pdf.setFontSize(6.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(..._hexRgb('#2D6A4F'));
+      pdf.setFontSize(6.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(..._hexRgb('#4E7864'));
       pdf.text(proj.name, margin + 4, H - margin - 4);
       pdf.text('2', W - margin - 4, H - margin - 4, { align: 'right' });
 
@@ -3258,9 +3290,11 @@
 
       const { jsPDF } = window.jspdf;
       const W = 210, H = 297, margin = 14;
-      const GD = _hexRgb('#1C3829');
-      const GL = _hexRgb('#52B788');
-      const CR = _hexRgb('#FDFAF4');
+      const GD  = _hexRgb('#3C5445');
+      const GM  = _hexRgb('#4E7864');
+      const GL  = _hexRgb('#7AAE94');
+      const CR  = _hexRgb('#F5F0E3');
+      const HA  = _hexRgb('#EBE5D5');
       const metaMap = {
         data:   { label: 'Data',   color: '#2D6A4F', bg: '#D8F3DC' },
         sketch: { label: 'Sketch', color: '#3B82F6', bg: '#EFF6FF' },
@@ -3299,9 +3333,9 @@
         }
       } else if (page.type === 'title') {
         // ── TITLE PAGE — professional cover sheet ──────────────────────────────
-        const BRD2 = _hexRgb('#DDD6C8');
-        const GM2 = _hexRgb('#2D6A4F');
-        const GL2 = _hexRgb('#52B788');
+        const BRD2 = _hexRgb('#CEC5B0');
+        const GM2  = _hexRgb('#4E7864');
+        const GL2  = _hexRgb('#5A5248');
         let ty = contentY + 6;
 
         function _titleFieldSP(lbl, val, opts = {}) {
@@ -3425,9 +3459,9 @@
         year: 'numeric', month: 'short', day: 'numeric',
         hour: '2-digit', minute: '2-digit', hour12: false,
       });
-      pdf.setDrawColor(..._hexRgb('#DDD6C8')); pdf.setLineWidth(0.3);
+      pdf.setDrawColor(..._hexRgb('#CEC5B0')); pdf.setLineWidth(0.3);
       pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
-      pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(..._hexRgb('#2D6A4F'));
+      pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(..._hexRgb('#4E7864'));
       pdf.text(`P.${page.pageNumber}`, margin + 4, H - margin - 4);
       pdf.setFont('helvetica', 'normal'); pdf.setTextColor(150, 150, 150);
       pdf.text(`Exported  ${exportTsSP}`, W - margin - 4, H - margin - 4, { align: 'right' });
@@ -3449,7 +3483,7 @@
   // ─────────────────────────────────────────────────────────────────────────────
 
   const TYPE_META = {
-    data:   { label: 'Data',   color: '#2D6A4F', bg: '#D8F3DC', Icon: () => <Ico.Table />  },
+    data:   { label: 'Data',   color: '#3C5445', bg: '#D2E8DA', Icon: () => <Ico.Table />  },
     sketch: { label: 'Sketch', color: '#3B82F6', bg: '#EFF6FF', Icon: () => <Ico.Grid />   },
     title:  { label: 'Title',  color: '#D97706', bg: '#FEF3C7', Icon: () => <Ico.File />   },
     photo:  { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE', Icon: () => <Ico.Camera /> },
@@ -3587,7 +3621,7 @@
     const pageCount = project.pages?.length || 0;
 
     return (
-      <div className="flex flex-col h-full" style={{ background: '#1C3829' }}>
+      <div className="flex flex-col h-full" style={{ background: '#3C5445' }}>
         <NavBar title={project.name}
           subtitle={project.jobNumber ? `Job #${project.jobNumber}` : undefined}
           onBack={() => navigate('#/')}
