@@ -574,7 +574,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.131';
+  const APP_VERSION = '1.132';
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO STORAGE — IndexedDB
@@ -2848,81 +2848,109 @@
       });
 
       // ── PAGE 1: TITLE PAGE ─────────────────────────────────────────────────
+      // Full A4 document-style cover — dark header, clean body, dark footer
 
-      // White page background (print-friendly)
+      // White background
       pdf.setFillColor(255, 255, 255);
       pdf.rect(0, 0, W, H, 'F');
 
-      // Light grey header band on cover
-      pdf.setFillColor(236, 236, 236);
-      pdf.roundedRect(margin, margin + 10, W - margin*2, 42, 4, 4, 'F');
-      pdf.rect(margin, margin + 10 + 38, W - margin*2, 4, 'F');
-      // Accent rule at bottom of header
-      pdf.setDrawColor(...GM); pdf.setLineWidth(0.8);
-      pdf.line(margin, margin + 52, W - margin, margin + 52);
+      // Outer border (double-line, formal document look)
+      pdf.setDrawColor(30, 30, 30); pdf.setLineWidth(1.0);
+      pdf.rect(8, 8, W - 16, H - 16, 'S');
+      pdf.setDrawColor(160, 160, 160); pdf.setLineWidth(0.3);
+      pdf.rect(11, 11, W - 22, H - 22, 'S');
 
-      // "FIELD BOOK" label
-      pdf.setFontSize(8);
-      pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(...GM);
-      pdf.text('DIGITAL FIELD BOOK', W/2, margin + 22, { align: 'center', charSpace: 2 });
+      // ── Dark header band ──────────────────────────────────────────────────
+      const hdY = 8, hdH = 90;
+      pdf.setFillColor(30, 30, 30);
+      pdf.rect(8, hdY, W - 16, hdH, 'F');
 
-      // Project name
-      pdf.setFontSize(20);
-      pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(...GD);
-      const nameLines = pdf.splitTextToSize(proj.name, W - margin*2 - 12);
-      pdf.text(nameLines, W/2, margin + 38, { align: 'center' });
+      // Thin accent rule inside header (near top)
+      pdf.setDrawColor(80, 80, 80); pdf.setLineWidth(0.3);
+      pdf.line(11, hdY + 14, W - 11, hdY + 14);
 
-      // Metadata grid
-      let y = margin + 68;
-      const fields = [
-        ['JOB NUMBER',  proj.jobNumber  || '—'],
-        ['DATE',        proj.date       || '—'],
-        ['CLIENT',      proj.client     || '—'],
-        ['SURVEYOR',    proj.surveyor   || '—'],
+      // "DIGITAL FIELD BOOK" wordmark
+      pdf.setFontSize(7.5); pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(150, 150, 150);
+      pdf.text('DIGITAL  FIELD  BOOK', W / 2, hdY + 10, { align: 'center' });
+
+      // Project name — large, white, centered in header
+      const nameLines = pdf.splitTextToSize(proj.name, W - 36);
+      const nameFontSize = nameLines.length > 1 ? 24 : 28;
+      pdf.setFontSize(nameFontSize); pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(255, 255, 255);
+      const nameBlockH = nameLines.length * (nameFontSize * 0.3528 * 1.2);
+      const nameY = hdY + 14 + (hdH - 14 - nameBlockH) / 2 + nameFontSize * 0.3528 * 0.85;
+      pdf.text(nameLines, W / 2, nameY, { align: 'center' });
+
+      // Job number below name (if set)
+      if (proj.jobNumber) {
+        pdf.setFontSize(9); pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(180, 180, 180);
+        pdf.text(`Job No.  ${proj.jobNumber}`, W / 2, hdY + hdH - 10, { align: 'center' });
+      }
+
+      // ── Metadata block ────────────────────────────────────────────────────
+      // 2-column grid, edge-aligned to inner border
+      const bx = 11, bw = W - 22;  // inner border reference
+      const mTop = hdY + hdH + 18;
+      const metaFields = [
+        ['CLIENT',      proj.client   || '—'],
+        ['SURVEYOR',    proj.surveyor || '—'],
+        ['DATE',        proj.date     || '—'],
+        ['JOB NUMBER',  proj.jobNumber || '—'],
       ];
-      const colW = (W - margin*2 - 10) / 2;
-      fields.forEach(([lbl, val], i) => {
+      const mColW = (bw - 20) / 2;   // two equal columns inside inner border
+      const mGap  = 20;              // gap between columns
+      const mRowH = 32;
+      metaFields.forEach(([lbl, val], i) => {
         const col = i % 2, row = Math.floor(i / 2);
-        const fx = margin + 8 + col * (colW + 10);
-        const fy = y + row * 22;
-        pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(107, 114, 128);
+        const fx  = bx + 10 + col * (mColW + mGap);
+        const fy  = mTop + row * mRowH;
+        pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(130, 130, 130);
         pdf.text(lbl, fx, fy);
-        pdf.setFontSize(11); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(44, 44, 44);
-        pdf.text(String(val), fx, fy + 7);
-        // Underline
-        pdf.setDrawColor(...BRD); pdf.setLineWidth(0.3);
-        pdf.line(fx, fy + 10, fx + colW - 4, fy + 10);
+        pdf.setFontSize(13); pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(25, 25, 25);
+        pdf.text(String(val), fx, fy + 9);
+        pdf.setDrawColor(210, 210, 210); pdf.setLineWidth(0.3);
+        pdf.line(fx, fy + 13, fx + mColW - 2, fy + 13);
       });
 
-      y += 50;
+      // ── Horizontal rule after metadata ────────────────────────────────────
+      const ruleY = mTop + 2 * mRowH + 8;
+      pdf.setDrawColor(60, 60, 60); pdf.setLineWidth(0.7);
+      pdf.line(bx + 6, ruleY, bx + bw - 6, ruleY);
+      pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.3);
+      pdf.line(bx + 6, ruleY + 2, bx + bw - 6, ruleY + 2);
 
-      // Divider
-      pdf.setDrawColor(...BRD); pdf.setLineWidth(0.6);
-      pdf.line(margin + 8, y, W - margin - 8, y);
-      y += 8;
-
-      // Pages badge
+      // ── Page count + created date row ─────────────────────────────────────
       const pageCount = proj.pages?.length || 0;
-      pdf.setFillColor(...GM);
-      pdf.roundedRect(margin + 8, y, 38, 12, 3, 3, 'F');
-      pdf.setFontSize(9); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...CR);
-      pdf.text(`${pageCount} Page${pageCount !== 1 ? 's' : ''}`, margin + 27, y + 8, { align: 'center' });
-
-      // Created date
       const createdStr = new Date(proj.createdAt).toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' });
-      pdf.setFontSize(8); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(107, 114, 128);
-      pdf.text(`Created  ${createdStr}`, margin + 52, y + 8);
+      const infoY = ruleY + 14;
+      pdf.setFontSize(8); pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(80, 80, 80);
+      pdf.text('PAGES', bx + 10, infoY);
+      pdf.setFontSize(22); pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(30, 30, 30);
+      pdf.text(String(pageCount), bx + 10, infoY + 14);
 
-      // Footer bar on title page
+      pdf.setFontSize(8); pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(80, 80, 80);
+      pdf.text('CREATED', W / 2 + 4, infoY);
+      pdf.setFontSize(11); pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(30, 30, 30);
+      pdf.text(createdStr, W / 2 + 4, infoY + 9);
+
+      // ── Dark footer band ──────────────────────────────────────────────────
+      const ftH = 18, ftY = H - 8 - ftH;
+      pdf.setFillColor(30, 30, 30);
+      pdf.rect(8, ftY, W - 16, ftH, 'F');
       const exportDateStr = new Date().toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' });
-      pdf.setFillColor(...GM);
-      pdf.roundedRect(margin, H - margin - 14, W - margin*2, 14, 4, 4, 'F');
-      pdf.rect(margin, H - margin - 14, W - margin*2, 8, 'F');
-      pdf.setFontSize(7.5); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(...GL);
-      pdf.text('FieldBook — Digital Field Notebook', margin + 8, H - margin - 4);
-      pdf.text(`Exported ${exportDateStr}`, W - margin - 8, H - margin - 4, { align: 'right' });
+      pdf.setFontSize(7.5); pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(160, 160, 160);
+      pdf.text('FieldBook  ·  Digital Field Notebook', 11 + 6, ftY + 11);
+      pdf.text(`Exported  ${exportDateStr}`, W - 11 - 6, ftY + 11, { align: 'right' });
 
       // ── PAGE 2: TOC PLACEHOLDER (filled in below) ──────────────────────────
       pdf.addPage();
