@@ -574,7 +574,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.126';
+  const APP_VERSION = '1.128';
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO STORAGE — IndexedDB
@@ -2199,38 +2199,44 @@
   // Returns a font-name object { hand, handSt, mono, monoSt }.
   // Falls back to helvetica/courier if fonts are unavailable (offline, CORS, etc.).
   async function _initPDFFonts(pdf) {
-    if (_pdfFontCache === null) {
-      try {
-        const fetchB64 = async url => {
-          const buf = await (await fetch(url)).arrayBuffer();
-          const bytes = new Uint8Array(buf);
-          const chunks = [];
-          for (let i = 0; i < bytes.length; i += 8192)
-            chunks.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
-          return btoa(chunks.join(''));
-        };
-        const [caveat, stm] = await Promise.all([
-          fetchB64('https://raw.githubusercontent.com/google/fonts/main/ofl/caveat/Caveat-Bold.ttf'),
-          fetchB64('https://raw.githubusercontent.com/google/fonts/main/ofl/sharetechmono/ShareTechMono-Regular.ttf'),
-        ]);
-        _pdfFontCache = { caveat, stm };
-      } catch (e) {
-        console.warn('[PDF] Custom fonts unavailable, using built-ins:', e.message);
-        _pdfFontCache = {};
+    try {
+      if (_pdfFontCache === null) {
+        try {
+          const fetchB64 = async url => {
+            const buf = await (await fetch(url)).arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            const chunks = [];
+            for (let i = 0; i < bytes.length; i += 8192)
+              chunks.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
+            return btoa(chunks.join(''));
+          };
+          const [caveat, stm] = await Promise.all([
+            fetchB64('https://raw.githubusercontent.com/google/fonts/main/ofl/caveat/Caveat-Bold.ttf'),
+            fetchB64('https://raw.githubusercontent.com/google/fonts/main/ofl/sharetechmono/ShareTechMono-Regular.ttf'),
+          ]);
+          _pdfFontCache = { caveat, stm };
+        } catch (e) {
+          console.warn('[PDF] Custom fonts unavailable, using built-ins:', e.message);
+          _pdfFontCache = {};
+        }
       }
+      const F = { hand: 'helvetica', handSt: 'bold', mono: 'courier', monoSt: 'normal' };
+      if (_pdfFontCache.caveat) {
+        pdf.addFileToVFS('Caveat-Bold.ttf', _pdfFontCache.caveat);
+        pdf.addFont('Caveat-Bold.ttf', 'Caveat', 'bold');
+        F.hand = 'Caveat'; F.handSt = 'bold';
+      }
+      if (_pdfFontCache.stm) {
+        pdf.addFileToVFS('ShareTechMono.ttf', _pdfFontCache.stm);
+        pdf.addFont('ShareTechMono.ttf', 'ShareTechMono', 'normal');
+        F.mono = 'ShareTechMono'; F.monoSt = 'normal';
+      }
+      return F;
+    } catch (e) {
+      console.warn('[PDF] Font registration failed, using built-ins:', e.message);
+      _pdfFontCache = {};
+      return { hand: 'helvetica', handSt: 'bold', mono: 'courier', monoSt: 'normal' };
     }
-    const F = { hand: 'helvetica', handSt: 'bold', mono: 'courier', monoSt: 'normal' };
-    if (_pdfFontCache.caveat) {
-      pdf.addFileToVFS('Caveat-Bold.ttf', _pdfFontCache.caveat);
-      pdf.addFont('Caveat-Bold.ttf', 'Caveat', 'bold');
-      F.hand = 'Caveat'; F.handSt = 'bold';
-    }
-    if (_pdfFontCache.stm) {
-      pdf.addFileToVFS('ShareTechMono.ttf', _pdfFontCache.stm);
-      pdf.addFont('ShareTechMono.ttf', 'ShareTechMono', 'normal');
-      F.mono = 'ShareTechMono'; F.monoSt = 'normal';
-    }
-    return F;
   }
 
   // Build an SVG string from stored sketch page data.
@@ -5171,6 +5177,7 @@
     const H = pdf.internal.pageSize.getHeight();
     const margin = 14;
     const meta = { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE' };
+    const F = await _initPDFFonts(pdf);
     const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
     const fullImgW = W - margin * 2;
     const maxPhotoH = 180; // mm — max height per photo; portrait images scale down and centre
