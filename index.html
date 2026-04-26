@@ -574,7 +574,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.128';
+  const APP_VERSION = '1.129';
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO STORAGE — IndexedDB
@@ -2192,51 +2192,13 @@
     return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
   }
 
-  // TTF font cache — fetched once per session, reused across exports
-  let _pdfFontCache = null;
-
-  // Load Caveat Bold (handwritten) and Share Tech Mono into a jsPDF instance.
-  // Returns a font-name object { hand, handSt, mono, monoSt }.
-  // Falls back to helvetica/courier if fonts are unavailable (offline, CORS, etc.).
-  async function _initPDFFonts(pdf) {
-    try {
-      if (_pdfFontCache === null) {
-        try {
-          const fetchB64 = async url => {
-            const buf = await (await fetch(url)).arrayBuffer();
-            const bytes = new Uint8Array(buf);
-            const chunks = [];
-            for (let i = 0; i < bytes.length; i += 8192)
-              chunks.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
-            return btoa(chunks.join(''));
-          };
-          const [caveat, stm] = await Promise.all([
-            fetchB64('https://raw.githubusercontent.com/google/fonts/main/ofl/caveat/Caveat-Bold.ttf'),
-            fetchB64('https://raw.githubusercontent.com/google/fonts/main/ofl/sharetechmono/ShareTechMono-Regular.ttf'),
-          ]);
-          _pdfFontCache = { caveat, stm };
-        } catch (e) {
-          console.warn('[PDF] Custom fonts unavailable, using built-ins:', e.message);
-          _pdfFontCache = {};
-        }
-      }
-      const F = { hand: 'helvetica', handSt: 'bold', mono: 'courier', monoSt: 'normal' };
-      if (_pdfFontCache.caveat) {
-        pdf.addFileToVFS('Caveat-Bold.ttf', _pdfFontCache.caveat);
-        pdf.addFont('Caveat-Bold.ttf', 'Caveat', 'bold');
-        F.hand = 'Caveat'; F.handSt = 'bold';
-      }
-      if (_pdfFontCache.stm) {
-        pdf.addFileToVFS('ShareTechMono.ttf', _pdfFontCache.stm);
-        pdf.addFont('ShareTechMono.ttf', 'ShareTechMono', 'normal');
-        F.mono = 'ShareTechMono'; F.monoSt = 'normal';
-      }
-      return F;
-    } catch (e) {
-      console.warn('[PDF] Font registration failed, using built-ins:', e.message);
-      _pdfFontCache = {};
-      return { hand: 'helvetica', handSt: 'bold', mono: 'courier', monoSt: 'normal' };
-    }
+  // Returns jsPDF font names for handwritten and monospace styles.
+  // Custom TTF loading was removed — jsPDF's built-in font registration silently
+  // stores broken entries for some TTFs and then crashes on pdf.text() with
+  // "Cannot read properties of undefined (reading 'Unicode')". helvetica/courier
+  // are jsPDF built-ins and always work.
+  function _initPDFFonts() {
+    return { hand: 'helvetica', handSt: 'bold', mono: 'courier', monoSt: 'normal' };
   }
 
   // Build an SVG string from stored sketch page data.
@@ -2888,7 +2850,7 @@
       const BRD = _hexRgb('#CEC5B0');
 
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-      const F   = await _initPDFFonts(pdf);
+      const F   = _initPDFFonts();
       // Export timestamp — used in per-page footer
       const exportTs = new Date().toLocaleString('en-CA', {
         year: 'numeric', month: 'short', day: 'numeric',
@@ -3319,7 +3281,7 @@
 
     } catch (err) {
       console.error('[exportProjectPDF]', err);
-      toast.error('PDF export failed: ' + (err?.message || String(err)));
+      toast.error('PDF export failed — see console');
     } finally {
       setExporting(false);
     }
@@ -3352,7 +3314,7 @@
       };
       const meta = metaMap[page.type] || metaMap.data;
       const pdf  = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-      const F    = await _initPDFFonts(pdf);
+      const F    = _initPDFFonts();
       const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
 
       if (page.type === 'sketch') {
@@ -5177,7 +5139,7 @@
     const H = pdf.internal.pageSize.getHeight();
     const margin = 14;
     const meta = { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE' };
-    const F = await _initPDFFonts(pdf);
+    const F = _initPDFFonts();
     const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
     const fullImgW = W - margin * 2;
     const maxPhotoH = 180; // mm — max height per photo; portrait images scale down and centre
