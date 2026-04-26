@@ -574,7 +574,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.133';
+  const APP_VERSION = '1.134';
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO STORAGE — IndexedDB
@@ -2781,7 +2781,6 @@
   function _drawPdfScaleBar(pdf, scaleDenom, units, W, H, margin) {
     if (!scaleDenom || scaleDenom <= 1) return;
     const u = units || 'm';
-    // Find a nice real-world value that gives ~40-60mm bar width
     const niceVals = [1,2,5,10,25,50,100,150,200,250,500,1000,2000];
     const targetMM = 50;
     const targetReal = targetMM * scaleDenom / 1000;
@@ -2789,31 +2788,30 @@
     for (const v of niceVals) {
       if (v >= targetReal * 0.6) { niceReal = v; break; }
     }
-    const barW  = niceReal * 1000 / scaleDenom;
-    const barH  = 3.5;
-    const nSegs = 5;
-    const segW  = barW / nSegs;
-    const bx    = W - margin - 4 - barW;
-    const by    = H - margin - 19;
-    const dk = [55, 55, 55], wh = [255, 255, 255];
-    for (let i = 0; i < nSegs; i++) {
-      const sx = bx + i * segW;
-      if (i === 0) {
-        const sw2 = segW / 2, sh2 = barH / 2;
-        pdf.setFillColor(...dk); pdf.rect(sx,        by,        sw2, sh2, 'F');
-        pdf.setFillColor(...wh); pdf.rect(sx + sw2,  by,        sw2, sh2, 'F');
-        pdf.setFillColor(...wh); pdf.rect(sx,        by + sh2,  sw2, sh2, 'F');
-        pdf.setFillColor(...dk); pdf.rect(sx + sw2,  by + sh2,  sw2, sh2, 'F');
-      } else {
-        pdf.setFillColor(...(i % 2 === 1 ? dk : wh));
-        pdf.rect(sx, by, segW, barH, 'F');
-      }
+    // Choose nSegs so that niceReal/nSegs is always a whole number — prevents
+    // repeated labels (e.g. niceReal=2, nSegs=5 → step=0.4 → rounded: 0,0,1,1,2,2)
+    let nSegs = 5;
+    for (const n of [5, 4, 2, 1]) {
+      if (Number.isInteger(niceReal / n)) { nSegs = n; break; }
     }
+    const barW = niceReal * 1000 / scaleDenom;
+    const barH = 3.5;
+    const segW = barW / nSegs;
+    const bx   = W - margin - 4 - barW;
+    const by   = H - margin - 19;
+    const dk = [55, 55, 55], wh = [255, 255, 255];
+    // Alternating filled/white segments
+    for (let i = 0; i < nSegs; i++) {
+      pdf.setFillColor(...(i % 2 === 0 ? dk : wh));
+      pdf.rect(bx + i * segW, by, segW, barH, 'F');
+    }
+    // Outer border + dividers
     pdf.setDrawColor(...dk); pdf.setLineWidth(0.3);
     pdf.rect(bx, by, barW, barH, 'S');
     for (let i = 1; i < nSegs; i++) {
       pdf.line(bx + i * segW, by, bx + i * segW, by + barH);
     }
+    // Labels — one per tick, guaranteed to be whole numbers
     pdf.setFontSize(5.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(44, 44, 44);
     for (let i = 0; i <= nSegs; i++) {
       const val = Math.round((i / nSegs) * niceReal);
