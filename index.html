@@ -3319,7 +3319,7 @@
 
     } catch (err) {
       console.error('[exportProjectPDF]', err);
-      toast.error('PDF export failed — see console');
+      toast.error('PDF export failed: ' + (err?.message || String(err)));
     } finally {
       setExporting(false);
     }
