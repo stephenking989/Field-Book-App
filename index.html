@@ -7564,11 +7564,11 @@
       return () => window.visualViewport.removeEventListener('resize', onVVResize);
     }, []);
 
-    const taClass = 'tp-grow w-full font-data text-sm text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed overflow-hidden';
-    const inClass = 'w-full font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300';
+    const taClass = 'tp-grow w-full font-handwritten text-base text-fb-text bg-transparent outline-none resize-none placeholder-gray-300 leading-relaxed overflow-hidden';
+    const inClass = 'w-full font-handwritten text-base text-fb-text bg-transparent outline-none placeholder-gray-300';
     const lblClass = 'text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5';
     const secClass = 'py-2.5 border-b border-fb-border';
-    const instrInputClass = 'flex-1 min-w-0 font-data text-sm text-fb-text bg-transparent outline-none placeholder-gray-300';
+    const instrInputClass = 'flex-1 min-w-0 font-handwritten text-base text-fb-text bg-transparent outline-none placeholder-gray-300';
     const instrLblClass   = 'text-[9px] font-bold text-fb-mid uppercase tracking-widest whitespace-nowrap flex-shrink-0';
     const instrUnitClass  = 'text-[10px] text-fb-muted flex-shrink-0';
 
@@ -7583,7 +7583,7 @@
               onChange={e => handleChange('title', e.target.value)}
               placeholder="Page title..."
               maxLength={60}
-              className="w-full font-data text-sm text-fb-dark bg-transparent outline-none placeholder-gray-300 font-semibold"
+              className="w-full font-handwritten text-base text-fb-dark bg-transparent outline-none placeholder-gray-300"
               style={{ border: 'none', borderBottom: '1px solid rgba(180,165,140,0.5)', padding: '1px 0' }}
             />
           </div>
