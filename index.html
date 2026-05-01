@@ -3001,10 +3001,10 @@
             tmp.innerHTML = svgForPDF;
             document.body.appendChild(tmp);
             try {
-              const canvas = await window.html2canvas(tmp, { scale: 1.5, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
+              const canvas = await window.html2canvas(tmp, { scale: 1.2, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
               document.body.removeChild(tmp);
               // Place image filling the entire content area
-              pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH);
+              pdf.addImage(canvas.toDataURL('image/jpeg', 0.88), 'JPEG', margin, contentY, availW, drawH);
               // North arrow and scale bar drawn directly in PDF (on top of sketch)
               if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
               if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin, page.viewBox?.w, availW);
@@ -3368,10 +3368,10 @@
           tmp.innerHTML = svgForPDF;
           document.body.appendChild(tmp);
           try {
-            const canvas = await window.html2canvas(tmp, { scale: 1.5, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
+            const canvas = await window.html2canvas(tmp, { scale: 1.2, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
             document.body.removeChild(tmp);
             // Fill the entire content area
-            pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH);
+            pdf.addImage(canvas.toDataURL('image/jpeg', 0.88), 'JPEG', margin, contentY, availW, drawH);
             // North arrow and scale bar drawn directly in PDF (on top of sketch)
             if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
             if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin, page.viewBox?.w, availW);
@@ -5041,18 +5041,14 @@
       <div className="flex flex-col h-full" style={{ background: '#FDFAF4' }}>
         <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
         {/* Hidden file inputs.
-            Camera input intentionally omits capture="environment": on Android, that
-            attribute launches the camera app directly and backgrounds the PWA, which
-            Samsung's memory manager can kill before the photo is returned — causing the
-            green-splash-screen reload and lost photo. Without capture, Android shows a
-            system picker (Camera / Gallery / Files) that keeps the browser alive as an
-            active task and reliably delivers the photo. One extra tap, zero lost photos.
+            Camera input uses capture="environment" to open the rear camera directly.
             Key remount after each capture forces a fresh input element so rapid repeat
-            shots don't silently skip onChange (a known Android/Chrome quirk). */}
+            shots don't silently skip onChange (a known Android/Chrome quirk).
+            Upload input allows multiple files for gallery imports. */}
         <input ref={fileRef} type="file" accept="image/*" multiple
                style={{ position: 'fixed', top: -9999, left: -9999, width: 1, height: 1, opacity: 0 }}
                onChange={handleFileInput} />
-        <input key={camKey} ref={camRef} type="file" accept="image/*"
+        <input key={camKey} ref={camRef} type="file" accept="image/*" capture="environment"
                style={{ position: 'fixed', top: -9999, left: -9999, width: 1, height: 1, opacity: 0 }}
                onChange={e => { handleFileInput(e); setCamKey(k => k + 1); }} />
         {/* Add buttons */}
