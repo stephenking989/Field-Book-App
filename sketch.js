@@ -828,11 +828,26 @@ function parseQBearing(str) {
   return isNaN(az) ? NaN : ((az % 360) + 360) % 360;
 }
 
+// ── Panel / toolbar colour theme ─────────────────────────────────────────────
+// All panel, toolbar, and dropdown colours reference PT so retheming is a
+// single-point change. Canvas drawing colours are unaffected.
+const PT = {
+  bg:      '#F5F0E3',   // warm cream — panel/toolbar background
+  bgAlt:   '#EDE8D8',   // slightly darker — section headers, stripe rows
+  bgHov:   '#E4DDD0',   // hover / active row background
+  border:  '#8B7355',   // warm brown — dividers and borders
+  accent:  '#4A3728',   // dark brown — active layer bar, highlights
+  text:    '#2C1F0E',   // near-black brown — primary text
+  muted:   '#7A6550',   // mid-brown — secondary labels
+  faint:   '#B8A898',   // light brown — inactive icons
+  inputBg: '#FFF9F0',   // near-white warm — input backgrounds
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MULTI-SELECT CARD  —  shown when 2+ shapes are selected.
 // Allows batch editing of shared properties across the entire selection.
 // ─────────────────────────────────────────────────────────────────────────────
-function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate }) {
+function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate, inline = false }) {
   const selShapes    = shapes.filter(s => selectedIds.includes(s.id));
   const hasPoints    = selShapes.some(s => s.type === 'point');
   const hasNonPoints = selShapes.some(s => s.type !== 'point');
@@ -877,12 +892,18 @@ function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate }) {
     { id: 'circle',   label: '○  Circle'          },
   ];
 
-  const iStyle = {
+  const iStyle = inline ? {
+    background: PT.inputBg, border: `1px solid ${PT.border}`,
+    borderRadius: 3, color: PT.text,
+    fontFamily: 'Courier New, monospace', fontSize: 10, padding: '2px 5px', outline: 'none',
+  } : {
     background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)',
     borderRadius: 3, color: 'rgba(255,255,255,0.9)',
     fontFamily: 'Courier New, monospace', fontSize: 10, padding: '2px 5px', outline: 'none',
   };
-  const lStyle = { color: '#64748B', width: 68, flexShrink: 0, fontSize: 10 };
+  const lStyle = inline
+    ? { color: PT.muted, width: 58, flexShrink: 0, fontSize: 10 }
+    : { color: '#64748B', width: 68, flexShrink: 0, fontSize: 10 };
   const rStyle = { display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.8 };
 
   // Whether ALL dimmable shapes currently have dims hidden
@@ -892,7 +913,10 @@ function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate }) {
   const allDimsHidden = dimmableShapes.length > 0 && dimmableShapes.every(s => s._hideDims);
 
   return (
-    <div style={{
+    <div style={inline ? {
+      padding: '6px 8px', fontFamily: 'Courier New, monospace',
+      fontSize: 10, color: PT.text, lineHeight: 1.8,
+    } : {
       position: 'absolute', bottom: 10, left: 10, pointerEvents: 'all',
       background: 'rgba(10,15,35,0.90)', border: '1px solid rgba(99,102,241,0.45)',
       borderRadius: 6, padding: '7px 11px',
@@ -901,7 +925,7 @@ function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate }) {
       lineHeight: 1.7, minWidth: 200,
     }}>
       {/* Header */}
-      <div style={{ color: '#A5B4FC', fontSize: 9.5, letterSpacing: '0.1em',
+      <div style={{ color: inline ? PT.muted : '#A5B4FC', fontSize: 9.5, letterSpacing: '0.1em',
         marginBottom: 5, textTransform: 'uppercase' }}>
         {selectedIds.length} shapes selected
       </div>
@@ -919,7 +943,7 @@ function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate }) {
             borderRadius: 3, background: 'rgba(255,255,255,0.05)', cursor: 'pointer' }}
         />
         {strokes.length > 1 && (
-          <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)' }}>mixed</span>
+          <span style={{ fontSize: 9, color: inline ? PT.faint : 'rgba(255,255,255,0.3)' }}>mixed</span>
         )}
       </div>
 
@@ -938,7 +962,7 @@ function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate }) {
             }}
             style={{ ...iStyle, width: 58 }}
           />
-          <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)' }}>px</span>
+          <span style={{ fontSize: 9, color: inline ? PT.faint : 'rgba(255,255,255,0.35)' }}>px</span>
         </div>
       )}
 
@@ -983,7 +1007,7 @@ function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate }) {
               return { ...s, _hideDims: allDimsHidden ? undefined : true };
             })}
             style={{ ...iStyle, padding: '2px 7px', cursor: 'pointer', fontSize: 9.5,
-              color: allDimsHidden ? '#F87171' : '#86EFAC' }}
+              color: allDimsHidden ? '#C0392B' : '#27AE60' }}
           >
             {allDimsHidden ? 'Show all' : 'Hide all'}
           </button>
@@ -1022,18 +1046,25 @@ function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate }) {
 //   shape    — the currently selected shape object (never null when rendered)
 //   onUpdate — fn(transformFn) called with a shape→shape transform to apply
 // ─────────────────────────────────────────────────────────────────────────────
-function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: northAz, defaultName = '' }) {
+function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: northAz, defaultName = '', inline = false }) {
   // ── Shared styles ───────────────────────────────────────────────────────
-  const iStyle = {
+  const iStyle = inline ? {
+    width: 82, background: PT.inputBg,
+    border: `1px solid ${PT.border}`, borderRadius: 3,
+    color: PT.text, fontFamily: 'Courier New, monospace',
+    fontSize: 10, padding: '2px 5px', outline: 'none',
+  } : {
     width: 82, background: 'rgba(255,255,255,0.08)',
     border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3,
     color: 'rgba(255,255,255,0.9)', fontFamily: 'Courier New, monospace',
     fontSize: 10, padding: '2px 5px', outline: 'none',
   };
-  const lStyle = { color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 };
+  const lStyle = inline
+    ? { color: PT.muted, width: 44, flexShrink: 0, fontSize: 10 }
+    : { color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 };
   const rStyle = { display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.6 };
   const unitSuffix = units === 'ft' ? "'" : ' m';
-  const unit   = v => <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)' }}>{v}</span>;
+  const unit   = v => <span style={{ fontSize: 9, color: inline ? PT.faint : 'rgba(255,255,255,0.35)' }}>{v}</span>;
 
   // ── Compute initial values from the shape ───────────────────────────────
   function initVals(sh) {
@@ -1306,7 +1337,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
       >{s._hideDims ? 'hidden' : 'shown'}</button>
     </div>,
     <div key="_nts" style={rStyle}>
-      <span style={{ ...lStyle, color: vals.nts ? '#FCD34D' : '#64748B' }}>Label</span>
+      <span style={{ ...lStyle, color: vals.nts ? (inline ? PT.accent : '#FCD34D') : lStyle.color }}>Label</span>
       <input
         value={vals.nts}
         placeholder="NTS override…"
@@ -1316,9 +1347,9 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
         style={{
           ...iStyle, width: 90,
-          background: vals.nts ? 'rgba(251,191,36,0.10)' : iStyle.background,
-          border:     `1px solid ${vals.nts ? 'rgba(251,191,36,0.45)' : 'rgba(255,255,255,0.2)'}`,
-          color:      vals.nts ? '#FCD34D' : iStyle.color,
+          background: vals.nts ? (inline ? '#FFF3DC' : 'rgba(251,191,36,0.10)') : iStyle.background,
+          border:     `1px solid ${vals.nts ? (inline ? PT.accent : 'rgba(251,191,36,0.45)') : (inline ? PT.border : 'rgba(255,255,255,0.2)')}`,
+          color:      vals.nts ? (inline ? PT.accent : '#FCD34D') : iStyle.color,
           fontStyle:  vals.nts ? 'italic' : 'normal',
         }}
       />
@@ -1326,7 +1357,10 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
   ]);
 
   return (
-    <div style={{
+    <div style={inline ? {
+      padding: '6px 8px', fontFamily: 'Courier New, monospace',
+      fontSize: 10, color: PT.text, lineHeight: 1.7,
+    } : {
       position: 'absolute', bottom: 10, left: 10, pointerEvents: 'all',
       background: 'rgba(10,15,35,0.90)', border: '1px solid rgba(59,130,246,0.35)',
       borderRadius: 6, padding: '7px 11px',
@@ -1334,7 +1368,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
       color: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(5px)', zIndex: 15,
       lineHeight: 1.7, minWidth: 180, maxWidth: 230,
     }}>
-      <div style={{ color: '#60A5FA', fontSize: 9.5, letterSpacing: '0.1em',
+      <div style={{ color: inline ? PT.muted : '#60A5FA', fontSize: 9.5, letterSpacing: '0.1em',
         marginBottom: 4, textTransform: 'uppercase' }}>{title}</div>
       {rows}
     </div>
@@ -2801,7 +2835,7 @@ function SketchPage({ page, projectId, onReload }) {
   const [layers,         setLayers]         = useState(_initLayers);
   const [activeLayerId,  setActiveLayerId]  = useState(_initLayers[0].id);
   const [rightPanelOpen,   setRightPanelOpen]   = useState(false);
-  const [collapsedLayers,  setCollapsedLayers]  = useState(new Set());
+  const [collapsedLayers,  setCollapsedLayers]  = useState(() => new Set((page.layers || []).map(l => l.id)));
   const [panelDrag, setPanelDrag]             = useState(null);
   const panelDragTimerRef = useRef(null);
   const panelRowGestureRef = useRef(null);        // { startX, startY, shapeId, swiped }
@@ -6833,6 +6867,7 @@ function SketchPage({ page, projectId, onReload }) {
         case 'circle': nx = s.cx;           ny = s.cy;           break;
         case 'rect':   nx = s.x + s.w/2;   ny = s.y + s.h/2;   break;
         case 'curve':  { const { px, py } = getCurvePI(s); nx = px; ny = py; break; }
+        case 'path':   { const _piv = getShapePivot(s); nx = _piv.x; ny = _piv.y; break; }
         default: return null;
       }
       return dimTextEl(nx, ny, 0, s.ntsLabel + ' *', ps);
@@ -7411,8 +7446,8 @@ function SketchPage({ page, projectId, onReload }) {
       {/* ── Top Toolbar ──────────────────────────────────────────────────── */}
       <div ref={toolbarRef} className="sketch-top-bar" style={{
         height: 36, flexShrink: 0, position: 'relative',
-        background: 'rgba(22,30,60,0.92)', backdropFilter: 'blur(6px)',
-        borderBottom: '1px solid rgba(255,255,255,0.08)',
+        background: 'rgba(245,240,227,0.96)', backdropFilter: 'blur(6px)',
+        borderBottom: `1px solid ${PT.border}`,
         zIndex: 20, overflow: 'visible',
       }}>
 
@@ -7420,9 +7455,9 @@ function SketchPage({ page, projectId, onReload }) {
         {openMenu === 'insert' && (
           <div style={{
             position: 'absolute', top: 36, left: menuPos.x, zIndex: 100,
-            background: 'rgba(16,22,48,0.98)', backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
-            boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+            background: PT.bg, backdropFilter: 'blur(10px)',
+            border: `1px solid ${PT.border}`, borderRadius: 6,
+            boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             minWidth: 165, padding: '4px 0',
             fontFamily: 'Courier New, monospace',
           }}>
@@ -7437,10 +7472,10 @@ function SketchPage({ page, projectId, onReload }) {
                 width: '100%', height: 38, display: 'flex', alignItems: 'center',
                 gap: 10, padding: '0 14px',
                 background: 'transparent', border: 'none', cursor: 'pointer',
-                color: 'rgba(255,255,255,0.65)', fontSize: 11,
+                color: PT.muted, fontSize: 11,
               }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(28,56,41,0.5)'; e.currentTarget.style.color = '#86EFAC'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(255,255,255,0.65)'; }}
+              onMouseEnter={e => { e.currentTarget.style.background = PT.bgHov; e.currentTarget.style.color = PT.text; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = PT.muted; }}
             >
               <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, flexShrink: 0 }}>
                 <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -7458,10 +7493,10 @@ function SketchPage({ page, projectId, onReload }) {
                 width: '100%', height: 38, display: 'flex', alignItems: 'center',
                 gap: 10, padding: '0 14px',
                 background: 'transparent', border: 'none', cursor: 'pointer',
-                color: 'rgba(255,255,255,0.65)', fontSize: 11,
+                color: PT.muted, fontSize: 11,
               }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; e.currentTarget.style.color = 'rgba(255,255,255,0.9)'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(255,255,255,0.65)'; }}
+              onMouseEnter={e => { e.currentTarget.style.background = PT.bgHov; e.currentTarget.style.color = PT.text; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = PT.muted; }}
             >
               <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, flexShrink: 0 }}>
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
@@ -7478,20 +7513,20 @@ function SketchPage({ page, projectId, onReload }) {
         {openMenu === 'view' && (
           <div style={{
             position: 'absolute', top: 36, left: menuPos.x, zIndex: 100,
-            background: 'rgba(16,22,48,0.98)', backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
-            boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+            background: PT.bg, backdropFilter: 'blur(10px)',
+            border: `1px solid ${PT.border}`, borderRadius: 6,
+            boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             minWidth: 185, padding: '4px 0',
             fontFamily: 'Courier New, monospace',
           }}>
             {[
-              { label: 'Grid',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3"><line x1="0" y1="4.7" x2="14" y2="4.7"/><line x1="0" y1="9.3" x2="14" y2="9.3"/><line x1="4.7" y1="0" x2="4.7" y2="14"/><line x1="9.3" y1="0" x2="9.3" y2="14"/></svg>, state: showGrid,      set: () => setShowGrid(v => !v),      activeCol: '#6EE7B7', activeBg: 'rgba(52,211,153,0.15)' },
-              { label: 'Dims',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><line x1="2" y1="9" x2="12" y2="9"/><line x1="2" y1="7" x2="2" y2="11"/><line x1="12" y1="7" x2="12" y2="11"/><polyline points="4 7.5 2 9 4 10.5" strokeWidth="1.1"/><polyline points="10 7.5 12 9 10 10.5" strokeWidth="1.1"/><line x1="4" y1="4" x2="10" y2="4" strokeWidth="1" strokeDasharray="1.5 1" opacity="0.6"/></svg>, state: showDims,      set: () => setShowDims(v => !v),      activeCol: '#90CDF4', activeBg: 'rgba(99,179,237,0.18)' },
-              { label: 'Dims on Draw', icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><path d="M2 12 L7 2 L12 12"/><line x1="4.5" y1="8" x2="9.5" y2="8" strokeWidth="1"/></svg>, state: dimsOnDraw,    set: () => setDimsOnDraw(v => !v),    activeCol: '#90CDF4', activeBg: 'rgba(99,179,237,0.12)' },
-              { label: 'Card',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><rect x="1" y="2" width="12" height="10" rx="1.5"/><line x1="1" y1="5.5" x2="13" y2="5.5" strokeWidth="1.2"/><line x1="3" y1="8" x2="8" y2="8" strokeWidth="1"/><line x1="3" y1="10" x2="6" y2="10" strokeWidth="1"/></svg>, state: showValueCard, set: () => setShowValueCard(v => !v), activeCol: '#C4B5FD', activeBg: 'rgba(167,139,250,0.18)' },
-              { label: 'Scale Bar',    icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><rect x="1" y="5" width="12" height="4" rx="0.5"/><line x1="4.3" y1="5" x2="4.3" y2="9" strokeWidth="1"/><line x1="7.7" y1="5" x2="7.7" y2="9" strokeWidth="1"/></svg>, state: showScaleBar,  set: () => setShowScaleBar(v => !v),  activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
-              { label: 'N Arrow',      icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><line x1="7" y1="12" x2="7" y2="2"/><polyline points="4 5 7 2 10 5"/><text x="5.5" y="11" fontSize="4" fill="currentColor" stroke="none" fontFamily="sans-serif" fontWeight="bold">N</text></svg>, state: showNorthArrow, set: () => setShowNorthArrow(v => !v), activeCol: '#FCD34D', activeBg: 'rgba(251,191,36,0.15)' },
-              { label: 'Bg Color',     icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><rect x="1" y="1" width="12" height="12" rx="2"/><path d="M4 10 L7 4 L10 10" strokeWidth="1.2"/><line x1="5.5" y1="8" x2="8.5" y2="8" strokeWidth="1"/></svg>, state: !!bgColor,     set: () => { setBgColor(null); persist(undefined, undefined, undefined, { bgColor: null }); }, activeCol: '#F9A8D4', activeBg: 'rgba(249,168,212,0.15)' },
+              { label: 'Grid',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3"><line x1="0" y1="4.7" x2="14" y2="4.7"/><line x1="0" y1="9.3" x2="14" y2="9.3"/><line x1="4.7" y1="0" x2="4.7" y2="14"/><line x1="9.3" y1="0" x2="9.3" y2="14"/></svg>, state: showGrid,      set: () => setShowGrid(v => !v),      activeCol: '#2D8A5C', activeBg: 'rgba(45,138,92,0.12)' },
+              { label: 'Dims',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><line x1="2" y1="9" x2="12" y2="9"/><line x1="2" y1="7" x2="2" y2="11"/><line x1="12" y1="7" x2="12" y2="11"/><polyline points="4 7.5 2 9 4 10.5" strokeWidth="1.1"/><polyline points="10 7.5 12 9 10 10.5" strokeWidth="1.1"/><line x1="4" y1="4" x2="10" y2="4" strokeWidth="1" strokeDasharray="1.5 1" opacity="0.6"/></svg>, state: showDims,      set: () => setShowDims(v => !v),      activeCol: '#2563A8', activeBg: 'rgba(37,99,168,0.12)' },
+              { label: 'Dims on Draw', icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><path d="M2 12 L7 2 L12 12"/><line x1="4.5" y1="8" x2="9.5" y2="8" strokeWidth="1"/></svg>, state: dimsOnDraw,    set: () => setDimsOnDraw(v => !v),    activeCol: '#2563A8', activeBg: 'rgba(37,99,168,0.10)' },
+              { label: 'Card',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><rect x="1" y="2" width="12" height="10" rx="1.5"/><line x1="1" y1="5.5" x2="13" y2="5.5" strokeWidth="1.2"/><line x1="3" y1="8" x2="8" y2="8" strokeWidth="1"/><line x1="3" y1="10" x2="6" y2="10" strokeWidth="1"/></svg>, state: showValueCard, set: () => setShowValueCard(v => !v), activeCol: '#6B4FA8', activeBg: 'rgba(107,79,168,0.12)' },
+              { label: 'Scale Bar',    icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><rect x="1" y="5" width="12" height="4" rx="0.5"/><line x1="4.3" y1="5" x2="4.3" y2="9" strokeWidth="1"/><line x1="7.7" y1="5" x2="7.7" y2="9" strokeWidth="1"/></svg>, state: showScaleBar,  set: () => setShowScaleBar(v => !v),  activeCol: '#8A6A10', activeBg: 'rgba(138,106,16,0.12)' },
+              { label: 'N Arrow',      icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><line x1="7" y1="12" x2="7" y2="2"/><polyline points="4 5 7 2 10 5"/><text x="5.5" y="11" fontSize="4" fill="currentColor" stroke="none" fontFamily="sans-serif" fontWeight="bold">N</text></svg>, state: showNorthArrow, set: () => setShowNorthArrow(v => !v), activeCol: '#8A6A10', activeBg: 'rgba(138,106,16,0.12)' },
+              { label: 'Bg Color',     icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><rect x="1" y="1" width="12" height="12" rx="2"/><path d="M4 10 L7 4 L10 10" strokeWidth="1.2"/><line x1="5.5" y1="8" x2="8.5" y2="8" strokeWidth="1"/></svg>, state: !!bgColor,     set: () => { setBgColor(null); persist(undefined, undefined, undefined, { bgColor: null }); }, activeCol: '#A8326A', activeBg: 'rgba(168,50,106,0.12)' },
             ].map(({ label, icon, state, set, activeCol, activeBg }) => (
               <button key={label}
                 onClick={set}
@@ -7500,13 +7535,13 @@ function SketchPage({ page, projectId, onReload }) {
                   gap: 10, padding: '0 14px',
                   background: state ? activeBg : 'transparent',
                   border: 'none', cursor: 'pointer', textAlign: 'left',
-                  color: state ? activeCol : 'rgba(255,255,255,0.55)',
+                  color: state ? activeCol : PT.muted,
                   fontSize: 11,
                 }}
               >
                 <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, flexShrink: 0 }}>{icon}</span>
                 <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>{label}</span>
-                <span style={{ fontSize: 10, color: state ? activeCol : 'rgba(255,255,255,0.22)', marginLeft: 8 }}>
+                <span style={{ fontSize: 10, color: state ? activeCol : PT.faint, marginLeft: 8 }}>
                   {state ? 'on' : 'off'}
                 </span>
               </button>
@@ -7520,9 +7555,9 @@ function SketchPage({ page, projectId, onReload }) {
             position: 'absolute', top: 36,
             left: Math.max(4, menuPos.x),
             zIndex: 100,
-            background: 'rgba(16,22,48,0.98)', backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
-            boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+            background: PT.bg, backdropFilter: 'blur(10px)',
+            border: `1px solid ${PT.border}`, borderRadius: 6,
+            boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             width: 232, padding: '8px 0',
             fontFamily: 'Courier New, monospace',
           }}>
@@ -7535,8 +7570,8 @@ function SketchPage({ page, projectId, onReload }) {
                 style={{
                   height: 26, padding: '0 10px', borderRadius: 4, flex: 1,
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-                  background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.14)',
-                  color: 'rgba(255,255,255,0.65)', cursor: 'pointer', fontSize: 11, outline: 'none',
+                  background: PT.bgAlt, border: `1px solid ${PT.border}`,
+                  color: PT.text, cursor: 'pointer', fontSize: 11, outline: 'none',
                 }}
               >
                 <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 1 13 1 13 5"/><polyline points="5 13 1 13 1 9"/><line x1="13" y1="1" x2="8" y2="6"/><line x1="1" y1="13" x2="6" y2="8"/></svg>
@@ -7548,25 +7583,25 @@ function SketchPage({ page, projectId, onReload }) {
                 style={{
                   height: 26, padding: '0 10px', borderRadius: 4, flex: 1,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.14)',
-                  color: 'rgba(255,255,255,0.65)', cursor: 'pointer', fontSize: 11, outline: 'none',
+                  background: PT.bgAlt, border: `1px solid ${PT.border}`,
+                  color: PT.text, cursor: 'pointer', fontSize: 11, outline: 'none',
                 }}
               >
                 <span style={{ fontSize: 11 }}>1 : 1</span>
               </button>
               <span style={{
-                fontSize: 10, color: 'rgba(255,255,255,0.35)',
+                fontSize: 10, color: PT.muted,
                 userSelect: 'none', minWidth: 34, textAlign: 'right',
               }}>
                 {Math.round((svgSizeRef.current.w / viewBox.w) * 100)}%
               </span>
             </div>
 
-            <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '0 10px 8px' }} />
+            <div style={{ height: 1, background: PT.border, margin: '0 10px 8px' }} />
 
             {/* Units row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px 8px' }}>
-              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', flex: 1 }}>Units</span>
+              <span style={{ fontSize: 10, color: PT.muted, flex: 1 }}>Units</span>
               <button
                 onClick={() => {
                   const next = units === 'm' ? 'ft' : 'm';
@@ -7576,8 +7611,8 @@ function SketchPage({ page, projectId, onReload }) {
                 title="Toggle units: metres / feet"
                 style={{
                   height: 26, padding: '0 16px', borderRadius: 4,
-                  background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
-                  color: 'rgba(255,255,255,0.85)', cursor: 'pointer',
+                  background: PT.bgAlt, border: `1px solid ${PT.border}`,
+                  color: PT.text, cursor: 'pointer',
                   fontSize: 11, fontWeight: 600,
                   fontFamily: 'Courier New, monospace', outline: 'none',
                 }}
@@ -7586,7 +7621,7 @@ function SketchPage({ page, projectId, onReload }) {
 
             {/* Scale row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px 8px' }}>
-              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>Scale  1 :</span>
+              <span style={{ fontSize: 10, color: PT.muted, whiteSpace: 'nowrap' }}>Scale  1 :</span>
               <input
                 type="text"
                 inputMode="numeric"
@@ -7604,9 +7639,9 @@ function SketchPage({ page, projectId, onReload }) {
                   if (e.key === 'Escape') { setScaleInput(String(scaleDenom)); e.target.blur(); }
                 }}
                 style={{
-                  flex: 1, height: 26, minWidth: 0, background: 'rgba(255,255,255,0.08)',
-                  border: '1px solid rgba(255,255,255,0.18)', borderRadius: 4,
-                  color: 'rgba(255,255,255,0.9)', fontFamily: 'Courier New, monospace',
+                  flex: 1, height: 26, minWidth: 0, background: PT.inputBg,
+                  border: `1px solid ${PT.border}`, borderRadius: 4,
+                  color: PT.text, fontFamily: 'Courier New, monospace',
                   fontSize: 11, padding: '0 10px', outline: 'none', textAlign: 'left',
                   boxSizing: 'border-box',
                 }}
@@ -7624,7 +7659,7 @@ function SketchPage({ page, projectId, onReload }) {
                   setScaleInput(String(next));
                   persist(undefined, undefined, undefined, { scaleDenom: next });
                 }}
-                style={{ width: '100%', cursor: 'pointer', accentColor: '#60A5FA' }}
+                style={{ width: '100%', cursor: 'pointer', accentColor: PT.accent }}
               />
             </div>
           </div>
@@ -7644,20 +7679,20 @@ function SketchPage({ page, projectId, onReload }) {
             <div style={{
               position: 'absolute', top: '100%', left: menuPos.x,
               marginTop: 4, zIndex: 120, minWidth: 220,
-              background: 'rgba(22,28,40,0.97)',
-              border: '1px solid rgba(255,255,255,0.14)',
-              borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+              background: PT.bg,
+              border: `1px solid ${PT.border}`,
+              borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
               padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 10,
             }}>
               {/* Header */}
-              <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.35)',
+              <div style={{ fontSize: 10, fontWeight: 700, color: PT.muted,
                 textTransform: 'uppercase', letterSpacing: '0.1em' }}>
                 {selShape ? `Line — ${selShape.type}` : 'Line — default'}
               </div>
 
               {/* Thickness row */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)',
+                <div style={{ fontSize: 10, color: PT.muted,
                   fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
                   THICKNESS
                 </div>
@@ -7665,31 +7700,31 @@ function SketchPage({ page, projectId, onReload }) {
                   <input type="range" min="0.5" max="10" step="0.5"
                     value={currentW}
                     onChange={e => setW(e.target.value)}
-                    style={{ flex: 1, accentColor: '#3B82F6', cursor: 'pointer' }}
+                    style={{ flex: 1, accentColor: PT.accent, cursor: 'pointer' }}
                   />
                   <input type="number" min="0.5" max="10" step="0.5"
                     value={currentW}
                     onChange={e => setW(e.target.value)}
                     style={{
                       width: 44, padding: '2px 4px', borderRadius: 4, textAlign: 'center',
-                      background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.18)',
-                      color: 'rgba(255,255,255,0.85)', fontSize: 11,
+                      background: PT.inputBg, border: `1px solid ${PT.border}`,
+                      color: PT.text, fontSize: 11,
                       fontFamily: 'Courier New, monospace', outline: 'none',
                     }}
                   />
-                  <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)',
+                  <span style={{ fontSize: 10, color: PT.faint,
                     fontFamily: 'Courier New, monospace' }}>px</span>
                 </div>
                 {/* Live preview line */}
                 <svg width="100%" height={Math.max(currentW * 2 + 6, 14)} style={{ display: 'block' }}>
                   <line x1="8" y1="50%" x2="calc(100% - 8px)" y2="50%"
-                    stroke="rgba(255,255,255,0.7)" strokeWidth={currentW} strokeLinecap="round" />
+                    stroke={PT.text} strokeWidth={currentW} strokeLinecap="round" />
                 </svg>
               </div>
 
               {/* Line type — deferred */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, opacity: 0.35 }}>
-                <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)',
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, opacity: 0.4 }}>
+                <div style={{ fontSize: 10, color: PT.muted,
                   fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
                   LINE TYPE &nbsp;<span style={{ fontSize: 9, fontStyle: 'italic' }}>(coming soon)</span>
                 </div>
@@ -7697,8 +7732,8 @@ function SketchPage({ page, projectId, onReload }) {
                   {['——', '- - -', '·····'].map(t => (
                     <button key={t} disabled style={{
                       flex: 1, height: 26, borderRadius: 4, cursor: 'not-allowed',
-                      background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
-                      color: 'rgba(255,255,255,0.3)', fontSize: 12,
+                      background: PT.bgAlt, border: `1px solid ${PT.border}`,
+                      color: PT.faint, fontSize: 12,
                     }}>{t}</button>
                   ))}
                 </div>
@@ -7711,19 +7746,19 @@ function SketchPage({ page, projectId, onReload }) {
         {openMenu === 'snap' && (
           <div style={{
             position: 'absolute', top: 36, left: menuPos.x, zIndex: 100,
-            background: 'rgba(16,22,48,0.98)', backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
-            boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+            background: PT.bg, backdropFilter: 'blur(10px)',
+            border: `1px solid ${PT.border}`, borderRadius: 6,
+            boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             minWidth: 200, padding: '4px 0',
             fontFamily: 'Courier New, monospace',
           }}>
             {[
-              { key: 'endpoint',     label: 'Endpoint',      icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="7" cy="7" r="5"/><circle cx="7" cy="7" r="2" fill="currentColor"/></svg>, col: '#4ADE80', bg: 'rgba(34,197,94,0.15)',   desc: 'Line & curve endpoints' },
-              { key: 'midpoint',     label: 'Midpoint',       icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><line x1="1" y1="13" x2="13" y2="1"/><circle cx="7" cy="7" r="2.2" fill="currentColor" fillOpacity="0.85"/></svg>, col: '#22D3EE', bg: 'rgba(34,211,238,0.15)',  desc: 'Segment midpoints' },
-              { key: 'intersection', label: 'On Object',      icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><line x1="1" y1="1" x2="13" y2="13"/><line x1="13" y1="1" x2="1" y2="13"/><circle cx="7" cy="7" r="2" fill="currentColor" fillOpacity="0.7"/></svg>, col: '#FB923C', bg: 'rgba(251,146,60,0.15)',  desc: 'Nearest pt on shape' },
-              { key: 'perpendicular',label: 'Perpendicular',  icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><line x1="2" y1="12" x2="12" y2="12"/><line x1="7" y1="12" x2="7" y2="2"/><rect x="7" y="9" width="3" height="3" strokeWidth="1"/></svg>, col: '#C084FC', bg: 'rgba(192,132,252,0.15)', desc: 'Perpendicular foot' },
-              { key: 'tangent',      label: 'Tangent',        icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><circle cx="7" cy="9" r="4"/><line x1="1" y1="5" x2="13" y2="5"/><circle cx="7" cy="5" r="1.3" fill="currentColor"/></svg>, col: '#A78BFA', bg: 'rgba(167,139,250,0.15)', desc: 'Tangent to circle' },
-              { key: 'grid',         label: 'Grid',           icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2"><line x1="0" y1="4.7" x2="14" y2="4.7"/><line x1="0" y1="9.3" x2="14" y2="9.3"/><line x1="4.7" y1="0" x2="4.7" y2="14"/><line x1="9.3" y1="0" x2="9.3" y2="14"/><circle cx="4.7" cy="4.7" r="1.5" fill="currentColor"/></svg>, col: '#FCD34D', bg: 'rgba(251,191,36,0.15)',  desc: 'Grid intersections' },
+              { key: 'endpoint',     label: 'Endpoint',      icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="7" cy="7" r="5"/><circle cx="7" cy="7" r="2" fill="currentColor"/></svg>, col: '#2D8A5C', bg: 'rgba(45,138,92,0.12)',   desc: 'Line & curve endpoints' },
+              { key: 'midpoint',     label: 'Midpoint',       icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><line x1="1" y1="13" x2="13" y2="1"/><circle cx="7" cy="7" r="2.2" fill="currentColor" fillOpacity="0.85"/></svg>, col: '#0E7A8A', bg: 'rgba(14,122,138,0.12)',  desc: 'Segment midpoints' },
+              { key: 'intersection', label: 'On Object',      icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><line x1="1" y1="1" x2="13" y2="13"/><line x1="13" y1="1" x2="1" y2="13"/><circle cx="7" cy="7" r="2" fill="currentColor" fillOpacity="0.7"/></svg>, col: '#A85C20', bg: 'rgba(168,92,32,0.12)',  desc: 'Nearest pt on shape' },
+              { key: 'perpendicular',label: 'Perpendicular',  icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><line x1="2" y1="12" x2="12" y2="12"/><line x1="7" y1="12" x2="7" y2="2"/><rect x="7" y="9" width="3" height="3" strokeWidth="1"/></svg>, col: '#6B3EA8', bg: 'rgba(107,62,168,0.12)', desc: 'Perpendicular foot' },
+              { key: 'tangent',      label: 'Tangent',        icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><circle cx="7" cy="9" r="4"/><line x1="1" y1="5" x2="13" y2="5"/><circle cx="7" cy="5" r="1.3" fill="currentColor"/></svg>, col: '#6B3EA8', bg: 'rgba(107,62,168,0.10)', desc: 'Tangent to circle' },
+              { key: 'grid',         label: 'Grid',           icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2"><line x1="0" y1="4.7" x2="14" y2="4.7"/><line x1="0" y1="9.3" x2="14" y2="9.3"/><line x1="4.7" y1="0" x2="4.7" y2="14"/><line x1="9.3" y1="0" x2="9.3" y2="14"/><circle cx="4.7" cy="4.7" r="1.5" fill="currentColor"/></svg>, col: '#8A6A10', bg: 'rgba(138,106,16,0.12)',  desc: 'Grid intersections' },
             ].map(({ key, label, icon, col, bg, desc }) => {
               const on = snapModes[key];
               return (
@@ -7734,14 +7769,14 @@ function SketchPage({ page, projectId, onReload }) {
                     gap: 10, padding: '0 14px',
                     background: on ? bg : 'transparent',
                     border: 'none', cursor: 'pointer', textAlign: 'left',
-                    color: on ? col : 'rgba(255,255,255,0.5)',
+                    color: on ? col : PT.muted,
                     fontSize: 11,
                   }}
                 >
                   <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, flexShrink: 0 }}>{icon}</span>
                   <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>{label}</span>
-                  <span style={{ fontSize: 9, color: on ? col : 'rgba(255,255,255,0.2)', opacity: 0.75 }}>{desc}</span>
-                  <span style={{ fontSize: 10, color: on ? col : 'rgba(255,255,255,0.22)', marginLeft: 8, minWidth: 18, textAlign: 'right' }}>
+                  <span style={{ fontSize: 9, color: on ? col : PT.faint, opacity: 0.85 }}>{desc}</span>
+                  <span style={{ fontSize: 10, color: on ? col : PT.faint, marginLeft: 8, minWidth: 18, textAlign: 'right' }}>
                     {on ? 'on' : 'off'}
                   </span>
                 </button>
@@ -7754,18 +7789,18 @@ function SketchPage({ page, projectId, onReload }) {
         {openMenu === 'join' && (
           <div style={{
             position: 'absolute', top: 36, left: menuPos.x, zIndex: 100,
-            background: 'rgba(16,22,48,0.98)', backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
-            boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+            background: PT.bg, backdropFilter: 'blur(10px)',
+            border: `1px solid ${PT.border}`, borderRadius: 6,
+            boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             minWidth: 170, padding: '4px 0',
             fontFamily: 'Courier New, monospace',
           }}>
             {[
-              { op: 'add',       label: 'Add',       icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4"/></svg>, desc: 'Union of all shapes',         col: '#4ADE80', bg: 'rgba(34,197,94,0.15)'    },
-              { op: 'subtract',  label: 'Subtract',  icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4" strokeDasharray="2 1.5"/><line x1="10" y1="4" x2="10" y2="12" strokeWidth="1" opacity="0.5"/></svg>, desc: 'Subtract from first shape',   col: '#FB923C', bg: 'rgba(251,146,60,0.15)'   },
-              { op: 'intersect', label: 'Intersect', icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4"/><path d="M7.5 4.3 A4 4 0 0 1 7.5 11.7 A4 4 0 0 1 7.5 4.3" fill="currentColor" fillOpacity="0.3" stroke="none"/></svg>, desc: 'Keep overlapping area only',  col: '#60A5FA', bg: 'rgba(96,165,250,0.15)'   },
-              { op: 'xor',       label: 'XOR',       icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4" fill="currentColor" fillOpacity="0.2"/><circle cx="10" cy="8" r="4" fill="currentColor" fillOpacity="0.2"/><path d="M7.5 4.3 A4 4 0 0 1 7.5 11.7 A4 4 0 0 1 7.5 4.3" fill="rgba(16,22,48,1)" stroke="none"/></svg>, desc: 'Keep non-overlapping parts',  col: '#C084FC', bg: 'rgba(192,132,252,0.15)'  },
-              { op: 'divide',    label: 'Divide',    icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4"/><line x1="7.5" y1="4" x2="7.5" y2="12" strokeDasharray="1.5 1" strokeWidth="1.2"/></svg>, desc: 'Split at intersections',      col: '#F9A8D4', bg: 'rgba(249,168,212,0.15)'  },
+              { op: 'add',       label: 'Add',       icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4"/></svg>, desc: 'Union of all shapes',         col: '#2D8A5C', bg: 'rgba(45,138,92,0.12)'    },
+              { op: 'subtract',  label: 'Subtract',  icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4" strokeDasharray="2 1.5"/><line x1="10" y1="4" x2="10" y2="12" strokeWidth="1" opacity="0.5"/></svg>, desc: 'Subtract from first shape',   col: '#A85C20', bg: 'rgba(168,92,32,0.12)'   },
+              { op: 'intersect', label: 'Intersect', icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4"/><path d="M7.5 4.3 A4 4 0 0 1 7.5 11.7 A4 4 0 0 1 7.5 4.3" fill="currentColor" fillOpacity="0.3" stroke="none"/></svg>, desc: 'Keep overlapping area only',  col: '#2563A8', bg: 'rgba(37,99,168,0.12)'   },
+              { op: 'xor',       label: 'XOR',       icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4" fill="currentColor" fillOpacity="0.2"/><circle cx="10" cy="8" r="4" fill="currentColor" fillOpacity="0.2"/><path d="M7.5 4.3 A4 4 0 0 1 7.5 11.7 A4 4 0 0 1 7.5 4.3" fill="#F5F0E3" stroke="none"/></svg>, desc: 'Keep non-overlapping parts',  col: '#6B3EA8', bg: 'rgba(107,62,168,0.12)'  },
+              { op: 'divide',    label: 'Divide',    icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4"/><line x1="7.5" y1="4" x2="7.5" y2="12" strokeDasharray="1.5 1" strokeWidth="1.2"/></svg>, desc: 'Split at intersections',      col: '#A8326A', bg: 'rgba(168,50,106,0.12)'  },
             ].map(({ op, label, icon, desc, col, bg }) => (
               <button key={op}
                 onClick={() => {
@@ -7783,14 +7818,14 @@ function SketchPage({ page, projectId, onReload }) {
                   width: '100%', height: 38, display: 'flex', alignItems: 'center',
                   gap: 10, padding: '0 14px', background: 'transparent',
                   border: 'none', cursor: 'pointer', textAlign: 'left',
-                  color: 'rgba(255,255,255,0.65)', fontSize: 11,
+                  color: PT.muted, fontSize: 11,
                 }}
                 onMouseEnter={e => { e.currentTarget.style.background = bg; e.currentTarget.style.color = col; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(255,255,255,0.65)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = PT.muted; }}
               >
                 <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, flexShrink: 0 }}>{icon}</span>
                 <span style={{ flex: 1 }}>{label}</span>
-                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)' }}>{desc}</span>
+                <span style={{ fontSize: 9, color: PT.faint }}>{desc}</span>
               </button>
             ))}
           </div>
@@ -7816,9 +7851,9 @@ function SketchPage({ page, projectId, onReload }) {
             style={{
               height: 26, padding: '0 8px', borderRadius: 4, flexShrink: 0,
               display: 'flex', alignItems: 'center', gap: 4,
-              background: anySnapActive ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.06)',
-              border: `1px solid ${anySnapActive ? 'rgba(34,197,94,0.55)' : 'rgba(255,255,255,0.14)'}`,
-              color: anySnapActive ? '#4ADE80' : 'rgba(255,255,255,0.45)',
+              background: anySnapActive ? 'rgba(45,138,92,0.15)' : PT.bgAlt,
+              border: `1px solid ${anySnapActive ? '#2D8A5C' : PT.border}`,
+              color: anySnapActive ? '#2D8A5C' : PT.muted,
               cursor: 'pointer', fontSize: 11,
               fontFamily: 'Courier New, monospace', outline: 'none', transition: 'all 0.15s',
             }}
@@ -7828,7 +7863,7 @@ function SketchPage({ page, projectId, onReload }) {
             <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ opacity: 0.5, marginLeft: 1 }}><polyline points="1 2.5 4 5.5 7 2.5"/></svg>
           </button>
           {/* Separator */}
-          <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
+          <div style={{ width: 1, height: 18, background: PT.border, margin: '0 2px', flexShrink: 0 }} />
 
           {/* Join ▾ dropdown button — only visible when 2+ shapes selected */}
           {selectedIds.length >= 2 && (
@@ -7843,9 +7878,9 @@ function SketchPage({ page, projectId, onReload }) {
               style={{
                 height: 26, padding: '0 8px', borderRadius: 4, flexShrink: 0,
                 display: 'flex', alignItems: 'center', gap: 4,
-                background: openMenu === 'join' ? 'rgba(249,168,212,0.2)' : 'rgba(255,255,255,0.06)',
-                border: `1px solid ${openMenu === 'join' ? 'rgba(249,168,212,0.6)' : 'rgba(255,255,255,0.14)'}`,
-                color: openMenu === 'join' ? '#F9A8D4' : 'rgba(255,255,255,0.55)',
+                background: openMenu === 'join' ? 'rgba(107,62,168,0.12)' : PT.bgAlt,
+                border: `1px solid ${openMenu === 'join' ? '#6B3EA8' : PT.border}`,
+                color: openMenu === 'join' ? '#6B3EA8' : PT.muted,
                 cursor: 'pointer', fontSize: 11,
                 fontFamily: 'Courier New, monospace', outline: 'none',
               }}
@@ -7869,9 +7904,9 @@ function SketchPage({ page, projectId, onReload }) {
                     style={{
                       height: 22, padding: '0 8px', borderRadius: 3, fontSize: 10,
                       fontFamily: 'Courier New, monospace',
-                      background: stabilizerMode === m.id ? 'rgba(99,102,241,0.35)' : 'rgba(255,255,255,0.06)',
-                      border: `1px solid ${stabilizerMode === m.id ? 'rgba(99,102,241,0.7)' : 'rgba(255,255,255,0.14)'}`,
-                      color: stabilizerMode === m.id ? '#A5B4FC' : 'rgba(255,255,255,0.45)',
+                      background: stabilizerMode === m.id ? 'rgba(99,102,241,0.18)' : PT.bgAlt,
+                      border: `1px solid ${stabilizerMode === m.id ? 'rgba(99,102,241,0.7)' : PT.border}`,
+                      color: stabilizerMode === m.id ? '#5B4EA8' : PT.muted,
                       cursor: 'pointer', outline: 'none',
                     }}
                   >{m.label}</button>
@@ -7879,7 +7914,7 @@ function SketchPage({ page, projectId, onReload }) {
               </div>
               {/* Rope length / Window size control */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', fontFamily: 'Courier New, monospace' }}>
+                <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace' }}>
                   {stabilizerMode === 'rope' ? 'Lag' : 'Win'}
                 </span>
                 <input type="range" min={1} max={stabilizerMode === 'rope' ? 80 : 20} step={1}
@@ -7887,21 +7922,21 @@ function SketchPage({ page, projectId, onReload }) {
                   onChange={e => stabilizerMode === 'rope'
                     ? setRopeLength(Number(e.target.value))
                     : setWindowSize(Number(e.target.value))}
-                  style={{ width: 60, cursor: 'pointer', accentColor: '#818CF8' }}
+                  style={{ width: 60, cursor: 'pointer', accentColor: PT.accent }}
                 />
-                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', fontFamily: 'Courier New, monospace', minWidth: 18 }}>
+                <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', minWidth: 18 }}>
                   {stabilizerMode === 'rope' ? ropeLength : windowSize}
                 </span>
               </div>
               {/* Smoothness control */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', fontFamily: 'Courier New, monospace' }}>Smooth</span>
+                <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace' }}>Smooth</span>
                 <input type="range" min={0} max={100} step={5}
                   value={Math.round(pencilSmoothness * 100)}
                   onChange={e => setPencilSmoothness(Number(e.target.value) / 100)}
-                  style={{ width: 60, cursor: 'pointer', accentColor: '#818CF8' }}
+                  style={{ width: 60, cursor: 'pointer', accentColor: PT.accent }}
                 />
-                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', fontFamily: 'Courier New, monospace', minWidth: 22 }}>
+                <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', minWidth: 22 }}>
                   {Math.round(pencilSmoothness * 100)}%
                 </span>
               </div>
@@ -7920,17 +7955,17 @@ function SketchPage({ page, projectId, onReload }) {
                   style={{
                     height: 22, padding: '0 8px', borderRadius: 3, fontSize: 10,
                     fontFamily: 'Courier New, monospace',
-                    background: penMode === m.id ? 'rgba(59,130,246,0.35)' : 'rgba(255,255,255,0.06)',
-                    border: `1px solid ${penMode === m.id ? 'rgba(59,130,246,0.7)' : 'rgba(255,255,255,0.14)'}`,
-                    color: penMode === m.id ? '#93C5FD' : 'rgba(255,255,255,0.45)',
+                    background: penMode === m.id ? 'rgba(37,99,168,0.18)' : PT.bgAlt,
+                    border: `1px solid ${penMode === m.id ? 'rgba(37,99,168,0.7)' : PT.border}`,
+                    color: penMode === m.id ? '#2563A8' : PT.muted,
                     cursor: 'pointer', outline: 'none', flexShrink: 0,
                   }}
                 >{m.label}</button>
               ))}
               {penNodes.length > 0 && (
                 <>
-                  <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
-                  <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+                  <div style={{ width: 1, height: 18, background: PT.border, margin: '0 2px', flexShrink: 0 }} />
+                  <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
                     {penNodes.length} node{penNodes.length !== 1 ? 's' : ''}
                   </span>
                   <button
@@ -7967,8 +8002,8 @@ function SketchPage({ page, projectId, onReload }) {
             if (!node) return null;
             return (
               <>
-                <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
-                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>Node:</span>
+                <div style={{ width: 1, height: 18, background: PT.border, margin: '0 2px', flexShrink: 0 }} />
+                <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>Node:</span>
                 {[{ id: 'sharp', label: 'Sharp', title: 'Sharp corner node — handles are independent' },
                   { id: 'smooth', label: 'Smooth', title: 'Smooth node — handles mirror each other' },
                   { id: 'cusp', label: 'Cusp', title: 'Cusp node — handles are independent but shown' }].map(t => (
@@ -7989,14 +8024,14 @@ function SketchPage({ page, projectId, onReload }) {
                     style={{
                       height: 22, padding: '0 7px', borderRadius: 3, fontSize: 10,
                       fontFamily: 'Courier New, monospace',
-                      background: node.type === t.id ? 'rgba(99,102,241,0.35)' : 'rgba(255,255,255,0.06)',
-                      border: `1px solid ${node.type === t.id ? 'rgba(99,102,241,0.7)' : 'rgba(255,255,255,0.14)'}`,
-                      color: node.type === t.id ? '#A5B4FC' : 'rgba(255,255,255,0.45)',
+                      background: node.type === t.id ? 'rgba(99,102,241,0.18)' : PT.bgAlt,
+                      border: `1px solid ${node.type === t.id ? 'rgba(99,102,241,0.7)' : PT.border}`,
+                      color: node.type === t.id ? '#5B4EA8' : PT.muted,
                       cursor: 'pointer', outline: 'none', flexShrink: 0,
                     }}
                   >{t.label}</button>
                 ))}
-                <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
+                <div style={{ width: 1, height: 18, background: PT.border, margin: '0 2px', flexShrink: 0 }} />
                 {/* Delete selected node */}
                 <button
                   onClick={() => {
@@ -8025,29 +8060,29 @@ function SketchPage({ page, projectId, onReload }) {
 
           {/* ── Dimension tool context controls ─────────────────────────── */}
           {['dim-linear', 'dim-angle', 'dim-bearing', 'dim-radius'].includes(tool) && (<>
-            <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px', flexShrink: 0 }} />
+            <div style={{ width: 1, height: 18, background: PT.border, margin: '0 2px', flexShrink: 0 }} />
             {tool === 'dim-linear' && (
-              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+              <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
                 {drawState ? 'click P2' : 'click P1'}
               </span>
             )}
             {tool === 'dim-angle' && (
-              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+              <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
                 {!drawState ? 'click a line' : drawState.phase === 1 ? 'click 2nd line' : 'click to confirm side'}
               </span>
             )}
             {tool === 'dim-bearing' && (
-              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+              <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
                 {drawState ? 'click P2' : 'click P1'}
               </span>
             )}
             {tool === 'dim-radius' && (
-              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>click circle or arc</span>
+              <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>click circle or arc</span>
             )}
             {/* North azimuth: relevant to bearing dims */}
             {tool === 'dim-bearing' && (<>
-              <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 4px', flexShrink: 0 }} />
-              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>N:</span>
+              <div style={{ width: 1, height: 18, background: PT.border, margin: '0 4px', flexShrink: 0 }} />
+              <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>N:</span>
               <input
                 type="number" min={0} max={359} step={1}
                 value={northAzimuth}
@@ -8060,12 +8095,12 @@ function SketchPage({ page, projectId, onReload }) {
                 style={{
                   width: 44, height: 22, borderRadius: 3, fontSize: 10, textAlign: 'center',
                   fontFamily: 'Courier New, monospace', outline: 'none',
-                  background: 'rgba(255,255,255,0.08)',
-                  border: '1px solid rgba(255,255,255,0.18)',
-                  color: 'rgba(255,255,255,0.7)',
+                  background: PT.inputBg,
+                  border: `1px solid ${PT.border}`,
+                  color: PT.text,
                 }}
               />
-              <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.3)', fontFamily: 'Courier New, monospace', flexShrink: 0 }}>°</span>
+              <span style={{ fontSize: 8, color: PT.faint, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>°</span>
             </>)}
           </>)}
 
@@ -8086,9 +8121,9 @@ function SketchPage({ page, projectId, onReload }) {
             style={{
               height: 26, padding: '0 8px', borderRadius: 4, flexShrink: 0,
               display: 'flex', alignItems: 'center', gap: 4,
-              background: canUndo ? 'rgba(255,255,255,0.06)' : 'transparent',
-              border: `1px solid ${canUndo ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.07)'}`,
-              color: canUndo ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.2)',
+              background: canUndo ? PT.bgAlt : 'transparent',
+              border: `1px solid ${canUndo ? PT.border : 'rgba(139,115,85,0.25)'}`,
+              color: canUndo ? PT.text : PT.faint,
               cursor: canUndo ? 'pointer' : 'default', fontSize: 15,
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
@@ -8114,9 +8149,9 @@ function SketchPage({ page, projectId, onReload }) {
             style={{
               height: 26, padding: '0 8px', borderRadius: 4, flexShrink: 0,
               display: 'flex', alignItems: 'center', gap: 4,
-              background: canRedo ? 'rgba(255,255,255,0.06)' : 'transparent',
-              border: `1px solid ${canRedo ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.07)'}`,
-              color: canRedo ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.2)',
+              background: canRedo ? PT.bgAlt : 'transparent',
+              border: `1px solid ${canRedo ? PT.border : 'rgba(139,115,85,0.25)'}`,
+              color: canRedo ? PT.text : PT.faint,
               cursor: canRedo ? 'pointer' : 'default', fontSize: 15,
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
@@ -8139,9 +8174,9 @@ function SketchPage({ page, projectId, onReload }) {
             style={{
               height: 26, padding: '0 10px', borderRadius: 4, flexShrink: 0,
               display: 'flex', alignItems: 'center', gap: 5,
-              background: openMenu === 'insert' ? 'rgba(28,56,41,0.45)' : 'rgba(255,255,255,0.06)',
-              border: `1px solid ${openMenu === 'insert' ? 'rgba(134,239,172,0.5)' : 'rgba(255,255,255,0.14)'}`,
-              color: openMenu === 'insert' ? '#86EFAC' : 'rgba(255,255,255,0.6)',
+              background: openMenu === 'insert' ? PT.bgHov : PT.bgAlt,
+              border: `1px solid ${openMenu === 'insert' ? PT.accent : PT.border}`,
+              color: openMenu === 'insert' ? PT.text : PT.muted,
               cursor: 'pointer', fontSize: 11,
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
@@ -8164,12 +8199,9 @@ function SketchPage({ page, projectId, onReload }) {
             style={{
               height: 26, padding: '0 10px', borderRadius: 4, flexShrink: 0,
               display: 'flex', alignItems: 'center', gap: 5,
-              background: openMenu === 'view'
-                ? 'rgba(255,255,255,0.14)'
-                : (showGrid || showDims || showValueCard || showScaleBar)
-                  ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.04)',
-              border: `1px solid ${openMenu === 'view' ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.14)'}`,
-              color: openMenu === 'view' ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.6)',
+              background: openMenu === 'view' ? PT.bgHov : PT.bgAlt,
+              border: `1px solid ${openMenu === 'view' ? PT.accent : PT.border}`,
+              color: openMenu === 'view' ? PT.text : PT.muted,
               cursor: 'pointer', fontSize: 11,
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
@@ -8191,9 +8223,9 @@ function SketchPage({ page, projectId, onReload }) {
             style={{
               height: 26, padding: '0 10px', borderRadius: 4, flexShrink: 0,
               display: 'flex', alignItems: 'center', gap: 5,
-              background: openMenu === 'scale' ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.06)',
-              border: `1px solid ${openMenu === 'scale' ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.14)'}`,
-              color: openMenu === 'scale' ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.6)',
+              background: openMenu === 'scale' ? PT.bgHov : PT.bgAlt,
+              border: `1px solid ${openMenu === 'scale' ? PT.accent : PT.border}`,
+              color: openMenu === 'scale' ? PT.text : PT.muted,
               cursor: 'pointer', fontSize: 11,
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
@@ -8215,9 +8247,9 @@ function SketchPage({ page, projectId, onReload }) {
             style={{
               height: 26, padding: '0 10px', borderRadius: 4, flexShrink: 0,
               display: 'flex', alignItems: 'center', gap: 5,
-              background: openMenu === 'stroke' ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.06)',
-              border: `1px solid ${openMenu === 'stroke' ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.14)'}`,
-              color: openMenu === 'stroke' ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.6)',
+              background: openMenu === 'stroke' ? PT.bgHov : PT.bgAlt,
+              border: `1px solid ${openMenu === 'stroke' ? PT.accent : PT.border}`,
+              color: openMenu === 'stroke' ? PT.text : PT.muted,
               cursor: 'pointer', fontSize: 11,
               fontFamily: 'Courier New, monospace', outline: 'none',
             }}
@@ -8230,7 +8262,7 @@ function SketchPage({ page, projectId, onReload }) {
           {/* Zoom % readout */}
           <span style={{
             fontSize: 10, fontFamily: 'Courier New, monospace', letterSpacing: '0.03em',
-            color: 'rgba(255,255,255,0.35)', minWidth: 34, textAlign: 'right',
+            color: PT.muted, minWidth: 34, textAlign: 'right',
             userSelect: 'none', flexShrink: 0,
           }}>
             {Math.round((svgSizeRef.current.w / viewBox.w) * 100)}%
@@ -8240,7 +8272,7 @@ function SketchPage({ page, projectId, onReload }) {
           {isPanActive && (
             <span style={{
               fontSize: 10, fontFamily: 'Courier New, monospace',
-              color: 'rgba(255,255,255,0.35)', marginLeft: 4, flexShrink: 0,
+              color: PT.muted, marginLeft: 4, flexShrink: 0,
             }}>panning…</span>
           )}
 
@@ -8256,9 +8288,9 @@ function SketchPage({ page, projectId, onReload }) {
           flexShrink: 0,
           display: 'flex',
           flexDirection: 'column',
-          background: 'rgba(30,40,80,0.92)',
+          background: PT.bg,
           backdropFilter: 'blur(6px)',
-          borderRight: '1px solid rgba(255,255,255,0.08)',
+          borderRight: `1px solid ${PT.border}`,
           transition: 'width 0.2s ease',
           overflow: 'hidden',
           zIndex: 10,
@@ -8268,8 +8300,8 @@ function SketchPage({ page, projectId, onReload }) {
             onClick={() => setRibbonOpen(o => !o)}
             style={{
               height: 32, flexShrink: 0, display: 'flex', alignItems: 'center',
-              justifyContent: 'center', color: 'rgba(255,255,255,0.5)',
-              borderBottom: '1px solid rgba(255,255,255,0.08)',
+              justifyContent: 'center', color: PT.muted,
+              borderBottom: `1px solid ${PT.border}`,
               fontSize: 11, background: 'none', border: 'none',
               cursor: 'pointer', width: '100%',
             }}
@@ -8332,10 +8364,10 @@ function SketchPage({ page, projectId, onReload }) {
                     width: 52, height: 46, flexShrink: 0,
                     display: 'flex', flexDirection: 'column', alignItems: 'center',
                     justifyContent: 'center', gap: 2,
-                    background: tool === t.id ? 'rgba(59,130,246,0.28)' : 'none',
-                    borderLeft: tool === t.id ? '2px solid #3B82F6' : '2px solid transparent',
+                    background: tool === t.id ? PT.bgHov : 'none',
+                    borderLeft: tool === t.id ? `2px solid ${PT.accent}` : '2px solid transparent',
                     borderTop: 'none', borderRight: 'none', borderBottom: 'none',
-                    color: tool === t.id ? '#93C5FD' : 'rgba(255,255,255,0.55)',
+                    color: tool === t.id ? PT.accent : PT.muted,
                     cursor: 'pointer',
                     transition: 'background 0.15s, color 0.15s',
                   }}
@@ -8358,9 +8390,9 @@ function SketchPage({ page, projectId, onReload }) {
                 flexShrink: 0, width: 52, height: 34,
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
                 justifyContent: 'center', gap: 2,
-                background: 'rgba(59,130,246,0.10)', border: 'none',
-                borderTop: '1px solid rgba(255,255,255,0.07)',
-                color: '#93C5FD', cursor: 'pointer',
+                background: PT.bgAlt, border: 'none',
+                borderTop: `1px solid ${PT.border}`,
+                color: PT.muted, cursor: 'pointer',
               }}
             >
               <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -8384,9 +8416,9 @@ function SketchPage({ page, projectId, onReload }) {
                 flexShrink: 0, width: 52, height: 34,
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
                 justifyContent: 'center', gap: 2,
-                background: 'rgba(167,139,250,0.10)', border: 'none',
-                borderTop: '1px solid rgba(255,255,255,0.07)',
-                color: '#C4B5FD', cursor: 'pointer',
+                background: PT.bgAlt, border: 'none',
+                borderTop: `1px solid ${PT.border}`,
+                color: PT.muted, cursor: 'pointer',
               }}
             >
               <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -8413,9 +8445,9 @@ function SketchPage({ page, projectId, onReload }) {
                 flexShrink: 0, width: 52, height: 34,
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
                 justifyContent: 'center', gap: 2,
-                background: 'rgba(52,211,153,0.10)', border: 'none',
-                borderTop: '1px solid rgba(255,255,255,0.07)',
-                color: '#6EE7B7', cursor: 'pointer',
+                background: PT.bgAlt, border: 'none',
+                borderTop: `1px solid ${PT.border}`,
+                color: PT.muted, cursor: 'pointer',
               }}
             >
               <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -8437,9 +8469,9 @@ function SketchPage({ page, projectId, onReload }) {
                 flexShrink: 0, width: 52, height: 40,
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
                 justifyContent: 'center', gap: 2,
-                background: 'rgba(239,68,68,0.15)', border: 'none',
-                borderTop: '1px solid rgba(255,255,255,0.07)',
-                color: '#FCA5A5', cursor: 'pointer',
+                background: 'rgba(220,50,50,0.10)', border: 'none',
+                borderTop: `1px solid ${PT.border}`,
+                color: '#B83232', cursor: 'pointer',
               }}
             >
               <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -8802,25 +8834,24 @@ function SketchPage({ page, projectId, onReload }) {
             );
           })()}
 
-          {/* ── Shape Value Card ─────────────────────────────────────────────── */}
-          {/* Curve draw-phase live preview (read-only badge) */}
+          {/* Curve draw-phase live preview badge (read-only, stays as canvas overlay) */}
           {showValueCard && (() => {
             if (!drawState || drawState.type !== 'curve' || drawState.phase !== 2) return null;
             const cp = computeArcFromPI(drawState.x1, drawState.y1,
                                        drawState.x2, drawState.y2, drawState.px, drawState.py);
             if (!cp) return null;
-            const lStyle = { color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 };
-            const rStyle = { display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.6 };
+            const _lS = { color: PT.muted, width: 46, flexShrink: 0, fontSize: 10 };
+            const _rS = { display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.6 };
             return (
               <div style={{
                 position: 'absolute', bottom: 10, left: 10, pointerEvents: 'none',
-                background: 'rgba(10,15,35,0.90)', border: '1px solid rgba(59,130,246,0.35)',
+                background: 'rgba(245,240,227,0.97)', border: `1px solid ${PT.border}`,
                 borderRadius: 6, padding: '7px 11px',
                 fontFamily: 'Courier New, monospace', fontSize: 10.5,
-                color: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(5px)', zIndex: 15,
-                lineHeight: 1.7, minWidth: 180, maxWidth: 230,
+                color: PT.text, zIndex: 15,
+                lineHeight: 1.7, minWidth: 160, maxWidth: 210,
               }}>
-                <div style={{ color: '#60A5FA', fontSize: 9.5, letterSpacing: '0.1em',
+                <div style={{ color: PT.muted, fontSize: 9.5, letterSpacing: '0.1em',
                   marginBottom: 4, textTransform: 'uppercase' }}>Curve Elements</div>
                 {[
                   ['R',     formatReal(pxToReal(cp.R,     scaleDenom, units), units)],
@@ -8831,25 +8862,16 @@ function SketchPage({ page, projectId, onReload }) {
                   ['E',     formatReal(pxToReal(cp.E,     scaleDenom, units), units)],
                   ['Chord', formatReal(pxToReal(cp.chord, scaleDenom, units), units)],
                 ].map(([lbl, val]) => (
-                  <div key={lbl} style={rStyle}>
-                    <span style={lStyle}>{lbl}</span>
+                  <div key={lbl} style={_rS}>
+                    <span style={_lS}>{lbl}</span>
                     <span style={{ fontSize: 10 }}>{val}</span>
                   </div>
                 ))}
               </div>
             );
           })()}
-          {/* Multi-select card — shown when 2+ shapes selected */}
-          {showValueCard && selectedIds.length > 1 && (
-            <MultiSelectCard
-              selectedIds={selectedIds}
-              shapes={shapes}
-              layers={layers}
-              onBatchUpdate={handleBatchUpdate}
-            />
-          )}
 
-          {/* Point Info Card — shown when a single point shape is selected */}
+          {/* Point Info Card — stays as overlay (point placement UX requires immediate popup) */}
           {showValueCard && selectedIds.length <= 1 && selectedShape?.type === 'point' && (
             <PointInfoCard
               key={selectedShape.id}
@@ -8859,43 +8881,6 @@ function SketchPage({ page, projectId, onReload }) {
               onPtNumChange={num => setLastManualPtNum(parseInt(num) || null)}
             />
           )}
-
-          {/* Committed-shape card — proper React component with controlled inputs */}
-          {showValueCard && selectedIds.length <= 1 && selectedShape && selectedShape.type !== 'text' && selectedShape.type !== 'point' && (() => {
-            const _lShapes = shapes.filter(s => (s.layerId || layers[0]?.id) === (selectedShape.layerId || layers[0]?.id));
-            const _ri = [..._lShapes].reverse().findIndex(s => s.id === selectedShape.id);
-            const _num = _ri >= 0 ? _lShapes.length - _ri : 1;
-            const _defaultName = selectedShape.type.charAt(0).toUpperCase() + selectedShape.type.slice(1) + ' ' + _num;
-            return (
-              <ShapeValueCard
-                key={selectedShape.id}
-                shape={selectedShape}
-                onUpdate={handleCardUpdate}
-                scaleDenom={scaleDenom}
-                units={units}
-                northAzimuth={northAzimuth}
-                defaultName={_defaultName}
-              />
-            );
-          })()}
-
-          {/* Layer card — shown when a layer header is clicked and no shapes are selected */}
-          {selectedLayerForCard && selectedIds.length === 0 && (() => {
-            const _layer = layers.find(l => l.id === selectedLayerForCard);
-            if (!_layer) return null;
-            const _shapeCount = shapes.filter(s => (s.layerId || layers[0]?.id) === _layer.id).length;
-            return (
-              <LayerCard
-                key={_layer.id}
-                layer={{ ..._layer, _shapeCount }}
-                onRename={newName => {
-                  const next = layers.map(l => l.id === _layer.id ? { ...l, name: newName } : l);
-                  setLayers(next);
-                  persist(undefined, undefined, next);
-                }}
-              />
-            );
-          })()}
 
           {/* Inline text editor — absolutely positioned in SVG container.
               textEdit stores world coordinates; convert to screen pixels for CSS. */}
@@ -8937,10 +8922,10 @@ function SketchPage({ page, projectId, onReload }) {
 
         {/* ── Layers Panel ─────────────────────────────────────────────── */}
         <div style={{
-          width: rightPanelOpen ? 175 : 24, flexShrink: 0,
+          width: rightPanelOpen ? 185 : 24, flexShrink: 0,
           display: 'flex', flexDirection: 'column',
-          background: 'rgba(18,24,54,0.97)', backdropFilter: 'blur(6px)',
-          borderLeft: '1px solid rgba(255,255,255,0.08)',
+          background: PT.bg,
+          borderLeft: `1px solid ${PT.border}`,
           transition: 'width 0.2s ease', overflow: 'hidden',
           zIndex: 10, userSelect: 'none',
         }}>
@@ -8948,32 +8933,34 @@ function SketchPage({ page, projectId, onReload }) {
           <button
             onClick={() => setRightPanelOpen(o => !o)}
             style={{
-              height: 32, flexShrink: 0, display: 'flex', alignItems: 'center',
-              justifyContent: 'center', color: 'rgba(255,255,255,0.4)',
-              fontSize: 11, background: 'none', border: 'none',
-              borderBottom: '1px solid rgba(255,255,255,0.08)',
+              height: 28, flexShrink: 0, display: 'flex', alignItems: 'center',
+              justifyContent: 'center', color: PT.muted,
+              fontSize: 10, background: PT.bgAlt, border: 'none',
+              borderBottom: `1px solid ${PT.border}`,
               cursor: 'pointer', width: '100%', outline: 'none',
             }}
-            title={rightPanelOpen ? 'Hide layers' : 'Show layers'}
+            title={rightPanelOpen ? 'Hide panel' : 'Show panel'}
           >
             {rightPanelOpen ? '▶' : '◀'}
           </button>
 
           {rightPanelOpen && (
-            <>
+            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+              {/* ── LAYERS SECTION ─────────────────────────────────────── */}
+              <div>
               {/* Header */}
               <div style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '4px 6px 4px 8px', flexShrink: 0,
-                borderBottom: '1px solid rgba(255,255,255,0.07)',
+                padding: '4px 6px 4px 8px',
+                background: PT.bgAlt, borderBottom: `1px solid ${PT.border}`,
               }}>
-                <span style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.35)',
+                <span style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
                   textTransform: 'uppercase', letterSpacing: '0.08em' }}>Layers</span>
                 <button onClick={addLayer} title="New layer" style={{
                   width: 20, height: 20, display: 'flex', alignItems: 'center',
                   justifyContent: 'center', borderRadius: 3,
-                  background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)',
-                  color: 'rgba(255,255,255,0.65)', fontSize: 15,
+                  background: PT.bg, border: `1px solid ${PT.border}`,
+                  color: PT.text, fontSize: 15,
                   cursor: 'pointer', lineHeight: 1, outline: 'none',
                 }}>+</button>
               </div>
@@ -8981,11 +8968,11 @@ function SketchPage({ page, projectId, onReload }) {
               {/* Move-to-layer strip — visible when 1+ shapes are selected */}
               {selectedIds.length >= 1 && (
                 <div style={{
-                  padding: '4px 6px', borderBottom: '1px solid rgba(255,255,255,0.08)',
-                  display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+                  padding: '3px 6px', borderBottom: `1px solid ${PT.border}`,
+                  display: 'flex', alignItems: 'center', gap: 4,
                 }}>
-                  <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', flexShrink: 0 }}>
-                    {selectedIds.length === 1 ? '1 shape' : `${selectedIds.length} shapes`} →
+                  <span style={{ fontSize: 9, color: PT.muted, flexShrink: 0 }}>
+                    {selectedIds.length === 1 ? '1' : selectedIds.length} →
                   </span>
                   <select
                     onChange={e => {
@@ -8999,9 +8986,9 @@ function SketchPage({ page, projectId, onReload }) {
                     }}
                     defaultValue=""
                     style={{
-                      flex: 1, fontSize: 9, background: 'rgba(255,255,255,0.07)',
-                      border: '1px solid rgba(255,255,255,0.18)', borderRadius: 3,
-                      color: 'rgba(255,255,255,0.65)', padding: '1px 3px', outline: 'none',
+                      flex: 1, fontSize: 9, background: PT.inputBg,
+                      border: `1px solid ${PT.border}`, borderRadius: 3,
+                      color: PT.text, padding: '1px 3px', outline: 'none',
                     }}
                   >
                     <option value="" disabled>Move to layer…</option>
@@ -9013,7 +9000,7 @@ function SketchPage({ page, projectId, onReload }) {
               )}
 
               {/* Layer list — reversed so top of list = topmost render layer */}
-              <div style={{ flex: 1, overflowY: 'auto' }}>
+              <div>
                 {[...layers].reverse().map((layer) => {
                   const isActive   = layer.id === activeLayerId;
                   const layerShapes = shapes.filter(s =>
@@ -9027,20 +9014,20 @@ function SketchPage({ page, projectId, onReload }) {
                         const _lDrop = panelDrag?.type==='layer' && panelDrag.id!==layer.id && panelDrag.targetIdx===_lOrig;
                         const _lUp   = panelDrag ? panelDrag.targetIdx > panelDrag.origIdx : false;
                         return (<>
-                          {_lDrop && _lUp && <div style={{height:2,background:'#3B82F6',margin:'0 4px'}}/>}
+                          {_lDrop && _lUp && <div style={{height:2,background:PT.accent,margin:'0 4px'}}/>}
                           <div
                             onClick={()=>{ setActiveLayerId(layer.id); setSelectedLayerForCard(layer.id); setSelectedIds([]); }}
                             style={{
                               display:'flex', alignItems:'center', gap:2,
-                              padding:'4px 3px 4px 4px', minHeight:28,
-                              background: isActive ? 'rgba(59,130,246,0.18)' : 'transparent',
-                              borderLeft: isActive ? '2px solid #3B82F6' : '2px solid transparent',
+                              padding:'4px 3px 4px 4px', minHeight:26,
+                              background: isActive ? PT.bgHov : 'transparent',
+                              borderLeft: isActive ? `2px solid ${PT.accent}` : '2px solid transparent',
                               cursor:'pointer', opacity: _lDrag ? 0.35 : 1,
                             }}
                           >
-                            {/* Layer drag handle — hold to reorder (mouse: 150ms, touch: 400ms+vibrate) */}
+                            {/* Layer drag handle */}
                             <span
-                              style={{fontSize:9,color:'rgba(255,255,255,0.2)',cursor:'grab',
+                              style={{fontSize:9,color:PT.faint,cursor:'grab',
                                 flexShrink:0,padding:'0 1px',userSelect:'none',touchAction:'none'}}
                               onPointerDown={e=>{
                                 e.stopPropagation();
@@ -9066,41 +9053,41 @@ function SketchPage({ page, projectId, onReload }) {
                             <button
                               onClick={ev=>{ev.stopPropagation();setCollapsedLayers(prev=>{const next=new Set(prev);next.has(layer.id)?next.delete(layer.id):next.add(layer.id);return next;});}}
                               title={collapsedLayers.has(layer.id)?'Expand':'Collapse'}
-                              style={{width:14,height:14,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:8,color:'rgba(255,255,255,0.35)',outline:'none',lineHeight:1}}
+                              style={{width:14,height:14,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:8,color:PT.muted,outline:'none',lineHeight:1}}
                             >{collapsedLayers.has(layer.id)?'▸':'▾'}</button>
                             {/* Visibility */}
                             <button
                               onClick={ev=>{ev.stopPropagation();toggleLayerVisibility(layer.id);}}
                               title={layer.visible?'Hide':'Show'}
-                              style={{width:18,height:18,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:10,color:layer.visible?'rgba(255,255,255,0.6)':'rgba(255,255,255,0.2)',outline:'none'}}
+                              style={{width:18,height:18,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:10,color:layer.visible?PT.text:PT.faint,outline:'none'}}
                             >{layer.visible?'👁':'○'}</button>
                             {/* Lock */}
                             <button
                               onClick={ev=>{ev.stopPropagation();toggleLayerLocked(layer.id);}}
                               title={layer.locked?'Unlock layer':'Lock layer'}
-                              style={{width:18,height:18,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:10,color:layer.locked?'#FCD34D':'rgba(255,255,255,0.2)',outline:'none'}}
+                              style={{width:18,height:18,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:10,color:layer.locked?PT.accent:PT.faint,outline:'none'}}
                             >{layer.locked?'🔒':'🔓'}</button>
                             {/* Layer stack icon + Name */}
                             <svg width="10" height="10" viewBox="0 0 12 12" fill="none"
-                              stroke={isActive?'#93C5FD':(layer.visible?'rgba(255,255,255,0.5)':'rgba(255,255,255,0.18)')}
+                              stroke={isActive?PT.accent:(layer.visible?PT.muted:PT.faint)}
                               strokeWidth="1.4" strokeLinecap="round" style={{flexShrink:0}}>
                               <rect x="1" y="1" width="10" height="3" rx="0.8"/>
                               <rect x="1" y="5" width="10" height="3" rx="0.8"/>
                               <rect x="1" y="9" width="10" height="2" rx="0.8" opacity="0.5"/>
                             </svg>
                             <span style={{flex:1,fontSize:11,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
-                              color:isActive?'#93C5FD':(layer.visible?'rgba(255,255,255,0.7)':'rgba(255,255,255,0.3)')
+                              color:isActive?PT.accent:(layer.visible?PT.text:PT.faint)
                             }}>{layer.name}{layer.locked && <span style={{marginLeft:3,fontSize:8,opacity:0.6}}>🔒</span>}</span>
                             {/* Up / Down */}
                             <div style={{display:'flex',flexDirection:'column',gap:1,flexShrink:0}}>
                               {[{dir:1,svg:<svg width="8" height="6" viewBox="0 0 8 6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 5 4 1 7 5"/></svg>,ttl:'Move up'},{dir:-1,svg:<svg width="8" height="6" viewBox="0 0 8 6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 1 4 5 7 1"/></svg>,ttl:'Move down'}].map(({dir,svg,ttl})=>(
                                 <button key={dir} onClick={ev=>{ev.stopPropagation();moveLayer(layer.id,dir);}} title={ttl}
-                                  style={{width:14,height:10,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',lineHeight:1,padding:0,color:'rgba(255,255,255,0.35)',outline:'none'}}
+                                  style={{width:14,height:10,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',lineHeight:1,padding:0,color:PT.muted,outline:'none'}}
                                 >{svg}</button>
                               ))}
                             </div>
                           </div>
-                          {_lDrop && !_lUp && <div style={{height:2,background:'#3B82F6',margin:'0 4px'}}/>}
+                          {_lDrop && !_lUp && <div style={{height:2,background:PT.accent,margin:'0 4px'}}/>}
                         </>);
                       })()}
 
@@ -9124,7 +9111,7 @@ function SketchPage({ page, projectId, onReload }) {
                           const _sUp=panelDrag?panelDrag.targetFlatIdx<panelDrag.origFlatIdx:false;
                           return (
                           <React.Fragment key={s.id}>
-                            {_sDrop&&_sUp&&<div style={{height:2,background:'#3B82F6',margin:'0 14px'}}/>}
+                            {_sDrop&&_sUp&&<div style={{height:2,background:PT.accent,margin:'0 14px'}}/>}
                             <div
                               onClick={e=>{
                                 // Swipe gesture was already handled in onPointerUp — skip click
@@ -9196,12 +9183,12 @@ function SketchPage({ page, projectId, onReload }) {
                                 }
                               }}
                               style={{display:'flex',alignItems:'center',gap:3,padding:'2px 4px 2px 14px',
-                                background:selectedIds.includes(s.id)?'rgba(59,130,246,0.12)':'transparent',
+                                background:selectedIds.includes(s.id)?PT.bgHov:'transparent',
                                 opacity:_sDrag?0.35:1,cursor:'pointer',touchAction:'pan-y'}}
                             >
-                              {/* Shape drag handle — visual affordance; long-press anywhere on row also works */}
+                              {/* Shape drag handle */}
                               <span
-                                style={{fontSize:8,color:'rgba(255,255,255,0.18)',cursor:'grab',
+                                style={{fontSize:8,color:PT.faint,cursor:'grab',
                                   flexShrink:0,padding:'0 2px',userSelect:'none',pointerEvents:'none'}}
                               >⣿</span>
                               {/* Per-shape visibility toggle */}
@@ -9211,7 +9198,7 @@ function SketchPage({ page, projectId, onReload }) {
                                 title={s.visible===false?'Show':'Hide'}
                                 style={{width:14,height:14,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
                                   background:'none',border:'none',cursor:'pointer',fontSize:9,outline:'none',
-                                  color:s.visible===false?'rgba(255,255,255,0.15)':'rgba(255,255,255,0.45)'}}
+                                  color:s.visible===false?PT.faint:PT.muted}}
                               >{s.visible===false?'○':'●'}</button>
                               {/* Per-shape lock toggle */}
                               <button
@@ -9220,10 +9207,10 @@ function SketchPage({ page, projectId, onReload }) {
                                 title={s.locked?'Unlock shape':'Lock shape'}
                                 style={{width:14,height:14,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
                                   background:'none',border:'none',cursor:'pointer',fontSize:8,outline:'none',
-                                  color:s.locked?'#FCD34D':'rgba(255,255,255,0.18)'}}
+                                  color:s.locked?PT.accent:PT.faint}}
                               >{s.locked?'🔒':'🔓'}</button>
                               <span style={{flex:1,fontSize:10,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
-                                color:s.visible===false?'rgba(255,255,255,0.2)':(selectedIds.includes(s.id)?'#93C5FD':'rgba(255,255,255,0.4)')}}>
+                                color:s.visible===false?PT.faint:(selectedIds.includes(s.id)?PT.accent:PT.muted)}}>
                                 {s.customName||(s.type.charAt(0).toUpperCase()+s.type.slice(1)+' '+(layerShapes.length-ri))}{s.locked&&<span style={{marginLeft:2,fontSize:7,opacity:0.7}}>🔒</span>}
                               </span>
                               {/* ▲▼ shape stack order buttons */}
@@ -9235,12 +9222,12 @@ function SketchPage({ page, projectId, onReload }) {
                                     title={ttl}
                                     style={{width:14,height:10,display:'flex',alignItems:'center',justifyContent:'center',
                                       background:'none',border:'none',cursor:'pointer',fontSize:8,lineHeight:1,padding:0,
-                                      color:'rgba(255,255,255,0.35)',outline:'none'}}
+                                      color:PT.muted,outline:'none'}}
                                   >{lbl}</button>
                                 ))}
                               </div>
                             </div>
-                            {_sDrop&&!_sUp&&<div style={{height:2,background:'#3B82F6',margin:'0 14px'}}/>}
+                            {_sDrop&&!_sUp&&<div style={{height:2,background:PT.accent,margin:'0 14px'}}/>}
                           </React.Fragment>);
                         });
                       })()}
@@ -9249,17 +9236,19 @@ function SketchPage({ page, projectId, onReload }) {
                 })}
               </div>
 
-              {/* ── Color Panel ─────────────────────────────────────────── */}
-              <div style={{ flexShrink: 0, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
-                {/* Color section header */}
+              </div>{/* end LAYERS SECTION */}
+
+              {/* ── COLORS SECTION ─────────────────────────────────────── */}
+              <div style={{ borderTop: `1px solid ${PT.border}` }}>
                 <div style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                   padding: '4px 6px 4px 8px', cursor: 'pointer',
-                  borderBottom: colorPanelOpen ? '1px solid rgba(255,255,255,0.07)' : 'none',
+                  background: PT.bgAlt,
+                  borderBottom: colorPanelOpen ? `1px solid ${PT.border}` : 'none',
                 }} onClick={() => setColorPanelOpen(o => !o)}>
-                  <span style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.35)',
+                  <span style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
                     textTransform: 'uppercase', letterSpacing: '0.08em' }}>Colors</span>
-                  <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)' }}>
+                  <span style={{ fontSize: 9, color: PT.faint }}>
                     {colorPanelOpen ? '▾' : '▸'}
                   </span>
                 </div>
@@ -9276,7 +9265,70 @@ function SketchPage({ page, projectId, onReload }) {
                   />
                 )}
               </div>
-            </>
+
+              {/* ── INFO SECTION ───────────────────────────────────────── */}
+              {showValueCard && (selectedIds.length > 0 || (selectedLayerForCard && selectedIds.length === 0)) && (
+                <div style={{ borderTop: `1px solid ${PT.border}` }}>
+                  {/* Info section header */}
+                  <div style={{
+                    display: 'flex', alignItems: 'center',
+                    padding: '4px 6px 4px 8px',
+                    background: PT.bgAlt, borderBottom: `1px solid ${PT.border}`,
+                  }}>
+                    <span style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
+                      textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                      {selectedIds.length > 1 ? `${selectedIds.length} selected` : 'Info'}
+                    </span>
+                  </div>
+
+                  {/* Multi-select */}
+                  {selectedIds.length > 1 && (
+                    <MultiSelectCard
+                      selectedIds={selectedIds}
+                      shapes={shapes}
+                      layers={layers}
+                      onBatchUpdate={handleBatchUpdate}
+                      inline={true}
+                    />
+                  )}
+
+                  {/* Single shape (non-text, non-point) */}
+                  {selectedIds.length === 1 && selectedShape && selectedShape.type !== 'text' && selectedShape.type !== 'point' && (() => {
+                    const _lShapes = shapes.filter(s => (s.layerId || layers[0]?.id) === (selectedShape.layerId || layers[0]?.id));
+                    const _ri = [..._lShapes].reverse().findIndex(s => s.id === selectedShape.id);
+                    const _num = _ri >= 0 ? _lShapes.length - _ri : 1;
+                    const _defaultName = selectedShape.type.charAt(0).toUpperCase() + selectedShape.type.slice(1) + ' ' + _num;
+                    return (
+                      <ShapeValueCard
+                        key={selectedShape.id}
+                        shape={selectedShape}
+                        onUpdate={handleCardUpdate}
+                        scaleDenom={scaleDenom}
+                        units={units}
+                        northAzimuth={northAzimuth}
+                        defaultName={_defaultName}
+                        inline={true}
+                      />
+                    );
+                  })()}
+
+                  {/* Layer info — when layer clicked, no shapes selected */}
+                  {selectedIds.length === 0 && selectedLayerForCard && (() => {
+                    const _layer = layers.find(l => l.id === selectedLayerForCard);
+                    if (!_layer) return null;
+                    const _shapeCount = shapes.filter(s => (s.layerId || layers[0]?.id) === _layer.id).length;
+                    return (
+                      <div style={{ padding: '6px 8px', fontSize: 10, color: PT.muted,
+                        fontFamily: 'Courier New, monospace' }}>
+                        <div style={{ fontWeight: 600, color: PT.text, marginBottom: 2 }}>{_layer.name}</div>
+                        <div>{_shapeCount} shape{_shapeCount !== 1 ? 's' : ''}</div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+            </div>  {/* end scrollable container */}
           )}
         </div>
       </div>
