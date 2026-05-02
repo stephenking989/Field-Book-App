@@ -9328,7 +9328,7 @@ function SketchPage({ page, projectId, onReload }) {
                 </div>
               )}
 
-            </div>  {/* end scrollable container */}
+            </div>
           )}
         </div>
       </div>
