@@ -796,6 +796,12 @@ function parseQBearing(str) {
   // Helper: parse a D, DM, DMS, or DD middle string → decimal degrees.
   function parseMid(s) {
     s = s.trim();
+    // Compact 6-digit DDMMSS: e.g. 572630 → 57°26'30"
+    const c6 = s.match(/^(\d{1,3})(\d{2})(\d{2})$/);
+    if (c6 && +c6[2] < 60 && +c6[3] < 60) return +c6[1] + +c6[2] / 60 + +c6[3] / 3600;
+    // Compact 4-digit DDMM: e.g. 5716 → 57°16'
+    const c4 = s.match(/^(\d{1,3})(\d{2})$/);
+    if (c4 && +c4[2] < 60) return +c4[1] + +c4[2] / 60;
     // DMS: 57°16'26" or 57 16 26 or 57-16-26
     const m3 = s.match(/^(\d+(?:\.\d+)?)[°\s\-]+(\d+(?:\.\d+)?)['\s\-]+(\d+(?:\.\d+)?)["\s]*$/);
     if (m3) return +m3[1] + +m3[2] / 60 + +m3[3] / 3600;
@@ -1743,16 +1749,16 @@ function ColorPanel({ colorTarget, onTargetChange, activeColor, activeOpacity, r
         {['stroke', 'fill'].map(t => (
           <button key={t} onClick={() => onTargetChange(t)} style={{
             ...btnBase, flex: 1,
-            background: colorTarget === t ? 'rgba(59,130,246,0.3)' : 'rgba(255,255,255,0.06)',
-            border: colorTarget === t ? '1px solid #3B82F6' : '1px solid rgba(255,255,255,0.12)',
-            color: colorTarget === t ? '#93C5FD' : 'rgba(255,255,255,0.4)',
+            background: colorTarget === t ? 'rgba(37,99,168,0.18)' : PT.bgAlt,
+            border: `1px solid ${colorTarget === t ? 'rgba(37,99,168,0.7)' : PT.border}`,
+            color: colorTarget === t ? '#2563A8' : PT.muted,
           }}>{t}</button>
         ))}
         <button title="Set to none (invisible)" onClick={() => (onColorCommit || onColorChange)(colorTarget, 'none')} style={{
           ...btnBase, width: 30,
-          background: activeColor === 'none' ? 'rgba(239,68,68,0.25)' : 'rgba(255,255,255,0.06)',
-          border: activeColor === 'none' ? '1px solid #EF4444' : '1px solid rgba(255,255,255,0.12)',
-          color: activeColor === 'none' ? '#FCA5A5' : 'rgba(255,255,255,0.35)',
+          background: activeColor === 'none' ? 'rgba(220,50,50,0.12)' : PT.bgAlt,
+          border: `1px solid ${activeColor === 'none' ? 'rgba(220,50,50,0.5)' : PT.border}`,
+          color: activeColor === 'none' ? '#B83232' : PT.muted,
         }}>∅</button>
       </div>
 
@@ -1769,8 +1775,8 @@ function ColorPanel({ colorTarget, onTargetChange, activeColor, activeOpacity, r
           onBlur={e => onColorCommit && onColorCommit(colorTarget, e.target.value)}
           style={{
             width: '100%', height: 36, padding: 2, borderRadius: 6, cursor: 'pointer',
-            border: '1px solid rgba(255,255,255,0.18)',
-            background: 'rgba(255,255,255,0.05)', display: 'block',
+            border: `1px solid ${PT.border}`,
+            background: PT.inputBg, display: 'block',
           }}
         />
       </div>
@@ -1779,20 +1785,20 @@ function ColorPanel({ colorTarget, onTargetChange, activeColor, activeOpacity, r
       <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
         <div style={{
           width: 20, height: 20, borderRadius: 3, flexShrink: 0,
-          border: '1px solid rgba(255,255,255,0.25)',
+          border: `1px solid ${PT.border}`,
           background: activeColor === 'none'
-            ? 'repeating-conic-gradient(#555 0% 25%, #333 0% 50%) 0 0 / 6px 6px'
-            : (activeColor || '#1a1a2e'),
+            ? `repeating-conic-gradient(${PT.bgHov} 0% 25%, ${PT.bgAlt} 0% 50%) 0 0 / 6px 6px`
+            : (activeColor || PT.text),
         }} />
         <input type="text" value={hexInput}
           onChange={e => setHexInput(e.target.value)}
           onBlur={e  => handleHexCommit(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') { handleHexCommit(hexInput); e.target.blur(); } }}
-          placeholder="#1a1a2e"
+          placeholder="#3C5445"
           style={{
             flex: 1, height: 22, borderRadius: 3, fontSize: 10, padding: '0 6px',
-            background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)',
-            color: 'rgba(255,255,255,0.75)', fontFamily: 'Courier New, monospace', outline: 'none',
+            background: PT.inputBg, border: `1px solid ${PT.border}`,
+            color: PT.text, fontFamily: 'Courier New, monospace', outline: 'none',
           }}
         />
       </div>
@@ -1801,17 +1807,17 @@ function ColorPanel({ colorTarget, onTargetChange, activeColor, activeOpacity, r
       {activeColor !== 'none' && (
         <div style={{ marginBottom: 8 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
-            <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            <span style={{ fontSize: 8, color: PT.faint, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
               Opacity
             </span>
-            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.55)', fontFamily: 'Courier New, monospace' }}>
+            <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace' }}>
               {opacityPct}%
             </span>
           </div>
           {/* Track: checkerboard base + color-to-transparent gradient overlay + invisible range input */}
           <div style={{ position: 'relative', height: 14, borderRadius: 3,
-            background: 'repeating-conic-gradient(#555 0% 25%, #333 0% 50%) 0 0 / 8px 8px',
-            border: '1px solid rgba(255,255,255,0.15)' }}>
+            background: `repeating-conic-gradient(${PT.bgHov} 0% 25%, ${PT.bgAlt} 0% 50%) 0 0 / 8px 8px`,
+            border: `1px solid ${PT.border}` }}>
             <div style={{
               position: 'absolute', inset: 0, borderRadius: 3,
               background: `linear-gradient(to right, transparent, ${colorValue})`,
@@ -1823,9 +1829,9 @@ function ColorPanel({ colorTarget, onTargetChange, activeColor, activeOpacity, r
               left: `calc(${opacityPct} * (100% - 12px) / 100)`,
               width: 12, height: 10,
               borderRadius: 2,
-              background: '#fff',
-              border: '1px solid rgba(0,0,0,0.45)',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+              background: PT.inputBg,
+              border: `1px solid ${PT.border}`,
+              boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
               pointerEvents: 'none',
               zIndex: 1,
             }} />
@@ -1846,19 +1852,19 @@ function ColorPanel({ colorTarget, onTargetChange, activeColor, activeOpacity, r
 
       {/* Recent colors — 2 rows of 10 */}
       {recentColors.length > 0 && (
-        <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: 6 }}>
-          <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase',
+        <div style={{ borderTop: `1px solid ${PT.border}`, paddingTop: 6 }}>
+          <div style={{ fontSize: 8, color: PT.faint, textTransform: 'uppercase',
             letterSpacing: '0.08em', marginBottom: 5 }}>Recent</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 3 }}>
             {Array.from({ length: 20 }).map((_, i) => {
               const c = recentColors[i];
               if (!c) return <div key={i} style={{ width: '100%', aspectRatio: '1', borderRadius: 3,
-                background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }} />;
+                background: PT.bgAlt, border: `1px solid ${PT.border}` }} />;
               return (
                 <button key={i} title={c} onClick={() => onColorCommit ? onColorCommit(colorTarget, c) : onColorChange(colorTarget, c)} style={{
                   width: '100%', aspectRatio: '1', borderRadius: 3, background: c, cursor: 'pointer',
                   padding: 0, outline: 'none',
-                  border: activeColor === c ? '2px solid #fff' : '1px solid rgba(255,255,255,0.2)',
+                  border: activeColor === c ? `2px solid ${PT.accent}` : `1px solid ${PT.border}`,
                 }} />
               );
             })}
@@ -2359,7 +2365,7 @@ function renderPointLabelsSVG(s, ps) {
 // ─────────────────────────────────────────────────────────────────────────────
 // POINT INFO CARD  (module-level component)
 // ─────────────────────────────────────────────────────────────────────────────
-function PointInfoCard({ shape: s, onUpdate, projectId, onPtNumChange }) {
+function PointInfoCard({ shape: s, onUpdate, projectId, onPtNumChange, inline = false }) {
   // Local controlled state for all editable PNEZD fields.
   // Re-initialised whenever the selected point changes.
   const [vals, setVals] = useState({
@@ -2428,21 +2434,29 @@ function PointInfoCard({ shape: s, onUpdate, projectId, onPtNumChange }) {
 
   const allOn = FIELDS.every(f => s[f.show]);
 
-  const inpSt = {
+  const inpSt = inline ? {
+    flex: 1, padding: '3px 6px', borderRadius: 4, minWidth: 0,
+    background: PT.inputBg, border: `1px solid ${PT.border}`,
+    color: PT.text, fontSize: 10, fontFamily: 'Courier New, monospace', outline: 'none',
+  } : {
     flex: 1, padding: '4px 6px', borderRadius: 4, minWidth: 0,
     background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.13)',
     color: '#FDFAF4', fontSize: 10.5, fontFamily: 'Courier New, monospace', outline: 'none',
   };
 
+  const cardStyle = inline ? {
+    padding: '6px 8px', fontSize: 10, fontFamily: 'Courier New, monospace',
+  } : {
+    position: 'absolute', bottom: 60, left: 8, width: 210,
+    background: 'rgba(12,24,16,0.96)', borderRadius: 10,
+    border: '1px solid rgba(255,255,255,0.13)', padding: '9px 10px 10px',
+    color: 'rgba(255,255,255,0.85)', userSelect: 'none',
+    boxShadow: '0 4px 24px rgba(0,0,0,0.55)', backdropFilter: 'blur(8px)',
+    zIndex: 120,
+  };
+
   return (
-    <div style={{
-      position: 'absolute', bottom: 60, left: 8, width: 210,
-      background: 'rgba(12,24,16,0.96)', borderRadius: 10,
-      border: '1px solid rgba(255,255,255,0.13)', padding: '9px 10px 10px',
-      color: 'rgba(255,255,255,0.85)', userSelect: 'none',
-      boxShadow: '0 4px 24px rgba(0,0,0,0.55)', backdropFilter: 'blur(8px)',
-      zIndex: 120,
-    }}>
+    <div style={cardStyle}>
 
       {/* ── Top row: symbol dropdown + All toggle + refresh ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 8 }}>
@@ -2450,9 +2464,11 @@ function PointInfoCard({ shape: s, onUpdate, projectId, onPtNumChange }) {
           value={s.symbol || 'survey'}
           onChange={e => onUpdate(sh => ({ ...sh, symbol: e.target.value }))}
           style={{
-            flex: 1, fontSize: 10, padding: '4px 5px', borderRadius: 5, minWidth: 0,
-            background: '#1A3D28', border: '1px solid rgba(255,255,255,0.2)',
-            color: '#FDFAF4', fontFamily: 'Courier New, monospace', outline: 'none', cursor: 'pointer',
+            flex: 1, fontSize: 10, padding: '3px 5px', borderRadius: 5, minWidth: 0,
+            background: inline ? PT.inputBg : '#1A3D28',
+            border: inline ? `1px solid ${PT.border}` : '1px solid rgba(255,255,255,0.2)',
+            color: inline ? PT.text : '#FDFAF4',
+            fontFamily: 'Courier New, monospace', outline: 'none', cursor: 'pointer',
           }}
         >
           {SYMBOL_OPTS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
@@ -2461,10 +2477,10 @@ function PointInfoCard({ shape: s, onUpdate, projectId, onPtNumChange }) {
           onClick={() => { const n = !allOn; onUpdate(sh => ({ ...sh, showNum: n, showNorthing: n, showEasting: n, showElev: n, showDesc: n })); }}
           title="Toggle all labels"
           style={{
-            flexShrink: 0, padding: '4px 8px', borderRadius: 5, border: 'none', cursor: 'pointer',
+            flexShrink: 0, padding: '3px 7px', borderRadius: 4, border: `1px solid ${inline ? PT.border : 'transparent'}`, cursor: 'pointer',
             fontSize: 9, fontWeight: 700,
-            background: allOn ? '#2D6A4F' : 'rgba(255,255,255,0.09)',
-            color: allOn ? '#FDFAF4' : 'rgba(255,255,255,0.45)',
+            background: allOn ? (inline ? 'rgba(37,99,168,0.18)' : '#2D6A4F') : (inline ? PT.bgAlt : 'rgba(255,255,255,0.09)'),
+            color: allOn ? (inline ? '#2563A8' : '#FDFAF4') : (inline ? PT.muted : 'rgba(255,255,255,0.45)'),
           }}
         >{allOn ? 'All Off' : 'All On'}</button>
         <button
@@ -2490,7 +2506,7 @@ function PointInfoCard({ shape: s, onUpdate, projectId, onPtNumChange }) {
             }
           }}
           title="Re-sync from Points Data Page"
-          style={{ flexShrink: 0, fontSize: 14, background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.4)', padding: '0 1px', lineHeight: 1 }}
+          style={{ flexShrink: 0, fontSize: 14, background: 'none', border: 'none', cursor: 'pointer', color: inline ? PT.faint : 'rgba(255,255,255,0.4)', padding: '0 1px', lineHeight: 1 }}
         >↺</button>
       </div>
 
@@ -2504,10 +2520,11 @@ function PointInfoCard({ shape: s, onUpdate, projectId, onPtNumChange }) {
                 onClick={() => toggle(f.show)}
                 title={`Toggle ${f.label} label on canvas`}
                 style={{
-                  flexShrink: 0, width: 34, height: 26, borderRadius: 5, border: 'none',
+                  flexShrink: 0, width: 34, height: 24, borderRadius: 4,
+                  border: `1px solid ${inline ? PT.border : 'transparent'}`,
                   cursor: 'pointer', fontSize: 9, fontWeight: 700,
-                  background: s[f.show] ? '#2D6A4F' : 'rgba(255,255,255,0.09)',
-                  color: s[f.show] ? '#FDFAF4' : 'rgba(255,255,255,0.38)',
+                  background: s[f.show] ? (inline ? 'rgba(37,99,168,0.18)' : '#2D6A4F') : (inline ? PT.bgAlt : 'rgba(255,255,255,0.09)'),
+                  color: s[f.show] ? (inline ? '#2563A8' : '#FDFAF4') : (inline ? PT.muted : 'rgba(255,255,255,0.38)'),
                 }}
               >{f.label}</button>
               {f.key === 'ptNum' ? (
@@ -2529,7 +2546,7 @@ function PointInfoCard({ shape: s, onUpdate, projectId, onPtNumChange }) {
               )}
             </div>
             {f.key === 'ptNum' && ptNumError && (
-              <div style={{ fontSize: 9, color: '#f87171', paddingLeft: 39 }}>{ptNumError}</div>
+              <div style={{ fontSize: 9, color: inline ? '#B83232' : '#f87171', paddingLeft: 39 }}>{ptNumError}</div>
             )}
           </div>
         ))}
@@ -2678,7 +2695,7 @@ function PointDeletePromptModal({ pointCount, onPermanent, onSketchOnly, onCance
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-function SketchPage({ page, projectId, onReload }) {
+function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId, onDownload, onDelete, pageCount }) {
   // Sanitize shapes on load: remove any path shapes with corrupted (NaN/null/undefined)
   // node coordinates that would crash pathToSVGD on render.
   function sanitizeShapes(raw) {
@@ -2744,7 +2761,11 @@ function SketchPage({ page, projectId, onReload }) {
   // ── Dimension labels ───────────────────────────────────────────────────────
   // When true, each committed shape shows an inline measurement label (length,
   // radius, arc length, width×height).  Also shown live while drawing.
-  const [defaultStrokeW, setDefaultStrokeW] = useState(1.5);
+  const [defaultStrokeW,    setDefaultStrokeW]    = useState(1.5);
+  const [defaultStrokeDash, setDefaultStrokeDash] = useState('');  // '' = solid
+  const [defaultFontSize,   setDefaultFontSize]   = useState(1.0); // multiplier; 1.0 = base
+  const [defaultTextAlign,  setDefaultTextAlign]  = useState('center');
+  const [defaultTextVAlign, setDefaultTextVAlign] = useState('middle');
   // ── Active color state ─────────────────────────────────────────────────────
   const [activeStrokeColor,   setActiveStrokeColor]   = useState(STROKE);
   const [activeFillColor,     setActiveFillColor]     = useState('none');
@@ -2858,7 +2879,7 @@ function SketchPage({ page, projectId, onReload }) {
   // ── Pen tool state ────────────────────────────────────────────────────────────────────────────────
   // penMode: 'bezier' | 'smart' | 'corner'
   // 'corner' places only sharp nodes (no handle phase) — produces straight-line segments.
-  const [penMode,         setPenMode]         = useState('bezier');
+  const [penMode,         setPenMode]         = useState('corner');
   // penNodes: placed nodes for in-progress pen path
   const [penNodes,        setPenNodes]        = useState([]);
   // penPhase: 'point' = next click places a node + rubber-band shows;
@@ -3408,6 +3429,7 @@ function SketchPage({ page, projectId, onReload }) {
       id: pathId, type: 'path', closed,
       nodes,
       stroke: activeStrokeColor, fill: activeFillColor, strokeWidth: defaultStrokeW,
+      strokeDash: defaultStrokeDash || undefined,
       layerId: activeLayerId,
       ...(dimsOnDraw ? {} : { _hideDims: true }),
     }]);
@@ -4476,6 +4498,7 @@ function SketchPage({ page, projectId, onReload }) {
           x2: drawState.x2, y2: drawState.y2,
           px: drawState.px,  py: drawState.py,
           stroke: activeStrokeColor, fill: activeFillColor, strokeWidth: defaultStrokeW,
+          strokeDash: defaultStrokeDash || undefined,
           layerId: drawState.layerId || activeLayerId,
           ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_crvId]);
@@ -5410,6 +5433,7 @@ function SketchPage({ page, projectId, onReload }) {
         commitShapes([...shapes, { id: _lineId, type: 'line',
           x1: drawState.x1, y1: drawState.y1, x2: drawState.x2, y2: drawState.y2,
           stroke: activeStrokeColor, fill: activeFillColor, strokeWidth: defaultStrokeW,
+          strokeDash: defaultStrokeDash || undefined,
           layerId: drawState.layerId || activeLayerId,
           ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_lineId]);
@@ -5425,6 +5449,7 @@ function SketchPage({ page, projectId, onReload }) {
         commitShapes([...shapes, { id: _rctId, type: 'rect',
           x: drawState.x, y: drawState.y, w: drawState.w, h: drawState.h,
           stroke: activeStrokeColor, fill: activeFillColor, strokeWidth: defaultStrokeW,
+          strokeDash: defaultStrokeDash || undefined,
           layerId: drawState.layerId || activeLayerId,
           ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_rctId]);
@@ -5440,6 +5465,7 @@ function SketchPage({ page, projectId, onReload }) {
         commitShapes([...shapes, { id: _cirId, type: 'circle',
           cx: drawState.cx, cy: drawState.cy, r: drawState.r,
           stroke: activeStrokeColor, fill: activeFillColor, strokeWidth: defaultStrokeW,
+          strokeDash: defaultStrokeDash || undefined,
           layerId: drawState.layerId || activeLayerId,
           ...(dimsOnDraw ? {} : { _hideDims: true }) }]);
         setSelectedIds([_cirId]);
@@ -5471,6 +5497,7 @@ function SketchPage({ page, projectId, onReload }) {
             id: pathId, type: 'path', closed: false,
             nodes,
             stroke: activeStrokeColor, fill: activeFillColor, strokeWidth: defaultStrokeW,
+            strokeDash: defaultStrokeDash || undefined,
             layerId: drawState.layerId || activeLayerId,
             ...(dimsOnDraw ? {} : { _hideDims: true }),
           }]);
@@ -6352,6 +6379,9 @@ function SketchPage({ page, projectId, onReload }) {
         x: textEdit.x, y: textEdit.y,
         w: textEdit.w || 180, h: textEdit.h || 80,
         content: textEdit.content, stroke: activeStrokeColor,
+        fontSize: defaultFontSize !== 1.0 ? defaultFontSize : undefined,
+        textAlign: defaultTextAlign !== 'left' ? defaultTextAlign : undefined,
+        textVAlign: defaultTextVAlign !== 'top' ? defaultTextVAlign : undefined,
         layerId: textEdit.layerId || activeLayerId }]);
     }
     setTextEdit(null);
@@ -6534,24 +6564,32 @@ function SketchPage({ page, projectId, onReload }) {
       case 'line':
         inner = <line x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2}
           stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} strokeLinecap="round"
-          strokeOpacity={s.strokeOpacity ?? 1} style={sel} />;
+          strokeOpacity={s.strokeOpacity ?? 1}
+          strokeDasharray={s.strokeDash ? s.strokeDash.replace(/[\d.]+/g, n => (parseFloat(n)*ps).toFixed(1)) : undefined}
+          style={sel} />;
         break;
       case 'curve': {
         const { px: rpx, py: rpy } = getCurvePI(s);
         inner = <path d={arcPath(s.x1, s.y1, s.x2, s.y2, rpx, rpy)}
           stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill="none" strokeLinecap="round"
-          strokeOpacity={s.strokeOpacity ?? 1} style={sel} />;
+          strokeOpacity={s.strokeOpacity ?? 1}
+          strokeDasharray={s.strokeDash ? s.strokeDash.replace(/[\d.]+/g, n => (parseFloat(n)*ps).toFixed(1)) : undefined}
+          style={sel} />;
         break;
       }
       case 'circle':
         inner = <circle cx={s.cx} cy={s.cy} r={s.r}
           stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill={s.fill || 'none'}
-          strokeOpacity={s.strokeOpacity ?? 1} fillOpacity={s.fillOpacity ?? 1} style={sel} />;
+          strokeOpacity={s.strokeOpacity ?? 1} fillOpacity={s.fillOpacity ?? 1}
+          strokeDasharray={s.strokeDash ? s.strokeDash.replace(/[\d.]+/g, n => (parseFloat(n)*ps).toFixed(1)) : undefined}
+          style={sel} />;
         break;
       case 'rect':
         inner = <rect x={s.x} y={s.y} width={s.w} height={s.h}
           stroke={s.stroke} strokeWidth={(s.strokeWidth || 1.5) * ps} fill={s.fill || 'none'}
-          strokeOpacity={s.strokeOpacity ?? 1} fillOpacity={s.fillOpacity ?? 1} style={sel} />;
+          strokeOpacity={s.strokeOpacity ?? 1} fillOpacity={s.fillOpacity ?? 1}
+          strokeDasharray={s.strokeDash ? s.strokeDash.replace(/[\d.]+/g, n => (parseFloat(n)*ps).toFixed(1)) : undefined}
+          style={sel} />;
         break;
       case 'image':
         if (!s.dataUrl) return null;
@@ -6563,7 +6601,8 @@ function SketchPage({ page, projectId, onReload }) {
         // same visual size on screen regardless of zoom — identical to dim labels.
         // The border box is in world coordinates (stays fixed to the drawing).
         const _tps      = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-        const tFontSize = 9.5 * _tps;               // counter-scaled: constant screen size
+        const fsMult    = s.fontSize || 1.0;
+        const tFontSize = 9.5 * _tps * fsMult;     // counter-scaled + size multiplier
         const tLineH    = tFontSize * 1.55;
         // s.w / s.h are screen pixels — multiply by _tps to get world-space dimensions.
         // This makes the box counter-scale with zoom: same visual size at any zoom level.
@@ -6579,6 +6618,20 @@ function SketchPage({ page, projectId, onReload }) {
         const charW     = 9.5 * 0.601;              // screen px per Courier New char
         const maxChars  = Math.max(1, Math.floor((swPx - 6) / charW));
         const lines     = wrapText(s.content || '', maxChars);
+        // Alignment
+        const hAlign    = s.textAlign  || 'left';
+        const vAlign    = s.textVAlign || 'top';
+        const pad       = 3 * _tps;
+        let tX;
+        if (hAlign === 'center')      tX = rx + tw / 2;
+        else if (hAlign === 'right')  tX = rx + tw - pad;
+        else                          tX = rx + pad;
+        const anchor = hAlign === 'center' ? 'middle' : hAlign === 'right' ? 'end' : 'start';
+        const totalH = lines.length * tLineH;
+        let tY0;
+        if (vAlign === 'middle')      tY0 = ry + (th - totalH) / 2 + tFontSize;
+        else if (vAlign === 'bottom') tY0 = ry + th - totalH + tFontSize * 0.8;
+        else                          tY0 = ry + tFontSize * 1.25;
         inner = (
           <g style={sel} opacity={s.strokeOpacity ?? 1}>
             {/* Border box — fully transparent bg; border only when selected */}
@@ -6590,10 +6643,11 @@ function SketchPage({ page, projectId, onReload }) {
             {/* Content lines — counter-scaled so font stays constant on screen */}
             {lines.map((line, i) => (
               <text key={i}
-                x={rx + 3 * _tps}
-                y={ry + tFontSize * 1.25 + i * tLineH}
+                x={tX}
+                y={tY0 + i * tLineH}
                 fontSize={tFontSize}
                 fontFamily="Courier New, monospace"
+                textAnchor={anchor}
                 fill={s.stroke || STROKE}
                 stroke="rgba(255,255,248,0.7)" strokeWidth={1.6 * _tps}
                 paintOrder="stroke fill"
@@ -6628,6 +6682,7 @@ function SketchPage({ page, projectId, onReload }) {
             strokeLinejoin="round"
             strokeOpacity={s.strokeOpacity ?? 1}
             fillOpacity={s.fillOpacity ?? 1}
+            strokeDasharray={s.strokeDash ? s.strokeDash.replace(/[\d.]+/g, n => (parseFloat(n)*ps).toFixed(1)) : undefined}
           />
         );
         break;
@@ -7414,34 +7469,84 @@ function SketchPage({ page, projectId, onReload }) {
       {headerOpen
         ? <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
         : null}
-      {/* Slim collapse/expand bar — always visible */}
-      <button
-        onClick={() => setHeaderOpen(o => !o)}
-        style={{
-          flexShrink: 0, height: 20, display: 'flex', alignItems: 'center',
-          justifyContent: 'space-between', padding: '0 10px',
-          background: 'rgba(245,242,235,0.96)',
-          borderBottom: '1px solid rgba(180,160,110,0.25)',
-          cursor: 'pointer', outline: 'none', border: 'none', width: '100%',
-        }}
-      >
-        <span style={{
-          fontSize: 9.5, fontFamily: 'Courier New, monospace',
-          color: 'rgba(60,50,30,0.65)', letterSpacing: '0.03em', overflow: 'hidden',
-          textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
-          {page.pageNumber ? `Pg ${page.pageNumber}` : ''}
-          {page.pageNumber && page.title ? ' · ' : ''}
-          {page.title || (headerOpen ? '' : 'tap to show page info')}
-        </span>
-        <span style={{ fontSize: 9, color: 'rgba(60,50,30,0.4)', flexShrink: 0, marginLeft: 6 }}>
-          {headerOpen ? (
-            <svg width="9" height="7" viewBox="0 0 9 7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 5.5 4.5 1.5 8 5.5"/></svg>
-          ) : (
-            <svg width="9" height="7" viewBox="0 0 9 7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 1.5 4.5 5.5 8 1.5"/></svg>
-          )}
-        </span>
-      </button>
+      {/* Slim collapse/expand bar — always visible; shows nav controls when header is collapsed */}
+      <div style={{
+        flexShrink: 0, height: 20, display: 'flex', alignItems: 'center',
+        background: 'rgba(245,242,235,0.96)',
+        borderBottom: '1px solid rgba(180,160,110,0.25)',
+        width: '100%',
+      }}>
+        {!headerOpen ? (
+          /* Collapsed state — full mini nav bar */
+          <>
+            {/* Back button */}
+            <button onClick={onBack} title="Back to project"
+              style={{ flexShrink: 0, height: 20, padding: '0 7px', background: 'none', border: 'none',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'rgba(60,50,30,0.6)' }}>
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="6 1 2 5 6 9"/>
+              </svg>
+            </button>
+            {/* Page nav: ◀ Pg N ▶ */}
+            <button onClick={() => prevPageId && navigate(`#/project/${projectId}/page/${prevPageId}`)}
+              disabled={!prevPageId}
+              style={{ flexShrink: 0, height: 20, padding: '0 4px', background: 'none', border: 'none',
+                cursor: prevPageId ? 'pointer' : 'default', color: prevPageId ? 'rgba(60,50,30,0.6)' : 'rgba(60,50,30,0.2)', display: 'flex', alignItems: 'center' }}>
+              <svg width="7" height="9" viewBox="0 0 7 9" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="5 1 1 4.5 5 8"/></svg>
+            </button>
+            <button
+              onClick={() => setHeaderOpen(o => !o)}
+              style={{ flex: 1, height: 20, background: 'none', border: 'none', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, minWidth: 0 }}>
+              <span style={{ fontSize: 9.5, fontFamily: 'Courier New, monospace',
+                color: 'rgba(60,50,30,0.65)', letterSpacing: '0.03em',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {page.pageNumber ? `Pg ${page.pageNumber}` : ''}
+                {page.pageNumber && page.title ? ' · ' : ''}
+                {page.title || 'page info'}
+              </span>
+              <svg width="7" height="6" viewBox="0 0 9 7" fill="none" stroke="rgba(60,50,30,0.4)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1 1.5 4.5 5.5 8 1.5"/></svg>
+            </button>
+            <button onClick={() => nextPageId && navigate(`#/project/${projectId}/page/${nextPageId}`)}
+              disabled={!nextPageId}
+              style={{ flexShrink: 0, height: 20, padding: '0 4px', background: 'none', border: 'none',
+                cursor: nextPageId ? 'pointer' : 'default', color: nextPageId ? 'rgba(60,50,30,0.6)' : 'rgba(60,50,30,0.2)', display: 'flex', alignItems: 'center' }}>
+              <svg width="7" height="9" viewBox="0 0 7 9" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="2 1 6 4.5 2 8"/></svg>
+            </button>
+            {/* Download */}
+            <button onClick={onDownload} title="Export PDF"
+              style={{ flexShrink: 0, height: 20, padding: '0 6px', background: 'none', border: 'none',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'rgba(60,50,30,0.6)' }}>
+              <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M7 2v7M4 6l3 3 3-3"/><line x1="2" y1="12" x2="12" y2="12"/>
+              </svg>
+            </button>
+            {/* Delete */}
+            <button onClick={onDelete} title="Delete page"
+              style={{ flexShrink: 0, height: 20, padding: '0 6px', background: 'none', border: 'none',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'rgba(180,50,50,0.55)' }}>
+              <svg width="10" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="2 4 12 4"/><path d="M5 4V2h4v2"/><path d="M5 7v4M9 7v4"/><rect x="3" y="4" width="8" height="9" rx="1"/>
+              </svg>
+            </button>
+          </>
+        ) : (
+          /* Expanded state — simple collapse button */
+          <button onClick={() => setHeaderOpen(o => !o)}
+            style={{ flex: 1, height: 20, display: 'flex', alignItems: 'center',
+              justifyContent: 'space-between', padding: '0 10px',
+              background: 'none', border: 'none', cursor: 'pointer', outline: 'none' }}>
+            <span style={{ fontSize: 9.5, fontFamily: 'Courier New, monospace',
+              color: 'rgba(60,50,30,0.65)', letterSpacing: '0.03em',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {page.pageNumber ? `Pg ${page.pageNumber}` : ''}
+              {page.pageNumber && page.title ? ' · ' : ''}
+              {page.title}
+            </span>
+            <svg width="9" height="7" viewBox="0 0 9 7" fill="none" stroke="rgba(60,50,30,0.4)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginLeft: 6 }}><polyline points="1 5.5 4.5 1.5 8 5.5"/></svg>
+          </button>
+        )}
+      </div>
 
       {/* ── Top Toolbar ──────────────────────────────────────────────────── */}
       <div ref={toolbarRef} className="sketch-top-bar" style={{
@@ -7722,19 +7827,177 @@ function SketchPage({ page, projectId, onReload }) {
                 </svg>
               </div>
 
-              {/* Line type — deferred */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, opacity: 0.4 }}>
-                <div style={{ fontSize: 10, color: PT.muted,
-                  fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
-                  LINE TYPE &nbsp;<span style={{ fontSize: 9, fontStyle: 'italic' }}>(coming soon)</span>
+              {/* Line type */}
+              {(() => {
+                const DASH_TYPES = [
+                  { value: '',           label: 'Solid',      d: 'M4,8 H52' },
+                  { value: '8,5',        label: 'Dashed',     d: 'M4,8 H52' },
+                  { value: '20,5,5,5',   label: 'Centreline', d: 'M4,8 H52' },
+                  { value: '2,6',        label: 'Dotted',     d: 'M4,8 H52' },
+                  { value: '12,5,2,5',   label: 'Dash-dot',   d: 'M4,8 H52' },
+                ];
+                const selIds = selectedIds.length > 0 ? selectedIds : [];
+                const selShapes = selIds.length > 0
+                  ? shapes.filter(s => selIds.includes(s.id))
+                  : [];
+                const currentDash = selShapes.length > 0
+                  ? (selShapes[0].strokeDash || '')
+                  : defaultStrokeDash;
+                const setDash = val => {
+                  setDefaultStrokeDash(val);
+                  if (selShapes.length > 0) {
+                    commitShapes(shapes.map(s =>
+                      selIds.includes(s.id) ? { ...s, strokeDash: val || undefined } : s
+                    ));
+                  }
+                };
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ fontSize: 10, color: PT.muted,
+                      fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
+                      LINE TYPE
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {DASH_TYPES.map(({ value, label }) => {
+                        const active = currentDash === value;
+                        return (
+                          <button key={value} onClick={() => setDash(value)} style={{
+                            display: 'flex', alignItems: 'center', gap: 10,
+                            height: 30, padding: '0 8px', borderRadius: 4, cursor: 'pointer',
+                            background: active ? 'rgba(37,99,168,0.14)' : PT.bgAlt,
+                            border: `1px solid ${active ? 'rgba(37,99,168,0.6)' : PT.border}`,
+                            color: active ? '#2563A8' : PT.muted,
+                            fontFamily: 'Courier New, monospace', fontSize: 10,
+                          }}>
+                            <svg width="56" height="16" viewBox="0 0 56 16" style={{ flexShrink: 0 }}>
+                              <line x1="4" y1="8" x2="52" y2="8"
+                                stroke={active ? '#2563A8' : PT.text} strokeWidth="1.8"
+                                strokeLinecap="round"
+                                strokeDasharray={value || undefined} />
+                            </svg>
+                            <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          );
+        })()}
+
+        {/* ── Text dropdown panel ──────────────────────────────────────── */}
+        {openMenu === 'text' && (() => {
+          const textShapes = selectedIds.length > 0
+            ? shapes.filter(s => selectedIds.includes(s.id) && s.type === 'text')
+            : [];
+          const hasSelection = textShapes.length > 0;
+          const currentFs = hasSelection ? (textShapes[0].fontSize || 1.0) : defaultFontSize;
+          const currentHA = hasSelection ? (textShapes[0].textAlign  || 'left')   : defaultTextAlign;
+          const currentVA = hasSelection ? (textShapes[0].textVAlign || 'top')    : defaultTextVAlign;
+
+          const applyFs = v => {
+            const fv = Math.max(0.5, Math.min(3.0, parseFloat(v) || 1.0));
+            setDefaultFontSize(fv);
+            if (hasSelection) {
+              commitShapes(shapes.map(s =>
+                selectedIds.includes(s.id) && s.type === 'text'
+                  ? { ...s, fontSize: fv !== 1.0 ? fv : undefined } : s
+              ));
+            } else {
+              commitShapes(shapes.map(s =>
+                s.type === 'text' ? { ...s, fontSize: fv !== 1.0 ? fv : undefined } : s
+              ));
+            }
+          };
+          const applyHA = v => {
+            setDefaultTextAlign(v);
+            if (hasSelection) {
+              commitShapes(shapes.map(s =>
+                selectedIds.includes(s.id) && s.type === 'text'
+                  ? { ...s, textAlign: v !== 'left' ? v : undefined } : s
+              ));
+            }
+          };
+          const applyVA = v => {
+            setDefaultTextVAlign(v);
+            if (hasSelection) {
+              commitShapes(shapes.map(s =>
+                selectedIds.includes(s.id) && s.type === 'text'
+                  ? { ...s, textVAlign: v !== 'top' ? v : undefined } : s
+              ));
+            }
+          };
+          const btnSt = (active) => ({
+            flex: 1, height: 28, borderRadius: 4, cursor: 'pointer', fontSize: 11,
+            fontFamily: 'Courier New, monospace',
+            background: active ? 'rgba(37,99,168,0.14)' : PT.bgAlt,
+            border: `1px solid ${active ? 'rgba(37,99,168,0.6)' : PT.border}`,
+            color: active ? '#2563A8' : PT.muted,
+          });
+          return (
+            <div style={{
+              position: 'absolute', top: '100%', left: menuPos.x,
+              marginTop: 4, zIndex: 120, minWidth: 230,
+              background: PT.bg, border: `1px solid ${PT.border}`,
+              borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+              padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 10,
+            }}>
+              {/* Header */}
+              <div style={{ fontSize: 10, fontWeight: 700, color: PT.muted,
+                textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                {hasSelection ? `Text — ${textShapes.length} shape${textShapes.length>1?'s':''}` : 'Text — default'}
+              </div>
+
+              {/* Font size */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 10, color: PT.muted, fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
+                  FONT SIZE
                 </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  {['——', '- - -', '·····'].map(t => (
-                    <button key={t} disabled style={{
-                      flex: 1, height: 26, borderRadius: 4, cursor: 'not-allowed',
-                      background: PT.bgAlt, border: `1px solid ${PT.border}`,
-                      color: PT.faint, fontSize: 12,
-                    }}>{t}</button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="range" min="0.5" max="3.0" step="0.1"
+                    value={currentFs}
+                    onChange={e => applyFs(e.target.value)}
+                    style={{ flex: 1, accentColor: PT.accent, cursor: 'pointer' }}
+                  />
+                  <input type="number" min="0.5" max="3.0" step="0.1"
+                    value={currentFs.toFixed(1)}
+                    onChange={e => applyFs(e.target.value)}
+                    style={{
+                      width: 44, padding: '2px 4px', borderRadius: 4, textAlign: 'center',
+                      background: PT.inputBg, border: `1px solid ${PT.border}`,
+                      color: PT.text, fontSize: 11, fontFamily: 'Courier New, monospace', outline: 'none',
+                    }}
+                  />
+                  <button onClick={() => applyFs(1.0)} style={{
+                    padding: '2px 7px', borderRadius: 4, cursor: 'pointer', fontSize: 10,
+                    background: PT.bgAlt, border: `1px solid ${PT.border}`, color: PT.muted,
+                    fontFamily: 'Courier New, monospace',
+                  }}>reset</button>
+                </div>
+              </div>
+
+              {/* Horizontal alignment */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <div style={{ fontSize: 10, color: PT.muted, fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
+                  HORIZONTAL
+                </div>
+                <div style={{ display: 'flex', gap: 5 }}>
+                  {[['left','Left ←'],['center','Center'],['right','Right →']].map(([v,lbl]) => (
+                    <button key={v} onClick={() => applyHA(v)} style={btnSt(currentHA === v)}>{lbl}</button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Vertical alignment */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <div style={{ fontSize: 10, color: PT.muted, fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
+                  VERTICAL
+                </div>
+                <div style={{ display: 'flex', gap: 5 }}>
+                  {[['top','Top ↑'],['middle','Mid'],['bottom','Bot ↓']].map(([v,lbl]) => (
+                    <button key={v} onClick={() => applyVA(v)} style={btnSt(currentVA === v)}>{lbl}</button>
                   ))}
                 </div>
               </div>
@@ -7946,9 +8209,9 @@ function SketchPage({ page, projectId, onReload }) {
           {/* ── Pen tool context controls ───────────────────────────────────── */}
           {tool === 'pen' && (
             <>
-              {[{ id: 'bezier', label: 'Bézier', title: 'Click to place node; click+drag to pull smooth handles' },
+              {[{ id: 'corner', label: 'Corner', title: 'Click to place sharp corner nodes — produces straight line segments' },
                 { id: 'smart',  label: 'Smart',  title: 'Click to place nodes; handles auto-calculated for smooth curves' },
-                { id: 'corner', label: 'Corner', title: 'Click to place sharp corner nodes — produces straight line segments' }].map(m => (
+                { id: 'bezier', label: 'Bézier', title: 'Click to place node; click+drag to pull smooth handles' }].map(m => (
                 <button key={m.id}
                   onClick={() => setPenMode(m.id)}
                   title={m.title}
@@ -8256,6 +8519,32 @@ function SketchPage({ page, projectId, onReload }) {
           >
             <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><line x1="2" y1="4" x2="12" y2="4" strokeWidth="2.5"/><line x1="2" y1="7" x2="12" y2="7" strokeWidth="1.5"/><line x1="2" y1="10" x2="12" y2="10" strokeWidth="0.8"/></svg>
             <span style={{ letterSpacing: '0.03em' }}>Line</span>
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ opacity: 0.5, marginLeft: 1 }}><polyline points="1 2.5 4 5.5 7 2.5"/></svg>
+          </button>
+
+          {/* ── Text settings button ─────────────────────────────────── */}
+          <button
+            onClick={e => {
+              const btnRect = e.currentTarget.getBoundingClientRect();
+              const barRect = toolbarRef.current ? toolbarRef.current.getBoundingClientRect() : { left: 0 };
+              setMenuPos({ x: btnRect.left - barRect.left });
+              setOpenMenu(m => m === 'text' ? null : 'text');
+            }}
+            title="Text size & alignment"
+            style={{
+              height: 26, padding: '0 10px', borderRadius: 4, flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 5,
+              background: openMenu === 'text' ? PT.bgHov : PT.bgAlt,
+              border: `1px solid ${openMenu === 'text' ? PT.accent : PT.border}`,
+              color: openMenu === 'text' ? PT.text : PT.muted,
+              cursor: 'pointer', fontSize: 11,
+              fontFamily: 'Courier New, monospace', outline: 'none',
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+              <text x="2" y="11" fontSize="11" fontFamily="serif" fill="currentColor" stroke="none" fontWeight="bold">T</text>
+            </svg>
+            <span style={{ letterSpacing: '0.03em' }}>Text</span>
             <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ opacity: 0.5, marginLeft: 1 }}><polyline points="1 2.5 4 5.5 7 2.5"/></svg>
           </button>
 
@@ -8871,16 +9160,7 @@ function SketchPage({ page, projectId, onReload }) {
             );
           })()}
 
-          {/* Point Info Card — stays as overlay (point placement UX requires immediate popup) */}
-          {showValueCard && selectedIds.length <= 1 && selectedShape?.type === 'point' && (
-            <PointInfoCard
-              key={selectedShape.id}
-              shape={selectedShape}
-              onUpdate={handleCardUpdate}
-              projectId={projectId}
-              onPtNumChange={num => setLastManualPtNum(parseInt(num) || null)}
-            />
-          )}
+          {/* Point Info Card moved to layers panel info section */}
 
           {/* Inline text editor — absolutely positioned in SVG container.
               textEdit stores world coordinates; convert to screen pixels for CSS. */}
@@ -9067,14 +9347,26 @@ function SketchPage({ page, projectId, onReload }) {
                               title={layer.locked?'Unlock layer':'Lock layer'}
                               style={{width:18,height:18,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:10,color:layer.locked?PT.accent:PT.faint,outline:'none'}}
                             >{layer.locked?'🔒':'🔓'}</button>
-                            {/* Layer stack icon + Name */}
-                            <svg width="10" height="10" viewBox="0 0 12 12" fill="none"
-                              stroke={isActive?PT.accent:(layer.visible?PT.muted:PT.faint)}
-                              strokeWidth="1.4" strokeLinecap="round" style={{flexShrink:0}}>
-                              <rect x="1" y="1" width="10" height="3" rx="0.8"/>
-                              <rect x="1" y="5" width="10" height="3" rx="0.8"/>
-                              <rect x="1" y="9" width="10" height="2" rx="0.8" opacity="0.5"/>
-                            </svg>
+                            {/* Layer stack icon — click to select all shapes in this layer */}
+                            <button
+                              title="Select all in layer"
+                              onClick={ev=>{
+                                ev.stopPropagation();
+                                const ids=shapes.filter(sh=>(sh.layerId||layers[0]?.id)===layer.id).map(sh=>sh.id);
+                                setSelectedIds(ids);
+                                setSelectedLayerForCard(null);
+                                setTool('select');setPrevTool(null);
+                              }}
+                              style={{flexShrink:0,background:'none',border:'none',cursor:'pointer',padding:2,outline:'none',display:'flex',alignItems:'center',justifyContent:'center'}}
+                            >
+                              <svg width="10" height="10" viewBox="0 0 12 12" fill="none"
+                                stroke={isActive?PT.accent:(layer.visible?PT.muted:PT.faint)}
+                                strokeWidth="1.4" strokeLinecap="round">
+                                <rect x="1" y="1" width="10" height="3" rx="0.8"/>
+                                <rect x="1" y="5" width="10" height="3" rx="0.8"/>
+                                <rect x="1" y="9" width="10" height="2" rx="0.8" opacity="0.5"/>
+                              </svg>
+                            </button>
                             <span style={{flex:1,fontSize:11,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
                               color:isActive?PT.accent:(layer.visible?PT.text:PT.faint)
                             }}>{layer.name}{layer.locked && <span style={{marginLeft:3,fontSize:8,opacity:0.6}}>🔒</span>}</span>
@@ -9122,6 +9414,8 @@ function SketchPage({ page, projectId, onReload }) {
                                   setTool('select');setPrevTool(null);
                                   setSelectedIds(prev=>prev.includes(s.id)?prev.filter(id=>id!==s.id):[...prev,s.id]);
                                   setLastPanelClickId(s.id);
+                                  setSelectedLayerForCard(null);
+                                  setActiveLayerId(s.layerId||layers[0]?.id);
                                 // Shift+click: range-select from last click to this one
                                 } else if(e.shiftKey&&lastPanelClickId){
                                   e.stopPropagation();
@@ -9134,9 +9428,11 @@ function SketchPage({ page, projectId, onReload }) {
                                     const _rng=_allS.slice(_f,_t+1).map(sh=>sh.id);
                                     setSelectedIds(prev=>[...new Set([...prev,..._rng])]);
                                   }
+                                  setSelectedLayerForCard(null);
                                 } else {
                                   setTool('select');setSelectedIds([s.id]);setPrevTool(null);
                                   setLastPanelClickId(s.id);setSelectedLayerForCard(null);
+                                  setActiveLayerId(s.layerId||layers[0]?.id);
                                 }
                               }}
                               onPointerDown={e=>{
@@ -9292,6 +9588,18 @@ function SketchPage({ page, projectId, onReload }) {
                     />
                   )}
 
+                  {/* Single point shape */}
+                  {selectedIds.length === 1 && selectedShape?.type === 'point' && (
+                    <PointInfoCard
+                      key={selectedShape.id}
+                      shape={selectedShape}
+                      onUpdate={handleCardUpdate}
+                      projectId={projectId}
+                      onPtNumChange={num => setLastManualPtNum(parseInt(num) || null)}
+                      inline={true}
+                    />
+                  )}
+
                   {/* Single shape (non-text, non-point) */}
                   {selectedIds.length === 1 && selectedShape && selectedShape.type !== 'text' && selectedShape.type !== 'point' && (() => {
                     const _lShapes = shapes.filter(s => (s.layerId || layers[0]?.id) === (selectedShape.layerId || layers[0]?.id));
@@ -9318,10 +9626,35 @@ function SketchPage({ page, projectId, onReload }) {
                     if (!_layer) return null;
                     const _shapeCount = shapes.filter(s => (s.layerId || layers[0]?.id) === _layer.id).length;
                     return (
-                      <div style={{ padding: '6px 8px', fontSize: 10, color: PT.muted,
-                        fontFamily: 'Courier New, monospace' }}>
-                        <div style={{ fontWeight: 600, color: PT.text, marginBottom: 2 }}>{_layer.name}</div>
-                        <div>{_shapeCount} shape{_shapeCount !== 1 ? 's' : ''}</div>
+                      <div style={{ padding: '6px 8px', fontSize: 10, fontFamily: 'Courier New, monospace' }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
+                          textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Name</div>
+                        <input
+                          defaultValue={_layer.name}
+                          key={_layer.id}
+                          onBlur={e => {
+                            const v = e.target.value.trim();
+                            if (v && v !== _layer.name) {
+                              const next = layers.map(l => l.id === _layer.id ? { ...l, name: v } : l);
+                              setLayers(next);
+                              persist(undefined, undefined, next);
+                            } else {
+                              e.target.value = _layer.name;
+                            }
+                          }}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') e.target.blur();
+                            if (e.key === 'Escape') { e.target.value = _layer.name; e.target.blur(); }
+                          }}
+                          style={{
+                            width: '100%', boxSizing: 'border-box',
+                            padding: '3px 6px', borderRadius: 4, fontSize: 10,
+                            background: PT.inputBg, border: `1px solid ${PT.border}`,
+                            color: PT.text, fontFamily: 'Courier New, monospace',
+                            outline: 'none', marginBottom: 5,
+                          }}
+                        />
+                        <div style={{ color: PT.muted }}>{_shapeCount} shape{_shapeCount !== 1 ? 's' : ''}</div>
                       </div>
                     );
                   })()}

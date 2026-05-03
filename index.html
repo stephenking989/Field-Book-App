@@ -556,9 +556,7 @@
     @media (min-width: 768px) {
       #root { display: flex; justify-content: center; }
       .notebook-frame {
-        width: min(960px, calc(100vw - 48px));
-        border-left:  1px solid rgba(255,255,255,0.07);
-        border-right: 1px solid rgba(255,255,255,0.07);
+        width: 100%;
         box-shadow: 0 0 48px rgba(0,0,0,0.45);
       }
     }
@@ -2369,7 +2367,6 @@
       const barReal = _nice(sd, vb.w, outW, un);
       const barPxW  = _rtp(barReal, sd, un);
       const barLabel = _fmtR(barReal, un);
-      const scaleLabel = `1 : ${sd.toLocaleString()}`;
       const bx  = vb.x + vb.w * 0.025;
       const by  = vb.y + vb.h * 0.956;
       const bh  = 4 * ps;
@@ -2377,7 +2374,7 @@
       const fs  = 8.5 * ps;
       const pad = 5 * ps;
       const bgW = barPxW + pad * 2;
-      const bgH = bh + 20 * ps;
+      const bgH = bh + 14 * ps;
       const bgX = bx - pad, bgY = by - 12 * ps;
       return `<g>
         <rect x="${bgX.toFixed(1)}" y="${bgY.toFixed(1)}" width="${bgW.toFixed(1)}" height="${bgH.toFixed(1)}" rx="${(3*ps).toFixed(1)}" fill="rgba(255,255,255,0.88)" stroke="#DDD6C8" stroke-width="${(0.8*ps).toFixed(1)}"/>
@@ -2385,7 +2382,6 @@
         <line x1="${bx.toFixed(1)}" y1="${(by-bh/2).toFixed(1)}" x2="${bx.toFixed(1)}" y2="${(by+bh/2).toFixed(1)}" stroke="#3C5445" stroke-width="${sw.toFixed(1)}"/>
         <line x1="${(bx+barPxW).toFixed(1)}" y1="${(by-bh/2).toFixed(1)}" x2="${(bx+barPxW).toFixed(1)}" y2="${(by+bh/2).toFixed(1)}" stroke="#3C5445" stroke-width="${sw.toFixed(1)}"/>
         <text x="${(bx+barPxW/2).toFixed(1)}" y="${(by-bh/2-2.5*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${fs.toFixed(1)}" fill="#3C5445" font-family="Courier New,monospace" font-weight="bold">${barLabel}</text>
-        <text x="${(bx+barPxW/2).toFixed(1)}" y="${(by+bh/2+7*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${(fs*0.85).toFixed(1)}" fill="#555" font-family="Helvetica,Arial,sans-serif" font-style="italic">${scaleLabel}</text>
       </g>`;
     }
 
@@ -2446,7 +2442,10 @@
       const fill   = s.fill || 'none';
       const sOp    = s.strokeOpacity ?? 1;
       const fOp    = s.fillOpacity   ?? 1;
-      const base   = `stroke="${stroke}" stroke-width="${sw.toFixed(3)}" fill="${fill}" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${sOp}" fill-opacity="${fOp}"`;
+      const dashAttr = s.strokeDash
+        ? ` stroke-dasharray="${s.strokeDash.replace(/[\d.]+/g, n => (parseFloat(n)*ps).toFixed(1))}"`
+        : '';
+      const base   = `stroke="${stroke}" stroke-width="${sw.toFixed(3)}" fill="${fill}" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${sOp}" fill-opacity="${fOp}"${dashAttr}`;
 
       let el = '';
       switch (s.type) {
@@ -2477,16 +2476,14 @@
           }
           break;
         case 'text': {
-          // s.x/s.y is the CENTRE of the text box (matches sketch.js rendering).
-          // Convert to top-left corner using the same counter-scaling as sketch.js:
-          // tw = screen-px width * ps, th = screen-px height * ps.
           const sw = s.w || 180;
           const sh = s.h || 80;
           const tw = sw * ps;
           const th = sh * ps;
           const rx = s.x - tw / 2;
           const ry = s.y - th / 2;
-          const tFontSize = 9.5 * ps;
+          const fsMult = s.fontSize || 1.0;
+          const tFontSize = 9.5 * ps * fsMult;
           const tLineH = tFontSize * 1.55;
           const charW = 9.5 * 0.601;
           const maxChars = Math.max(1, Math.floor((sw - 6) / charW));
@@ -2501,11 +2498,24 @@
             return out;
           };
           const lines = _wt(s.content || '', maxChars);
+          const hAlign = s.textAlign  || 'left';
+          const vAlign = s.textVAlign || 'top';
+          const pad    = 3 * ps;
+          let tX;
+          if (hAlign === 'center')     tX = rx + tw / 2;
+          else if (hAlign === 'right') tX = rx + tw - pad;
+          else                         tX = rx + pad;
+          const anchor = hAlign === 'center' ? 'middle' : hAlign === 'right' ? 'end' : 'start';
+          const totalH = lines.length * tLineH;
+          let tY0;
+          if (vAlign === 'middle')      tY0 = ry + (th - totalH) / 2 + tFontSize;
+          else if (vAlign === 'bottom') tY0 = ry + th - totalH + tFontSize * 0.8;
+          else                          tY0 = ry + tFontSize * 1.25;
           const esc = t => t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
           const tspans = lines.map((ln, i) =>
-            `<tspan x="${(rx + 3*ps).toFixed(3)}" dy="${i === 0 ? (tFontSize*1.25).toFixed(3) : tLineH.toFixed(3)}">${esc(ln) || '\u00a0'}</tspan>`
+            `<tspan x="${tX.toFixed(3)}" dy="${i === 0 ? '0' : tLineH.toFixed(3)}">${esc(ln) || '\u00a0'}</tspan>`
           ).join('');
-          el = `<text x="${(rx + 3*ps).toFixed(3)}" y="${ry.toFixed(3)}" font-size="${tFontSize.toFixed(3)}" fill="${stroke}" font-family="Courier New,monospace">${tspans}</text>`;
+          el = `<text x="${tX.toFixed(3)}" y="${tY0.toFixed(3)}" font-size="${tFontSize.toFixed(3)}" fill="${stroke}" font-family="Courier New,monospace" text-anchor="${anchor}">${tspans}</text>`;
           break;
         }
         // ── Dimension shapes ────────────────────────────────────────────────
@@ -2848,10 +2858,8 @@
       pdf.text(String(val), bx + i * segW, by - 1, { align: 'center' });
     }
 
-    // Unit label and 1:N scale note to the right
+    // Unit label to the right of bar
     pdf.text(u, bx + barW + 2, by + barH - 0.5, { align: 'left' });
-    pdf.setFontSize(5); pdf.setTextColor(100, 100, 100);
-    pdf.text(`1:${scaleDenom}`, bx + barW + 2, by - 1, { align: 'left' });
   }
 
   // Main project PDF export — called from ProjectView.
@@ -3082,6 +3090,30 @@
             ty += blockH + 4;
           }
 
+          // Dates block — created (read-only) + survey date (user-set)
+          (() => {
+            const createdStr  = fmtDateDMY(proj.createdAt);
+            const surveyStr   = page.surveyDate ? fmtDateDMY(page.surveyDate) : '';
+            if (!createdStr && !surveyStr) return;
+            if (ty > H - margin - 20) return;
+            const blockH = 18;
+            pdf.setFillColor(...GM2);
+            pdf.rect(margin + 2, ty, 2.5, blockH - 2, 'F');
+            pdf.setFontSize(6); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...GL2);
+            pdf.text('DATES', margin + 8, ty + 5);
+            const colW = (W - margin * 2 - 14) / 2;
+            [[  'Created',    createdStr || '—'],
+             ['Survey Date',  surveyStr  || '—']].forEach(([k, v], i) => {
+              const ix = margin + 8 + i * (colW + 2);
+              pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...GM2);
+              pdf.text(k + ':', ix, ty + 11);
+              pdf.setFont('helvetica', 'normal'); pdf.setTextColor(28, 28, 28); pdf.setFontSize(9);
+              pdf.text(v, ix, ty + 16);
+            });
+            pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.25);
+            pdf.line(margin + 6, ty + blockH, W - margin - 4, ty + blockH);
+            ty += blockH + 4;
+          })();
           _titleField('Location',                   page.location);
           _titleField('Crew & Responsibilities',    page.crew);
           _titleField('Equipment (Make, Model, S/N)', page.equipment, { mono: true });
@@ -3433,6 +3465,29 @@
           ty += blockH + 4;
         }
 
+        // Dates block
+        (() => {
+          const createdStr = fmtDateDMY(proj.createdAt);
+          const surveyStr  = page.surveyDate ? fmtDateDMY(page.surveyDate) : '';
+          if (!createdStr && !surveyStr) return;
+          if (ty > H - margin - 20) return;
+          const blockH = 18;
+          pdf.setFillColor(...GM2);
+          pdf.rect(margin + 2, ty, 2.5, blockH - 2, 'F');
+          pdf.setFontSize(6); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...GL2);
+          pdf.text('DATES', margin + 8, ty + 5);
+          const colW = (W - margin * 2 - 14) / 2;
+          [['Created', createdStr || '—'], ['Survey Date', surveyStr || '—']].forEach(([k, v], i) => {
+            const ix = margin + 8 + i * (colW + 2);
+            pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...GM2);
+            pdf.text(k + ':', ix, ty + 11);
+            pdf.setFont('helvetica', 'normal'); pdf.setTextColor(28, 28, 28); pdf.setFontSize(9);
+            pdf.text(v, ix, ty + 16);
+          });
+          pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.25);
+          pdf.line(margin + 6, ty + blockH, W - margin - 4, ty + blockH);
+          ty += blockH + 4;
+        })();
         _titleFieldSP('Location',                    page.location);
         _titleFieldSP('Crew & Responsibilities',     page.crew);
         _titleFieldSP('Equipment (Make, Model, S/N)', page.equipment, { mono: true });
@@ -4659,12 +4714,14 @@
 
     return (
       <div className="flex flex-col h-full" style={{ background: '#FDFAF4' }}>
-        <NavBar
-          title={page.title && page.title.trim() ? page.title.trim() : `P.${page.pageNumber} — ${meta.label}`}
-          subtitle={`${project.name} · P.${page.pageNumber}`}
-          onBack={() => navigate(`#/project/${projectId}`)}
-          actions={navActions}
-        />
+        {page.type !== 'sketch' && (
+          <NavBar
+            title={page.title && page.title.trim() ? page.title.trim() : `P.${page.pageNumber} — ${meta.label}`}
+            subtitle={`${project.name} · P.${page.pageNumber}`}
+            onBack={() => navigate(`#/project/${projectId}`)}
+            actions={navActions}
+          />
+        )}
         {/* Sketch pages must NOT be scrollable — the canvas handles all pointer/wheel
             events directly and needs to fill the full remaining height without a
             scrollable ancestor (which the browser prefers over canvas wheel handlers).
@@ -4675,8 +4732,15 @@
           <PageContent
             page={page}
             projectId={projectId}
+            project={project}
             onReload={reload}
             onRegisterExports={page.type === 'data' || page.type === 'photo' ? registerExports : undefined}
+            onBack={page.type === 'sketch' ? () => navigate(`#/project/${projectId}`) : undefined}
+            prevPageId={page.type === 'sketch' ? prevPage?.id : undefined}
+            nextPageId={page.type === 'sketch' ? nextPage?.id : undefined}
+            onDownload={page.type === 'sketch' ? handleExportPDF : undefined}
+            onDelete={page.type === 'sketch' ? handleDelete : undefined}
+            pageCount={page.type === 'sketch' ? pages.length : undefined}
           />
           {page.type !== 'sketch' && <div style={{ height: 'max(24px, env(safe-area-inset-bottom))' }} />}
         </div>
@@ -7534,7 +7598,16 @@
   // TITLE PAGE
   // ─────────────────────────────────────────────────────────────────────────────
 
-  function TitlePage({ page, projectId, onReload }) {
+  function fmtDateDMY(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    const months = ['January','February','March','April','May','June',
+                    'July','August','September','October','November','December'];
+    return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+  }
+
+  function TitlePage({ page, projectId, project, onReload }) {
     const [form, setForm] = useState({
       title:       page.title       || '',
       location:    page.location    || '',
@@ -7548,6 +7621,7 @@
       summary:     page.summary     || '',
       codeList:    page.codeList    || '',
       fileNames:   page.fileNames   || '',
+      surveyDate:  page.surveyDate  || '',
     });
     const [dirty, setDirty] = useState(false);
     const timerRef = useRef(null);
@@ -7574,6 +7648,7 @@
         summary:     page.summary     || '',
         codeList:    page.codeList    || '',
         fileNames:   page.fileNames   || '',
+        surveyDate:  page.surveyDate  || '',
       });
     }, [page.id]);
 
@@ -7660,6 +7735,29 @@
               value={form.location} onChange={e => handleChange('location', e.target.value)}
               placeholder="Property address, legal description, project name..."
               className={taClass} rows={1} />
+          </div>
+          {/* Dates */}
+          <div className={secClass}>
+            <p className={lblClass}>Dates</p>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-0.5">
+              <div className="flex flex-col gap-0.5">
+                <span style={{ fontSize: 9, color: '#8B7355', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Created</span>
+                <span className="font-handwritten text-base text-fb-text" style={{ opacity: 0.7 }}>
+                  {fmtDateDMY((project && project.createdAt) || page.createdAt) || '—'}
+                </span>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <span style={{ fontSize: 9, color: '#8B7355', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Survey Date</span>
+                <input
+                  type="date"
+                  value={form.surveyDate}
+                  onChange={e => handleChange('surveyDate', e.target.value)}
+                  onFocus={focusScroll}
+                  className="font-handwritten text-base text-fb-text bg-transparent outline-none"
+                  style={{ border: 'none', borderBottom: '1px solid rgba(180,165,140,0.5)', padding: '1px 0' }}
+                />
+              </div>
+            </div>
           </div>
           {/* Crew */}
           <div className={secClass}>
