@@ -572,7 +572,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.137';
+  const APP_VERSION = '1.139';
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO STORAGE — IndexedDB
@@ -2612,15 +2612,15 @@
               symEl = `<circle cx="${cx}" cy="${cy}" r="${(r*0.35).toFixed(2)}" fill="${stroke}" stroke="none"/>`;
               break;
             case 'x': {
-              const d = (r * 0.7).toFixed(2);
-              symEl = `<line x1="${(cx-d)}" y1="${(cy-d)}" x2="${(cx+d)}" y2="${(cy+d)}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>` +
-                      `<line x1="${(cx+d)}" y1="${(cy-d)}" x2="${(cx-d)}" y2="${(cy+d)}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>`;
+              const d = r * 0.7;
+              symEl = `<line x1="${(cx-d).toFixed(2)}" y1="${(cy-d).toFixed(2)}" x2="${(cx+d).toFixed(2)}" y2="${(cy+d).toFixed(2)}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>` +
+                      `<line x1="${(cx+d).toFixed(2)}" y1="${(cy-d).toFixed(2)}" x2="${(cx-d).toFixed(2)}" y2="${(cy+d).toFixed(2)}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>`;
               break;
             }
             case 'cross': {
-              const d = (r * 0.7).toFixed(2);
-              symEl = `<line x1="${cx}" y1="${(cy-d)}" x2="${cx}" y2="${(cy+d)}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>` +
-                      `<line x1="${(cx-d)}" y1="${cy}" x2="${(cx+d)}" y2="${cy}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>`;
+              const d = r * 0.7;
+              symEl = `<line x1="${cx}" y1="${(cy-d).toFixed(2)}" x2="${cx}" y2="${(cy+d).toFixed(2)}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>` +
+                      `<line x1="${(cx-d).toFixed(2)}" y1="${cy}" x2="${(cx+d).toFixed(2)}" y2="${cy}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>`;
               break;
             }
             case 'square': {
@@ -3011,8 +3011,8 @@
             try {
               const canvas = await window.html2canvas(tmp, { scale: 1.2, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
               document.body.removeChild(tmp);
-              // Place image filling the entire content area
-              pdf.addImage(canvas.toDataURL('image/jpeg', 0.88), 'JPEG', margin, contentY, availW, drawH);
+              // Place image filling the entire content area — use PNG to keep transparency so the grid shows through
+              pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH);
               // North arrow and scale bar drawn directly in PDF (on top of sketch)
               if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
               if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin, page.viewBox?.w, availW);
@@ -3402,8 +3402,8 @@
           try {
             const canvas = await window.html2canvas(tmp, { scale: 1.2, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
             document.body.removeChild(tmp);
-            // Fill the entire content area
-            pdf.addImage(canvas.toDataURL('image/jpeg', 0.88), 'JPEG', margin, contentY, availW, drawH);
+            // Fill the entire content area — use PNG to keep transparency so the grid shows through
+            pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH);
             // North arrow and scale bar drawn directly in PDF (on top of sketch)
             if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
             if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin, page.viewBox?.w, availW);
