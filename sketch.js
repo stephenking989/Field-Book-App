@@ -1136,6 +1136,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         <input
           value={vals.len}
           onChange={e => setVals(v => ({ ...v, len: e.target.value }))}
+          onFocus={e => e.target.select()}
           onBlur={e  => tryCommit('len', e.target.value, parseFloat,
                          n => !isNaN(n) && n > 0,
                          (sh, n) => applyLineLength(sh, realToPx(n, scaleDenom, units)),
@@ -1150,6 +1151,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         <input
           value={vals.brg}
           onChange={e => setVals(v => ({ ...v, brg: e.target.value }))}
+          onFocus={e => e.target.select()}
           onBlur={e  => tryCommit('brg', e.target.value, parseQBearing,
                          n => !isNaN(n),
                          (sh, n) => applyLineBearing(sh, n),
@@ -1170,6 +1172,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         <input
           value={vals.r}
           onChange={e => setVals(v => ({ ...v, r: e.target.value }))}
+          onFocus={e => e.target.select()}
           onBlur={e  => tryCommit('r', e.target.value, parseFloat,
                          n => !isNaN(n) && n > 0,
                          (sh, n) => ({ ...sh, r: realToPx(n, scaleDenom, units) }),
@@ -1191,6 +1194,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         <input
           value={vals.w}
           onChange={e => setVals(v => ({ ...v, w: e.target.value }))}
+          onFocus={e => e.target.select()}
           onBlur={e  => tryCommit('w', e.target.value, parseFloat,
                          n => !isNaN(n) && n > 0,
                          (sh, n) => ({ ...sh, w: realToPx(n, scaleDenom, units) }),
@@ -1205,6 +1209,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         <input
           value={vals.h}
           onChange={e => setVals(v => ({ ...v, h: e.target.value }))}
+          onFocus={e => e.target.select()}
           onBlur={e  => tryCommit('h', e.target.value, parseFloat,
                          n => !isNaN(n) && n > 0,
                          (sh, n) => ({ ...sh, h: realToPx(n, scaleDenom, units) }),
@@ -1229,6 +1234,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         <input
           value={vals.crvR}
           onChange={e => setVals(v => ({ ...v, crvR: e.target.value }))}
+          onFocus={e => e.target.select()}
           onBlur={e  => tryCommit('crvR', e.target.value, parseFloat,
                          n => !isNaN(n) && n > 0,
                          (sh, n) => applyArcRadius(sh, realToPx(n, scaleDenom, units)),
@@ -1262,6 +1268,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         <span style={lStyle}>Bearing</span>
         <input value={vals.dimBrg}
           onChange={e => setVals(v=>({...v,dimBrg:e.target.value}))}
+          onFocus={e => e.target.select()}
           onBlur={e => {
             const p = parseQBearing(e.target.value);
             if (!isNaN(p)) {
@@ -1280,6 +1287,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         <span style={lStyle}>Length</span>
         <input value={vals.dimLen}
           onChange={e=>setVals(v=>({...v,dimLen:e.target.value}))}
+          onFocus={e => e.target.select()}
           onBlur={e=>{
             const n=parseFloat(e.target.value);
             if(!isNaN(n)&&n>0){
@@ -1317,6 +1325,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         value={vals.name}
         placeholder="Custom name…"
         onChange={e => setVals(v => ({ ...v, name: e.target.value }))}
+        onFocus={e => e.target.select()}
         onBlur={e => { const v = e.target.value.trim(); onUpdate(sh => ({ ...sh, customName: (v && v !== defaultName) ? v : undefined })); }}
         onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
         style={{ ...iStyle, width: 90 }}
@@ -1348,6 +1357,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         value={vals.nts}
         placeholder="NTS override…"
         onChange={e => setVals(v => ({ ...v, nts: e.target.value }))}
+        onFocus={e => e.target.select()}
         onBlur={e  => { const v = e.target.value.trim();
                         onUpdate(sh => ({ ...sh, ntsLabel: v || undefined })); }}
         onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
@@ -3479,6 +3489,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           const shape = {
             id: newId(), type: 'image', dataUrl,
             x, y, w, h,
+            _origAspect: img.naturalWidth / img.naturalHeight,
             layerId: layers[0]?.id,
             stroke: 'none', strokeWidth: 0,
           };
@@ -3786,13 +3797,36 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         break;
       }
       case 'image': {
-        // Image shares the same x,y,w,h geometry as rect — reuse identical corner logic.
+        // Images resize with locked aspect ratio to prevent photo distortion.
         const rot = shape._rot || 0;
+        const aspect = shape._origAspect || (shape.w / shape.h) || 1;
         if (!rot) {
-          if (nodeKey === 'tl') return { ...shape, x: shape.x+dx, y: shape.y+dy, w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h-dy) };
-          if (nodeKey === 'tr') return { ...shape,                y: shape.y+dy, w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h-dy) };
-          if (nodeKey === 'bl') return { ...shape, x: shape.x+dx,                w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h+dy) };
-          if (nodeKey === 'br') return { ...shape,                                w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h+dy) };
+          // For each corner, pick the dominant drag axis (larger |d|) and derive
+          // the other dimension from the original aspect ratio.
+          if (nodeKey === 'tl') {
+            const dw = Math.abs(dx) >= Math.abs(dy) ? dx : dy * aspect;
+            const nw = Math.max(10, shape.w - dw);
+            const nh = nw / aspect;
+            return { ...shape, x: shape.x + shape.w - nw, y: shape.y + shape.h - nh, w: nw, h: nh };
+          }
+          if (nodeKey === 'tr') {
+            const dw = Math.abs(dx) >= Math.abs(dy) ? dx : -dy * aspect;
+            const nw = Math.max(10, shape.w + dw);
+            const nh = nw / aspect;
+            return { ...shape, y: shape.y + shape.h - nh, w: nw, h: nh };
+          }
+          if (nodeKey === 'bl') {
+            const dw = Math.abs(dx) >= Math.abs(dy) ? -dx : dy * aspect;
+            const nw = Math.max(10, shape.w - dw);
+            const nh = nw / aspect;
+            return { ...shape, x: shape.x + shape.w - nw, w: nw, h: nh };
+          }
+          if (nodeKey === 'br') {
+            const dw = Math.abs(dx) >= Math.abs(dy) ? dx : dy * aspect;
+            const nw = Math.max(10, shape.w + dw);
+            const nh = nw / aspect;
+            return { ...shape, w: nw, h: nh };
+          }
         } else {
           const rad = rot * Math.PI / 180;
           const cos = Math.cos(rad), sin = Math.sin(rad);
@@ -6720,25 +6754,26 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const ah = 8 * ps, as = 3 * ps;
         const mkArrow = (ax, ay, dx, dy) =>
           `M ${ax-dx*ah*0.5+dy*as} ${ay-dy*ah*0.5-dx*as} L ${ax} ${ay} L ${ax-dx*ah*0.5-dy*as} ${ay-dy*ah*0.5+dx*as}`;
+        const dimClr = s.stroke || STROKE;
         inner = (
           <g style={sel}>
             {/* Extension line P1 side */}
             <line x1={p1.x+perpX*gap} y1={p1.y+perpY*gap}
                   x2={dp1x+perpX*ext} y2={dp1y+perpY*ext}
-                  stroke={STROKE} strokeWidth={sw*0.75} strokeLinecap="round" />
+                  stroke={dimClr} strokeWidth={sw*0.75} strokeLinecap="round" />
             {/* Extension line P2 side */}
             <line x1={p2.x+perpX*gap} y1={p2.y+perpY*gap}
                   x2={dp2x+perpX*ext} y2={dp2y+perpY*ext}
-                  stroke={STROKE} strokeWidth={sw*0.75} strokeLinecap="round" />
+                  stroke={dimClr} strokeWidth={sw*0.75} strokeLinecap="round" />
             {/* Dimension line */}
             <line x1={dp1x} y1={dp1y} x2={dp2x} y2={dp2y}
-                  stroke={STROKE} strokeWidth={sw} strokeLinecap="round" />
+                  stroke={dimClr} strokeWidth={sw} strokeLinecap="round" />
             {/* Arrowhead at P1 end (pointing outward, away from P2) */}
             <path d={mkArrow(dp1x, dp1y, -udx, -udy)}
-                  stroke={STROKE} strokeWidth={sw} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  stroke={dimClr} strokeWidth={sw} fill="none" strokeLinecap="round" strokeLinejoin="round" />
             {/* Arrowhead at P2 end (pointing outward, away from P1) */}
             <path d={mkArrow(dp2x, dp2y, udx, udy)}
-                  stroke={STROKE} strokeWidth={sw} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  stroke={dimClr} strokeWidth={sw} fill="none" strokeLinecap="round" strokeLinejoin="round" />
           </g>
         );
         break;
@@ -6770,7 +6805,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         inner = (
           <g style={sel}>
             <path d={`M ${ax1} ${ay1} A ${arcR} ${arcR} 0 ${largeArc} ${sweepF} ${ax2} ${ay2}`}
-                  stroke={STROKE} strokeWidth={sw2} fill="none" strokeLinecap="round" />
+                  stroke={s.stroke || STROKE} strokeWidth={sw2} fill="none" strokeLinecap="round" />
           </g>
         );
         break;
@@ -6787,12 +6822,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const ah = 8 * ps, as = 3 * ps;
         const mkArrow = (ax, ay, dx, dy) =>
           `M ${ax-dx*ah*0.5+dy*as} ${ay-dy*ah*0.5-dx*as} L ${ax} ${ay} L ${ax-dx*ah*0.5-dy*as} ${ay-dy*ah*0.5+dx*as}`;
+        const dimClr3 = s.stroke || STROKE;
         inner = (
           <g style={sel}>
             <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}
-                  stroke={STROKE} strokeWidth={sw3} strokeLinecap="round" />
+                  stroke={dimClr3} strokeWidth={sw3} strokeLinecap="round" />
             <path d={mkArrow(p2.x, p2.y, udx, udy)}
-                  stroke={STROKE} strokeWidth={sw3} fill="none"
+                  stroke={dimClr3} strokeWidth={sw3} fill="none"
                   strokeLinecap="round" strokeLinejoin="round" />
           </g>
         );
@@ -6820,13 +6856,14 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         // Leader starts at the shape surface (radius from centre in the leader direction)
         const surfX = rcx + ux * rr, surfY = rcy + uy * rr;
         const sw4 = 1.2 * ps;
+        const dimClr4 = s.stroke || STROKE;
         inner = (
           <g style={sel}>
             <line x1={surfX} y1={surfY} x2={ex} y2={ey}
-                  stroke={STROKE} strokeWidth={sw4} strokeLinecap="round" />
+                  stroke={dimClr4} strokeWidth={sw4} strokeLinecap="round" />
             {/* Short tick at label end */}
             <line x1={ex} y1={ey} x2={ex + 12*ps} y2={ey}
-                  stroke={STROKE} strokeWidth={sw4} strokeLinecap="round" />
+                  stroke={dimClr4} strokeWidth={sw4} strokeLinecap="round" />
           </g>
         );
         break;
@@ -6914,8 +6951,10 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     const ps  = viewBox.w / (svgSizeRef.current.w || viewBox.w);
     const OFF = 13 * ps;   // offset from shape edge → constant screen px at any zoom
 
-    // NTS override — show custom label at shape centre instead of computed dims
-    if (s.ntsLabel) {
+    // NTS override — show custom label at shape centre instead of computed dims.
+    // Dim shapes are excluded here because their own case handlers already
+    // incorporate ntsLabel into the text they render (see dim-linear etc. below).
+    if (s.ntsLabel && !s.type.startsWith('dim-')) {
       let nx = 0, ny = 0;
       switch (s.type) {
         case 'line':   nx = (s.x1+s.x2)/2; ny = (s.y1+s.y2)/2; break;
@@ -7610,6 +7649,26 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 </svg>
               </span>
               <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>Image…</span>
+            </button>
+            {/* Camera — same file picker as Image but labelled to prompt users to use camera on mobile */}
+            <button
+              onClick={() => { handleImageImport(); setOpenMenu(null); }}
+              style={{
+                width: '100%', height: 38, display: 'flex', alignItems: 'center',
+                gap: 10, padding: '0 14px',
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: PT.muted, fontSize: 11,
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = PT.bgHov; e.currentTarget.style.color = PT.text; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = PT.muted; }}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, flexShrink: 0 }}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1 4.5 Q1 3 2.5 3 L4 3 L5 1.5 L9 1.5 L10 3 L11.5 3 Q13 3 13 4.5 L13 10.5 Q13 12 11.5 12 L2.5 12 Q1 12 1 10.5 Z"/>
+                  <circle cx="7" cy="7.5" r="2.2"/>
+                </svg>
+              </span>
+              <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>Camera…</span>
             </button>
           </div>
         )}
