@@ -9,7 +9,7 @@
 // =============================================================================
 
 const { useState, useEffect, useRef } = React;
-const { DB, PageHeaderStrip } = window._fb;
+const { DB, PageHeaderStrip, photoDB } = window._fb;
 
 
 
@@ -2729,6 +2729,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   const [selectedIds,   setSelectedIds]   = useState([]);          // multi-select
   const [shapesHistory, setShapesHistory] = useState({ past: [], future: [] }); // undo/redo
   const [marquee,       setMarquee]       = useState(null);        // lasso { ox,oy,x,y,w,h }
+  const [imageCache,    setImageCache]    = useState({});           // { [imageId]: dataUrl } — sketch images from IDB
+  const imageCacheRef = useRef({});
   const shapeClipRef = useRef(null);                               // shape clipboard
   // Refs that always hold the latest committed shapes/history — used in the
   // keydown listener so undo/redo work even before the useEffect re-registers.
@@ -3139,9 +3141,76 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     setPencilPreview(null);
   }, [page.id]);
 
+  // Migrate old-format image shapes (inline dataUrl in localStorage) to IndexedDB on first open.
+  // Runs once per page.id. Reads page.shapes directly so it isn't affected by the async timing
+  // of the state update above. Idempotent: only touches shapes with dataUrl && !imageId.
+  useEffect(() => {
+    if (!photoDB) return;
+    const toMigrate = (page.shapes || []).filter(s => s.type === 'image' && s.dataUrl && !s.imageId);
+    if (toMigrate.length === 0) return;
+    (async () => {
+      const idMap = {};          // { shapeId: newImageId }
+      const cacheAdditions = {};
+      for (const s of toMigrate) {
+        const imageId = 'sk_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+        try {
+          await photoDB.put(imageId, s.dataUrl);
+          idMap[s.id] = imageId;
+          cacheAdditions[imageId] = s.dataUrl;
+        } catch (err) {
+          console.error('FieldBook: sketch image migration failed for shape', s.id, err);
+          // Leave this shape with inline dataUrl — still renders, just stays in localStorage
+        }
+      }
+      if (Object.keys(idMap).length === 0) return;
+      const migrated = sanitizeShapes((page.shapes || []).map(s => {
+        if (!idMap[s.id]) return s;
+        const { dataUrl, ...rest } = s;
+        return { ...rest, imageId: idMap[s.id] };
+      }));
+      setImageCache(prev => ({ ...prev, ...cacheAdditions }));
+      commitShapes(migrated);
+    })();
+  }, [page.id]);
+
   // Keep shapesRef current for any setShapes calls that bypass commitShapes (drag live-update,
   // page reload, etc.) so the undo/redo keyboard handler is never stale.
   useEffect(() => { shapesRef.current = shapes; }, [shapes]);
+
+  // Keep imageCacheRef in sync with imageCache state for stable access in async callbacks.
+  useEffect(() => { imageCacheRef.current = imageCache; }, [imageCache]);
+
+  // Flush the debounced save immediately when the app goes to the background (home button,
+  // app switch, tab hide). Prevents data loss on mobile where the OS may kill the page
+  // before the 600 ms debounce timer fires.
+  useEffect(() => {
+    function flushSave() {
+      clearTimeout(saveTimer.current);
+      DB.updatePage(projectId, page.id, {
+        shapes: shapesRef.current, notes, layers, scaleDenom, units, northAzimuth, bgColor,
+      });
+    }
+    function handleVis() { if (document.visibilityState === 'hidden') flushSave(); }
+    document.addEventListener('visibilitychange', handleVis);
+    window.addEventListener('pagehide', flushSave);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVis);
+      window.removeEventListener('pagehide', flushSave);
+    };
+  }, [page.id, notes, layers, scaleDenom, units, northAzimuth, bgColor]);
+
+  // Fetch any sketch images from IndexedDB that are not yet in the in-memory cache.
+  // Runs when shapes change (new image added) or when navigating to a different page.
+  useEffect(() => {
+    if (!photoDB) return;
+    const missing = shapes
+      .filter(s => s.type === 'image' && s.imageId && !imageCacheRef.current[s.imageId])
+      .map(s => s.imageId);
+    if (missing.length === 0) return;
+    photoDB.getMany(missing).then(result => {
+      setImageCache(prev => ({ ...prev, ...result }));
+    }).catch(err => console.error('FieldBook: failed to load sketch images from IDB', err));
+  }, [shapes, page.id]);
 
   // Keyboard shortcuts — undo/redo, delete, escape, clipboard, pen/pencil/node tools
   useEffect(() => {
@@ -3479,6 +3548,30 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       if (!file) return;
       try {
         const dataUrl = await compress(file);
+
+        // Generate a unique key for IndexedDB. The 'sk_' prefix distinguishes
+        // sketch images from DataPage photo refs ('p_') in the shared photoDB store.
+        const imageId = 'sk_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+
+        // Write blob to IDB so it survives localStorage quota limits on mobile.
+        // On failure, fall back to inline dataUrl (old behaviour) so the image
+        // is never silently lost — just less persistent.
+        let useInline = false;
+        if (photoDB) {
+          try {
+            await photoDB.put(imageId, dataUrl);
+            // Optimistically seed the cache so the image appears instantly without
+            // waiting for the IDB round-trip in the load effect.
+            setImageCache(prev => ({ ...prev, [imageId]: dataUrl }));
+          } catch (idbErr) {
+            console.error('FieldBook: IDB write failed, falling back to inline image', idbErr);
+            useInline = true;
+            if (window._fbShowStorageError) window._fbShowStorageError();
+          }
+        } else {
+          useInline = true;
+        }
+
         const img = new Image();
         img.onload = () => {
           const aspect = (img.naturalWidth || 4) / (img.naturalHeight || 3);
@@ -3487,13 +3580,14 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           const x = viewBox.x + viewBox.w / 2 - w / 2;
           const y = viewBox.y + viewBox.h / 2 - h / 2;
           const shape = {
-            id: newId(), type: 'image', dataUrl,
+            id: newId(), type: 'image',
+            ...(useInline ? { dataUrl } : { imageId }),
             x, y, w, h,
             _origAspect: img.naturalWidth / img.naturalHeight,
             layerId: layers[0]?.id,
             stroke: 'none', strokeWidth: 0,
           };
-          commitShapes([...shapes, shape]);
+          commitShapes([...shapesRef.current, shape]);
           setSelectedIds([shape.id]);
           setTool('select');
           setPrevTool(null);
@@ -6625,11 +6719,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           strokeDasharray={s.strokeDash ? s.strokeDash.replace(/[\d.]+/g, n => (parseFloat(n)*ps).toFixed(1)) : undefined}
           style={sel} />;
         break;
-      case 'image':
-        if (!s.dataUrl) return null;
-        inner = <image href={s.dataUrl} x={s.x} y={s.y} width={s.w} height={s.h}
+      case 'image': {
+        const imgUrl = s.dataUrl || imageCache[s.imageId];
+        if (!imgUrl) return null;
+        inner = <image href={imgUrl} x={s.x} y={s.y} width={s.w} height={s.h}
           preserveAspectRatio="none" opacity={s.strokeOpacity ?? s.fillOpacity ?? 1} style={sel} />;
         break;
+      }
       case 'text': {
         // Text is rendered as counter-scaled SVG text elements so it stays the
         // same visual size on screen regardless of zoom — identical to dim labels.

@@ -706,8 +706,13 @@
       const live = new Set();
       (allProjects || []).forEach(proj => {
         (proj.pages || []).forEach(pg => {
+          // DataPage photo refs
           (pg.photos || []).forEach(ph => {
             if (ph && ph.photoRef) live.add(ph.photoRef);
+          });
+          // Sketch page image refs (sk_ prefix)
+          (pg.shapes || []).forEach(s => {
+            if (s && s.imageId) live.add(s.imageId);
           });
         });
       });
@@ -743,7 +748,14 @@
   }
   function _saveIndex(arr) {
     _indexCache = arr;
-    localStorage.setItem('fb_project_index', JSON.stringify(arr));
+    try {
+      localStorage.setItem('fb_project_index', JSON.stringify(arr));
+    } catch(e) {
+      if (e.name === 'QuotaExceededError' || e.code === 22) {
+        if (window._fbShowStorageError) window._fbShowStorageError();
+        else console.error('FieldBook: localStorage quota exceeded saving project index');
+      }
+    }
   }
   function _getProjectRaw(id) {
     if (_projectCache[id] !== undefined) return _projectCache[id];
@@ -753,7 +765,14 @@
   }
   function _saveProjectRaw(proj) {
     _projectCache[proj.id] = proj;
-    localStorage.setItem('fb_project_' + proj.id, JSON.stringify(proj));
+    try {
+      localStorage.setItem('fb_project_' + proj.id, JSON.stringify(proj));
+    } catch(e) {
+      if (e.name === 'QuotaExceededError' || e.code === 22) {
+        if (window._fbShowStorageError) window._fbShowStorageError();
+        else console.error('FieldBook: localStorage quota exceeded saving project', proj.id);
+      }
+    }
     const idx = _getIndex();
     const i = idx.findIndex(e => e.id === proj.id);
     const entry = { id: proj.id, name: proj.name || '', createdAt: proj.createdAt };
@@ -1455,21 +1474,37 @@
   async function inlinePhotosForExport(projOrPage) {
     const clone = JSON.parse(JSON.stringify(projOrPage));
     const pages = clone.pages ? clone.pages : [clone];
+
+    // Collect all IDB keys: DataPage photoRefs + sketch imageIds
     const allRefs = [];
-    pages.forEach(pg => (pg.photos || []).forEach(ph => {
-      if (ph && ph.photoRef) allRefs.push(ph.photoRef);
-    }));
+    pages.forEach(pg => {
+      (pg.photos || []).forEach(ph => { if (ph && ph.photoRef) allRefs.push(ph.photoRef); });
+      (pg.shapes || []).forEach(s  => { if (s  && s.imageId)   allRefs.push(s.imageId);   });
+    });
     if (allRefs.length === 0) return clone;
     const map = await photoDB.getMany(allRefs);
+
     pages.forEach(pg => {
-      if (!Array.isArray(pg.photos)) return;
-      pg.photos = pg.photos.map(ph => {
-        if (ph && ph.photoRef && map[ph.photoRef]) {
-          const { photoRef, ...rest } = ph;
-          return { ...rest, dataUrl: map[photoRef] };
-        }
-        return ph;
-      });
+      // Inline DataPage photos
+      if (Array.isArray(pg.photos)) {
+        pg.photos = pg.photos.map(ph => {
+          if (ph && ph.photoRef && map[ph.photoRef]) {
+            const { photoRef, ...rest } = ph;
+            return { ...rest, dataUrl: map[photoRef] };
+          }
+          return ph;
+        });
+      }
+      // Inline sketch images — export as old-format dataUrl so the file is self-contained
+      if (Array.isArray(pg.shapes)) {
+        pg.shapes = pg.shapes.map(s => {
+          if (s && s.imageId && map[s.imageId]) {
+            const { imageId, ...rest } = s;
+            return { ...rest, dataUrl: map[imageId] };
+          }
+          return s;
+        });
+      }
     });
     return clone;
   }
@@ -1480,24 +1515,46 @@
   async function extractPhotosFromImport(projOrPage) {
     const pages = projOrPage.pages ? projOrPage.pages : [projOrPage];
     for (const pg of pages) {
-      if (!Array.isArray(pg.photos)) continue;
-      const next = [];
-      for (const ph of pg.photos) {
-        if (ph && ph.dataUrl && !ph.photoRef) {
-          try {
-            const ref = photoDB.newRef();
-            await photoDB.put(ref, ph.dataUrl);
-            const { dataUrl, ...rest } = ph;
-            next.push({ ...rest, photoRef: ref });
-          } catch (err) {
-            console.error('Photo extract-on-import failed:', err);
-            next.push(ph); // fall back to keeping inline
+      // Extract DataPage photos
+      if (Array.isArray(pg.photos)) {
+        const next = [];
+        for (const ph of pg.photos) {
+          if (ph && ph.dataUrl && !ph.photoRef) {
+            try {
+              const ref = photoDB.newRef();
+              await photoDB.put(ref, ph.dataUrl);
+              const { dataUrl, ...rest } = ph;
+              next.push({ ...rest, photoRef: ref });
+            } catch (err) {
+              console.error('Photo extract-on-import failed:', err);
+              next.push(ph);
+            }
+          } else {
+            next.push(ph);
           }
-        } else {
-          next.push(ph);
         }
+        pg.photos = next;
       }
-      pg.photos = next;
+      // Extract sketch images — shapes with inline dataUrl become IDB-backed imageId refs
+      if (Array.isArray(pg.shapes)) {
+        const next = [];
+        for (const s of pg.shapes) {
+          if (s && s.type === 'image' && s.dataUrl && !s.imageId) {
+            try {
+              const imageId = 'sk_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+              await photoDB.put(imageId, s.dataUrl);
+              const { dataUrl, ...rest } = s;
+              next.push({ ...rest, imageId });
+            } catch (err) {
+              console.error('Sketch image extract-on-import failed:', err);
+              next.push(s); // fall back to keeping inline dataUrl
+            }
+          } else {
+            next.push(s);
+          }
+        }
+        pg.shapes = next;
+      }
     }
     return projOrPage;
   }
@@ -2241,7 +2298,7 @@
   // Build an SVG string from stored sketch page data.
   // Uses window._fbSketchUtils (exposed by sketch.js) for arc/path geometry,
   // dimension formatting, scale bar, and north arrow.
-  function buildSketchSVG(shapes, layers, viewBox, scaleDenom, units, showDims = true, transparent = false) {
+  function buildSketchSVG(shapes, layers, viewBox, scaleDenom, units, showDims = true, transparent = false, imageMap = {}) {
     const utils = window._fbSketchUtils;
     if (!utils) return null;
     const { arcPath: _arc, pathToSVGD: _pathD, computeArcFromPI: _cArc,
@@ -2508,12 +2565,14 @@
           if (d) el = `<path d="${d}" ${base}/>`;
           break;
         }
-        case 'image':
-          if (s.dataUrl) {
+        case 'image': {
+          const imgUrl = s.dataUrl || imageMap[s.imageId];
+          if (imgUrl) {
             const imgOp = s.strokeOpacity ?? s.fillOpacity ?? 1;
-            el = `<image href="${s.dataUrl}" x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" preserveAspectRatio="none" opacity="${imgOp}"/>`;
+            el = `<image href="${imgUrl}" x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" preserveAspectRatio="none" opacity="${imgOp}"/>`;
           }
           break;
+        }
         case 'text': {
           const sw = s.w || 180;
           const sh = s.h || 80;
@@ -3032,8 +3091,10 @@
           if (page.showGrid !== false) _drawPdfGrid(pdf, W, H, margin, contentY);
           const drawH = (H - margin - 14) - contentY;
 
-          // Generate SVG and render via html2canvas
-          const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units, page.showDims !== false, true);
+          // Generate SVG and render via html2canvas. Pre-resolve any IDB image refs.
+          const _skImgIds = (page.shapes || []).filter(s => s.type === 'image' && s.imageId).map(s => s.imageId);
+          const _skImgMap = _skImgIds.length > 0 ? await photoDB.getMany(_skImgIds) : {};
+          const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units, page.showDims !== false, true, _skImgMap);
           if (svgStr && window.html2canvas) {
             const availW = W - margin*2;
             // Render at portrait proportions matching the PDF content area so the
@@ -3427,7 +3488,9 @@
         // Grid covers full content area
         if (page.showGrid !== false) _drawPdfGrid(pdf, W, H, margin, contentY);
         const drawH = (H - margin - 14) - contentY;
-        const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units, page.showDims !== false, true);
+        const _skImgIds2 = (page.shapes || []).filter(s => s.type === 'image' && s.imageId).map(s => s.imageId);
+        const _skImgMap2 = _skImgIds2.length > 0 ? await photoDB.getMany(_skImgIds2) : {};
+        const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units, page.showDims !== false, true, _skImgMap2);
         if (svgStr && window.html2canvas) {
           const availW = W - margin*2;
           // Render at portrait proportions matching the PDF content area
@@ -7976,9 +8039,19 @@
     );
   }
 
+  function _StorageErrorBridge() {
+    const toast = useToast();
+    useEffect(() => {
+      window._fbShowStorageError = () => toast.error('Storage full — sketch could not be saved. Delete unused projects to free space.');
+      return () => { window._fbShowStorageError = null; };
+    }, []);
+    return null;
+  }
+
   function AppWithProviders() {
     return (
       <ToastProvider>
+        <_StorageErrorBridge />
         <App />
       </ToastProvider>
     );
@@ -8087,7 +8160,8 @@
 
   // Expose shared globals for sketch.js to consume via window._fb
   window._fb = { DB, PageHeaderStrip, HCell, compressImage, PNEZD_COLS,
-                 deletePointPermanently, getNextManualPtNum, addPointRow, updatePointRow, isPtNumTaken };
+                 deletePointPermanently, getNextManualPtNum, addPointRow, updatePointRow, isPtNumTaken,
+                 photoDB };
 
   // Mount the app only after sketch.js has loaded and resolved _sketchPromise
   _sketchPromise.then(() => {
