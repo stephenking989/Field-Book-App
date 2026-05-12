@@ -6964,7 +6964,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         case 'path':   { const _piv = getShapePivot(s); nx = _piv.x; ny = _piv.y; break; }
         default: return null;
       }
-      return dimTextEl(nx, ny, 0, s.ntsLabel + ' *', ps);
+      return dimTextEl(nx, ny, 0, s.ntsLabel, ps);
     }
 
     const rot = s._rot || 0;
@@ -7042,7 +7042,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const mx = (p1.x+p2.x)/2 + perpX*off;
         const my = (p1.y+p2.y)/2 + perpY*off;
         const ang = Math.atan2(p2.y-p1.y, p2.x-p1.x) * 180/Math.PI;
-        const txt = s.ntsLabel ? s.ntsLabel + ' *' : fmtPxAsReal(len, scaleDenom, units);
+        const txt = s.ntsLabel ? s.ntsLabel : fmtPxAsReal(len, scaleDenom, units);
         return dimTextEl(mx, my, normAng(ang), txt, ps);
       }
       case 'dim-angle': {
@@ -7062,7 +7062,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const arcRA = (s.scale || 1.0) * 40 * ps;
         const lx = aInter.x + Math.cos(midAng) * (arcRA + 30*ps);
         const ly = aInter.y + Math.sin(midAng) * (arcRA + 30*ps);
-        const atxt = s.ntsLabel ? s.ntsLabel + ' *' : toDMS(angleDeg);
+        const atxt = s.ntsLabel ? s.ntsLabel : toDMS(angleDeg);
         const labelRotDeg = normAng(midAng * 180 / Math.PI);
         return dimTextEl(lx, ly, labelRotDeg, atxt, ps);
       }
@@ -7076,7 +7076,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const rawAz = ((Math.atan2(bp2.x-bp1.x, -(bp2.y-bp1.y)) * 180/Math.PI) + 360) % 360;
         const adjustedAz = (rawAz - northAzimuth + 360) % 360;
         const lineAngDeg = Math.atan2(bp2.y-bp1.y, bp2.x-bp1.x) * 180/Math.PI;
-        const btxt = s.ntsLabel ? s.ntsLabel + ' *' : toDMS(adjustedAz);
+        const btxt = s.ntsLabel ? s.ntsLabel : toDMS(adjustedAz);
         return dimTextEl(bmx, bmy, normAng(lineAngDeg), btxt, ps);
       }
       case 'dim-radius': {
@@ -7095,7 +7095,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         }
         const rroff = s.offset || { x: 50*ps, y: -50*ps };
         const rrex = rrcx + rroff.x + 14*ps, rrey = rrcy + rroff.y;
-        const rrtxt = s.ntsLabel ? s.ntsLabel + ' *' : `R ${fmtPxAsReal(rrR, scaleDenom, units)}`;
+        const rrtxt = s.ntsLabel ? s.ntsLabel : `R ${fmtPxAsReal(rrR, scaleDenom, units)}`;
         return dimTextEl(rrex, rrey, 0, rrtxt, ps);
       }
       default: return null;
@@ -9691,6 +9691,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                         <input
                           defaultValue={_layer.name}
                           key={_layer.id}
+                          onFocus={e => e.target.select()}
                           onBlur={e => {
                             const v = e.target.value.trim();
                             if (v && v !== _layer.name) {
@@ -9713,6 +9714,26 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                             outline: 'none', marginBottom: 5,
                           }}
                         />
+                        <div style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
+                          textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, marginTop: 6 }}>Color</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+                          <input
+                            type="color"
+                            value={_layer.color || STROKE}
+                            onChange={e => {
+                              const newColor = e.target.value;
+                              const nextLayers = layers.map(l => l.id === _layer.id ? { ...l, color: newColor } : l);
+                              setLayers(nextLayers);
+                              persist(undefined, undefined, nextLayers);
+                              commitShapes(shapes.map(s => (s.layerId || layers[0]?.id) === _layer.id ? { ...s, stroke: newColor } : s));
+                            }}
+                            style={{ width: 28, height: 22, padding: 0, border: `1px solid ${PT.border}`,
+                              borderRadius: 3, cursor: 'pointer', background: 'none' }}
+                          />
+                          <span style={{ color: PT.muted, fontFamily: 'Courier New, monospace', fontSize: 10 }}>
+                            {_layer.color || STROKE}
+                          </span>
+                        </div>
                         <div style={{ color: PT.muted }}>{_shapeCount} shape{_shapeCount !== 1 ? 's' : ''}</div>
                       </div>
                     );

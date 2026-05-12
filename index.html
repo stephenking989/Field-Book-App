@@ -2273,7 +2273,7 @@
           case 'rect':   nx=s.x+s.w/2;     ny=s.y+s.h/2;     break;
           default:       return '';
         }
-        return _dimSVG(nx, ny, 0, s.ntsLabel + ' *');
+        return _dimSVG(nx, ny, 0, s.ntsLabel);
       }
 
       switch (s.type) {
@@ -2318,7 +2318,7 @@
           const dlpX=-(s.p2.y-s.p1.y)/dlLen, dlpY=(s.p2.x-s.p1.x)/dlLen;
           const mx=(s.p1.x+s.p2.x)/2+dlpX*dlOff, my=(s.p1.y+s.p2.y)/2+dlpY*dlOff;
           const ang=Math.atan2(s.p2.y-s.p1.y,s.p2.x-s.p1.x)*180/Math.PI;
-          return _dimSVG(mx,my,_norm(ang),s.ntsLabel?s.ntsLabel+' *':_fmt(dlLen,sd,un));
+          return _dimSVG(mx,my,_norm(ang),s.ntsLabel?s.ntsLabel:_fmt(dlLen,sd,un));
         }
         case 'dim-angle': {
           if (!s.line1Id||!s.line2Id) return '';
@@ -2336,7 +2336,7 @@
           const arcRA=(s.scale||1.0)*40*ps;
           const lx=daInt.x+Math.cos(midAng)*(arcRA+30*ps);
           const ly=daInt.y+Math.sin(midAng)*(arcRA+30*ps);
-          return _dimSVG(lx,ly,_norm(midAng*180/Math.PI),s.ntsLabel?s.ntsLabel+' *':_toDMS(angleDeg));
+          return _dimSVG(lx,ly,_norm(midAng*180/Math.PI),s.ntsLabel?s.ntsLabel:_toDMS(angleDeg));
         }
         case 'dim-bearing': {
           if (!s.p1||!s.p2||s.arrowOnly) return '';
@@ -2345,7 +2345,7 @@
           const bmx=(s.p1.x+s.p2.x)/2, bmy=(s.p1.y+s.p2.y)/2;
           const rawAz=((Math.atan2(s.p2.x-s.p1.x,-(s.p2.y-s.p1.y))*180/Math.PI)+360)%360;
           const lineAng=Math.atan2(s.p2.y-s.p1.y,s.p2.x-s.p1.x)*180/Math.PI;
-          return _dimSVG(bmx,bmy,_norm(lineAng),s.ntsLabel?s.ntsLabel+' *':_toDMS(rawAz));
+          return _dimSVG(bmx,bmy,_norm(lineAng),s.ntsLabel?s.ntsLabel:_toDMS(rawAz));
         }
         case 'dim-radius': {
           const rrRef=(shapes||[]).find(sh=>sh.id===s.shapeId);
@@ -2361,7 +2361,7 @@
           } else return '';
           const rrOff=s.offset||{x:50*ps,y:-50*ps};
           const rrEx=rrcx+rrOff.x+14*ps, rrEy=rrcy+rrOff.y;
-          return _dimSVG(rrEx,rrEy,0,s.ntsLabel?s.ntsLabel+' *':`R ${_fmt(rrR,sd,un)}`);
+          return _dimSVG(rrEx,rrEy,0,s.ntsLabel?s.ntsLabel:`R ${_fmt(rrR,sd,un)}`);
         }
 
         default:
