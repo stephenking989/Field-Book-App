@@ -572,7 +572,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.140';
+  const APP_VERSION = '1.141';
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO STORAGE — IndexedDB
@@ -728,12 +728,19 @@
   // DATA LAYER
   // ─────────────────────────────────────────────────────────────────────────────
 
+  // In-memory cache for the fb_projects JSON. Eliminates redundant JSON.parse
+  // calls — all reads share one parsed result per session; writes update it.
+  let _projectsCache = null;
+
   const DB = {
     getProjects() {
-      try { return JSON.parse(localStorage.getItem('fb_projects') || '[]'); }
-      catch { return []; }
+      if (_projectsCache) return _projectsCache;
+      try { _projectsCache = JSON.parse(localStorage.getItem('fb_projects') || '[]'); }
+      catch { _projectsCache = []; }
+      return _projectsCache;
     },
     saveProjects(p) {
+      _projectsCache = p;                                       // keep cache in sync
       localStorage.setItem('fb_projects', JSON.stringify(p));
     },
     createProject(data) {
@@ -7874,6 +7881,12 @@
       const handler = e => { e.preventDefault(); setInstallPrompt(e); };
       window.addEventListener('beforeinstallprompt', handler);
 
+      // Route persistence: save current route on every navigation so a fresh
+      // PWA launch can restore exactly where the user was.
+      const saveRoute = () => localStorage.setItem('fb_lastRoute', window.location.hash || '#/');
+      window.addEventListener('hashchange', saveRoute);
+      saveRoute(); // capture current route immediately
+
       // PWA File Handling API — handles .fieldbook files opened from the OS
       if ('launchQueue' in window) {
         window.launchQueue.setConsumer(async (launchParams) => {
@@ -7894,7 +7907,10 @@
         });
       }
 
-      return () => window.removeEventListener('beforeinstallprompt', handler);
+      return () => {
+        window.removeEventListener('beforeinstallprompt', handler);
+        window.removeEventListener('hashchange', saveRoute);
+      };
     }, []);
 
     function handleFileImported(newProject) {
@@ -8043,6 +8059,23 @@
 
   // Mount the app only after sketch.js has loaded and resolved _sketchPromise
   _sketchPromise.then(() => {
+    // Route persistence: restore last route on fresh PWA launch so the user
+    // lands back on their project/page instead of the home screen.
+    // Also primes the DB cache so React's first getProjects() call is free.
+    (function restoreLastRoute() {
+      const saved = localStorage.getItem('fb_lastRoute');
+      if (!saved || saved === '#/' || saved === '#' || window.location.hash === saved) return;
+      const m = saved.match(/^#\/project\/([^/]+)/);
+      if (m) {
+        // Validate the project still exists before restoring
+        const exists = DB.getProjects().some(p => String(p.id) === m[1]);
+        if (exists) { window.location.hash = saved; }
+        else { localStorage.removeItem('fb_lastRoute'); }
+      } else {
+        window.location.hash = saved;
+      }
+    })();
+
     ReactDOM.createRoot(document.getElementById('root')).render(<AppWithProviders />);
   });
 </script>
