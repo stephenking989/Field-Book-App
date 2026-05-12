@@ -728,23 +728,66 @@
   // DATA LAYER
   // ─────────────────────────────────────────────────────────────────────────────
 
-  // In-memory cache for the fb_projects JSON. Eliminates redundant JSON.parse
-  // calls — all reads share one parsed result per session; writes update it.
-  let _projectsCache = null;
+  // ── Per-project storage helpers ───────────────────────────────────────────
+  // Each project lives in its own localStorage key (fb_project_<id>).
+  // A lightweight index (fb_project_index) holds [{id,name,createdAt}] for
+  // listing without loading full project data.
+  let _indexCache   = null;  // [{id, name, createdAt}]
+  let _projectCache = {};    // full project objects keyed by id
+
+  function _getIndex() {
+    if (_indexCache) return _indexCache;
+    try { _indexCache = JSON.parse(localStorage.getItem('fb_project_index') || '[]'); }
+    catch { _indexCache = []; }
+    return _indexCache;
+  }
+  function _saveIndex(arr) {
+    _indexCache = arr;
+    localStorage.setItem('fb_project_index', JSON.stringify(arr));
+  }
+  function _getProjectRaw(id) {
+    if (_projectCache[id] !== undefined) return _projectCache[id];
+    try { _projectCache[id] = JSON.parse(localStorage.getItem('fb_project_' + id)); }
+    catch { _projectCache[id] = null; }
+    return _projectCache[id];
+  }
+  function _saveProjectRaw(proj) {
+    _projectCache[proj.id] = proj;
+    localStorage.setItem('fb_project_' + proj.id, JSON.stringify(proj));
+    const idx = _getIndex();
+    const i = idx.findIndex(e => e.id === proj.id);
+    const entry = { id: proj.id, name: proj.name || '', createdAt: proj.createdAt };
+    if (i === -1) idx.unshift(entry); else idx[i] = entry;
+    _saveIndex(idx);
+  }
+  function _deleteProjectRaw(id) {
+    delete _projectCache[id];
+    localStorage.removeItem('fb_project_' + id);
+    _saveIndex(_getIndex().filter(e => e.id !== id));
+  }
+
+  // One-time migration: split legacy fb_projects blob into per-project keys.
+  (function _migrateIfNeeded() {
+    if (localStorage.getItem('fb_project_index') !== null) return;
+    const raw = localStorage.getItem('fb_projects');
+    if (!raw) return;
+    try {
+      JSON.parse(raw).forEach(p => _saveProjectRaw(p));
+      localStorage.removeItem('fb_projects');
+    } catch(e) { /* leave old data intact on parse error */ }
+  })();
 
   const DB = {
     getProjects() {
-      if (_projectsCache) return _projectsCache;
-      try { _projectsCache = JSON.parse(localStorage.getItem('fb_projects') || '[]'); }
-      catch { _projectsCache = []; }
-      return _projectsCache;
+      return _getIndex().map(e => _getProjectRaw(e.id)).filter(Boolean);
     },
     saveProjects(p) {
-      _projectsCache = p;                                       // keep cache in sync
-      localStorage.setItem('fb_projects', JSON.stringify(p));
+      // Bulk save — used by importProjectFromFile. Deletes removed projects.
+      const keepIds = new Set(p.map(proj => proj.id));
+      _getIndex().filter(e => !keepIds.has(e.id)).forEach(e => _deleteProjectRaw(e.id));
+      p.forEach(proj => _saveProjectRaw(proj));
     },
     createProject(data) {
-      const projects = DB.getProjects();
       const proj = {
         id: Date.now().toString(),
         ...data,
@@ -752,28 +795,52 @@
         pages: [],
         exportChain: [],
       };
-      DB.saveProjects([proj, ...projects]);
+      _saveProjectRaw(proj);
       return proj;
     },
     getProject(id) {
-      return DB.getProjects().find(p => p.id === id) || null;
+      return _getProjectRaw(id);
+    },
+    updateProject(id, updates) {
+      const proj = _getProjectRaw(id);
+      if (!proj) return;
+      _saveProjectRaw({ ...proj, ...updates });
+    },
+    deleteProject(id) {
+      _deleteProjectRaw(id);
+    },
+    duplicateProject(id) {
+      const src = _getProjectRaw(id);
+      if (!src) return null;
+      let n = Date.now();
+      const uid = () => String(++n);
+      const newProj = JSON.parse(JSON.stringify(src));
+      newProj.id = uid();
+      newProj.name = (src.name?.trim() ? src.name.trim() + ' (Copy)' : '(Copy)');
+      newProj.createdAt = new Date().toISOString();
+      newProj.exportChain = [];
+      newProj.pages = newProj.pages.map(pg => ({
+        ...pg,
+        id: uid(),
+        rows:   (pg.rows   || []).map(r => ({ ...r, id: uid() })),
+        shapes: (pg.shapes || []).map(s => ({ ...s, id: uid() })),
+      }));
+      _saveProjectRaw(newProj);
+      return newProj;
     },
     addPage(projectId, pageData) {
-      const projects = DB.getProjects();
-      const idx = projects.findIndex(p => p.id === projectId);
-      if (idx === -1) return null;
+      const proj = _getProjectRaw(projectId);
+      if (!proj) return null;
       const page = {
         id: Date.now().toString(),
-        pageNumber: projects[idx].pages.length + 1,
+        pageNumber: proj.pages.length + 1,
         type: 'data',
         title: '',
         date: new Date().toISOString().split('T')[0],
         weather: '',
         notes: '',
-        // data page
         columns: [],
         rows: [],
-        // title page
         location: '',
         crew: '',
         equipment: '',
@@ -785,95 +852,58 @@
         summary: '',
         codeList: '',
         fileNames: '',
-        // sketch page
         shapes: [],
         ...pageData,
       };
-      projects[idx].pages.push(page);
-      DB.saveProjects(projects);
+      proj.pages.push(page);
+      _saveProjectRaw(proj);
       return page;
     },
     updatePage(projectId, pageId, updates) {
-      const projects = DB.getProjects();
-      const pi = projects.findIndex(p => p.id === projectId);
-      if (pi === -1) return;
-      const gi = projects[pi].pages.findIndex(g => g.id === pageId);
+      const proj = _getProjectRaw(projectId);
+      if (!proj) return;
+      const gi = proj.pages.findIndex(g => g.id === pageId);
       if (gi === -1) return;
-      projects[pi].pages[gi] = { ...projects[pi].pages[gi], ...updates };
-      DB.saveProjects(projects);
+      proj.pages[gi] = { ...proj.pages[gi], ...updates };
+      _saveProjectRaw(proj);
     },
     getPage(projectId, pageId) {
-      const p = DB.getProject(projectId);
-      return p ? p.pages.find(g => g.id === pageId) : null;
+      const proj = _getProjectRaw(projectId);
+      return proj ? (proj.pages.find(g => g.id === pageId) ?? null) : null;
     },
     deletePage(projectId, pageId) {
-      const projects = DB.getProjects();
-      const pi = projects.findIndex(p => p.id === projectId);
-      if (pi === -1) return;
-      projects[pi].pages = projects[pi].pages.filter(g => g.id !== pageId);
-      projects[pi].pages.forEach((g, i) => { g.pageNumber = i + 1; });
-      DB.saveProjects(projects);
+      const proj = _getProjectRaw(projectId);
+      if (!proj) return;
+      proj.pages = proj.pages.filter(g => g.id !== pageId);
+      proj.pages.forEach((g, i) => { g.pageNumber = i + 1; });
+      _saveProjectRaw(proj);
     },
     duplicatePage(projectId, pageId) {
-      const projects = DB.getProjects();
-      const pi = projects.findIndex(p => p.id === projectId);
-      if (pi === -1) return null;
-      const src = projects[pi].pages.find(g => g.id === pageId);
+      const proj = _getProjectRaw(projectId);
+      if (!proj) return null;
+      const src = proj.pages.find(g => g.id === pageId);
       if (!src) return null;
       let n = Date.now();
       const uid = () => String(++n);
-      // Deep clone, then assign fresh IDs
       const newPage = JSON.parse(JSON.stringify(src));
       newPage.id = uid();
-      newPage.pageNumber = projects[pi].pages.length + 1;
+      newPage.pageNumber = proj.pages.length + 1;
       newPage.title = (src.title?.trim() ? src.title.trim() + ' (Copy)' : '(Copy)');
       if (newPage.rows)   newPage.rows   = newPage.rows.map(r => ({ ...r, id: uid() }));
       if (newPage.shapes) newPage.shapes = newPage.shapes.map(s => ({ ...s, id: uid() }));
-      projects[pi].pages.push(newPage);
-      DB.saveProjects(projects);
+      proj.pages.push(newPage);
+      _saveProjectRaw(proj);
       return newPage;
     },
-    deleteProject(id) {
-      DB.saveProjects(DB.getProjects().filter(p => p.id !== id));
-    },
-    updateProject(id, updates) {
-      const projects = DB.getProjects();
-      const idx = projects.findIndex(p => p.id === id);
-      if (idx === -1) return;
-      projects[idx] = { ...projects[idx], ...updates };
-      DB.saveProjects(projects);
-    },
-    duplicateProject(id) {
-      const projects = this.getProjects();
-      const src = projects.find(p => p.id === id);
-      if (!src) return null;
-      let n = Date.now();
-      const uid = () => ++n;
-      const newProj = {
-        ...src,
-        id: uid(),
-        name: src.name + ' (Copy)',
-        createdAt: new Date().toISOString(),
-        pages: (src.pages || []).map(pg => ({
-          ...pg,
-          id: uid(),
-          rows: (pg.rows || []).map(r => ({ ...r, id: uid() }))
-        }))
-      };
-      projects.push(newProj);
-      this.saveProjects(projects);
-      return newProj;
-    },
     reorderPages(projectId, fromIdx, toIdx) {
-      const projects = DB.getProjects();
-      const pi = projects.findIndex(p => p.id === projectId);
-      if (pi === -1) return;
-      const pages = [...projects[pi].pages];
+      const proj = _getProjectRaw(projectId);
+      if (!proj) return;
+      const pages = [...proj.pages];
       const [moved] = pages.splice(fromIdx, 1);
       pages.splice(toIdx, 0, moved);
       pages.forEach((pg, i) => { pg.pageNumber = i + 1; });
-      projects[pi].pages = pages;
-      DB.saveProjects(projects);
+      proj.pages = pages;
+      _saveProjectRaw(proj);
     },
     // ── Custom data-page templates ────────────────────────────────────────────
     getCustomTemplates() {
@@ -889,6 +919,9 @@
       localStorage.setItem('fb_custom_templates', JSON.stringify(all));
     },
   };
+
+  // Single-project save — used by importProjectFromFile to avoid re-saving all projects.
+  DB.saveProject = function(proj) { _saveProjectRaw(proj); };
 
   // ─────────────────────────────────────────────────────────────────────────────
   // ROUTER
@@ -1548,8 +1581,7 @@
     // the new photoRef scheme after import.
     await extractPhotosFromImport(newProject);
 
-    const existing = DB.getProjects();
-    DB.saveProjects([newProject, ...existing]);
+    DB.saveProject(newProject);
     return newProject;
   }
 
@@ -8068,7 +8100,7 @@
       const m = saved.match(/^#\/project\/([^/]+)/);
       if (m) {
         // Validate the project still exists before restoring
-        const exists = DB.getProjects().some(p => String(p.id) === m[1]);
+        const exists = _getIndex().some(e => e.id === m[1]);
         if (exists) { window.location.hash = saved; }
         else { localStorage.removeItem('fb_lastRoute'); }
       } else {
