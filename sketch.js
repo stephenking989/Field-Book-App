@@ -3365,7 +3365,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   // patch: optional { scaleDenom, units } to avoid stale-closure issues when
   // called immediately after setScaleDenom / setUnits in the same tick.
   function persist(nextShapes, nextNotes, nextLayers, patch) {
-    const s  = nextShapes !== undefined ? nextShapes : shapes;
+    const s  = nextShapes !== undefined ? nextShapes : shapesRef.current;
     const n  = nextNotes  !== undefined ? nextNotes  : notes;
     const l  = nextLayers !== undefined ? nextLayers : layers;
     const sd = (patch && patch.scaleDenom  !== undefined) ? patch.scaleDenom  : scaleDenom;
@@ -7830,13 +7830,14 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         )}
 
         {openMenu === 'stroke' && (() => {
-          const selShape = selectedId ? shapes.find(s => s.id === selectedId) : null;
+          const selShapesW = selectedIds.length > 0 ? shapes.filter(s => selectedIds.includes(s.id)) : [];
+          const selShape = selShapesW[0] || null;
           const currentW = selShape ? (selShape.strokeWidth || 1.5) : defaultStrokeW;
           const setW = val => {
             const v = Math.max(0.5, Math.min(10, Number(val) || 1.5));
             setDefaultStrokeW(v);
-            if (selShape) {
-              commitShapes(shapes.map(s => s.id === selShape.id ? { ...s, strokeWidth: v } : s));
+            if (selShapesW.length > 0) {
+              commitShapes(shapes.map(s => selectedIds.includes(s.id) ? { ...s, strokeWidth: v } : s));
             }
           };
           return (
