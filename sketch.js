@@ -3470,7 +3470,9 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     if (existing) return existing.id;
     if (layers.length === 1) {
       const dimLayerId = 'l_dims_' + Date.now();
-      setLayers(prev => [...prev, { id: dimLayerId, name: 'Dimensions', visible: true }]);
+      const newLayers = [...layers, { id: dimLayerId, name: 'Dimensions', visible: true }];
+      setLayers(newLayers);
+      persist(undefined, undefined, newLayers);
       return dimLayerId;
     }
     return activeLayerId;
@@ -6625,6 +6627,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         }
         case 'path':
           if (s.nodes) { for (const n of s.nodes) add(n.x, n.y); } break;
+        case 'point': add(s.x, s.y); break;
         case 'dim-linear':
           add(s.p1.x, s.p1.y); add(s.p2.x, s.p2.y); break;
         case 'dim-bearing':
