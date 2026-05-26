@@ -2285,12 +2285,62 @@ function detectClosedRegionFromSegments(clickPt, shapes, snapTol) {
     }
   }
 
-  return faceNodes.map(n => ({
-    x: n.x, y: n.y,
-    type: 'sharp',
-    cp1x: n.x, cp1y: n.y,
-    cp2x: n.x, cp2y: n.y,
-  }));
+  // ── Smooth the fill boundary where it came from a curve ─────────────────
+  // Each face vertex has a "turn angle" — how much the path changes direction.
+  // • Small turn (< CORNER_DEG): vertex is a polyline sample of an arc/circle
+  //   → apply Catmull-Rom handles so the fill hugs the original curve.
+  // • Large turn (≥ CORNER_DEG): vertex is a true corner between two shapes
+  //   → keep as a sharp node so the fill respects the actual corner.
+  //
+  // 20-step arc approximation: max step angle = arc_delta / 20.
+  // For arcs up to 360°, max step = 18°. We use 20° as the threshold so any
+  // arc sample (≤ 18°/step) is treated as smooth. True shape corners are almost
+  // always ≥ 20° in practical sketches.
+  const CORNER_DEG = 20;
+  const CORNER_RAD = CORNER_DEG * Math.PI / 180;
+  const nf = faceNodes.length;
+  // Catmull-Rom tension — slightly lower than the pen tool (0.5) to prevent
+  // fill from bulging past the boundary on tight curves.
+  const CR_TENSION = 0.4;
+
+  return faceNodes.map((node, i) => {
+    const prev = faceNodes[(i - 1 + nf) % nf];
+    const next = faceNodes[(i + 1) % nf];
+    // Incoming and outgoing direction vectors at this vertex
+    const inX = node.x - prev.x, inY = node.y - prev.y;
+    const outX = next.x - node.x, outY = next.y - node.y;
+    const inLen  = Math.hypot(inX, inY);
+    const outLen = Math.hypot(outX, outY);
+
+    // Compute the angle between the incoming and outgoing directions.
+    // acos(dot) = 0 when path goes straight through; increases toward π at a U-turn.
+    let isCorner = true;
+    if (inLen > 1e-8 && outLen > 1e-8) {
+      const dot = (inX * outX + inY * outY) / (inLen * outLen);
+      const angleBetween = Math.acos(Math.max(-1, Math.min(1, dot)));
+      isCorner = angleBetween > CORNER_RAD;
+    }
+
+    if (isCorner) {
+      // True corner — keep the vertex sharp
+      return { x: node.x, y: node.y, type: 'sharp',
+               cp1x: node.x, cp1y: node.y, cp2x: node.x, cp2y: node.y };
+    }
+
+    // Smooth arc sample — compute Catmull-Rom handles using the two neighbours
+    // (wrapped, since this is a closed polygon)
+    const cp2x = node.x + (next.x - prev.x) * CR_TENSION / 3;
+    const cp2y = node.y + (next.y - prev.y) * CR_TENSION / 3;
+    const cp1x = node.x - (next.x - prev.x) * CR_TENSION / 3;
+    const cp1y = node.y - (next.y - prev.y) * CR_TENSION / 3;
+    return {
+      x: node.x, y: node.y, type: 'smooth',
+      cp1x: isFinite(cp1x) ? cp1x : node.x,
+      cp1y: isFinite(cp1y) ? cp1y : node.y,
+      cp2x: isFinite(cp2x) ? cp2x : node.x,
+      cp2y: isFinite(cp2y) ? cp2y : node.y,
+    };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
