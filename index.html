@@ -357,6 +357,31 @@
     .dp-cell-selected {
       background: rgba(78,120,100,0.07) !important;
     }
+    /* ── Formula ref selection — dashed range box ─────────────── */
+    .dp-fref-sel {
+      background: rgba(29,111,160,0.09) !important;
+    }
+    .dp-fref-top    { border-top:    2px dashed #1d6fa0 !important; }
+    .dp-fref-bottom { border-bottom: 2px dashed #1d6fa0 !important; }
+    .dp-fref-left   { border-left:   2px dashed #1d6fa0 !important; }
+    .dp-fref-right  { border-right:  2px dashed #1d6fa0 !important; }
+    /* Corner handles — blue squares, 20px, positioned outside the cell */
+    .dp-fref-handle {
+      position: absolute;
+      width: 20px; height: 20px;
+      background: #1d6fa0;
+      border: 2.5px solid #fff;
+      border-radius: 4px;
+      z-index: 20;
+      touch-action: none;
+      cursor: grab;
+      box-shadow: 0 1px 6px rgba(0,0,0,0.35);
+    }
+    .dp-fref-handle:active { cursor: grabbing; }
+    /* Top-right handle */
+    .dp-fref-handle-tr { top: -10px; right: -10px; }
+    /* Bottom-left handle */
+    .dp-fref-handle-bl { bottom: -10px; left: -10px; }
     /* ── Drag-and-drop visual feedback ───────────────────────── */
     th.dp-drag-over-col {
       border-left: 2px solid #4E7864 !important;
@@ -5897,6 +5922,15 @@
     const fillDragRef      = useRef({ active: false, startRow: -1, startCol: -1 });
     const lpTimerRef       = useRef(null);  // long-press timer ID (touch only)
     const lpStartRef       = useRef(null);  // { x, y, ri, ci } at touch pointerdown
+    // ── Formula ref selection (mobile range picker) ─────────────
+    const [formulaRefSel, setFormulaRefSel] = useState(null);
+    // { r1, c1, r2, c2 } — range highlighted for formula ref insertion
+    const formulaRefInsertPosRef = useRef(null);
+    // { start, len } — position in formula text where ref was inserted (for replacement)
+    const formulaTouchRef = useRef(null);
+    // { x, y, ri, ci } — touch start for tap-vs-scroll discrimination in formula mode
+    const formulaHandleDragRef = useRef(null);
+    // { handle: 'tr'|'bl', anchorRi, anchorCi } — active corner handle drag state
     useFocusTrap(colModalRef, !!colModal, () => setColModal(null));
     useFocusTrap(templateModalRef, templateModal, () => setTemplateModal(false));
     const toast = useToast();
@@ -6204,6 +6238,61 @@
       setTimeout(() => { if (tableRef.current) tableRef.current.focus(); }, 0);
     }
 
+    // ── Formula ref insertion / range update (mobile + mouse) ────────────
+    // Inserts (or replaces the previously inserted) cell ref at the tracked cursor position.
+    function insertFormulaRef(refStr, ri, ci) {
+      const cur = editingCell !== null ? editValue : formulaBarVal;
+      const pos = formulaRefInsertPosRef.current;
+      let newVal, insertAt;
+      if (pos) {
+        // Replace the ref that was inserted last time
+        newVal = cur.slice(0, pos.start) + refStr + cur.slice(pos.start + pos.len);
+        formulaRefInsertPosRef.current = { start: pos.start, len: refStr.length };
+      } else {
+        // First tap: insert at current cursor position (or end of string)
+        insertAt = editingCell !== null
+          ? (inputRef.current?.selectionStart ?? cur.length)
+          : (fbInputRef.current?.selectionStart ?? cur.length);
+        newVal = cur.slice(0, insertAt) + refStr + cur.slice(insertAt);
+        formulaRefInsertPosRef.current = { start: insertAt, len: refStr.length };
+      }
+      if (editingCell !== null) {
+        setEditValue(newVal); setFormulaBarVal(newVal);
+        requestAnimationFrame(() => inputRef.current?.focus());
+      } else {
+        setFormulaBarVal(newVal); setEditValue(newVal);
+        requestAnimationFrame(() => fbInputRef.current?.focus());
+      }
+      setFormulaRefSel({ r1: ri, c1: ci, r2: ri, c2: ci });
+    }
+
+    // Updates the formula text to reflect a dragged range selection (called live during handle drag).
+    function updateFormulaRefRange(sel) {
+      const pos = formulaRefInsertPosRef.current;
+      if (!pos) return;
+      const minR = Math.min(sel.r1, sel.r2), minC = Math.min(sel.c1, sel.c2);
+      const maxR = Math.max(sel.r1, sel.r2), maxC = Math.max(sel.c1, sel.c2);
+      const refStr = (minR === maxR && minC === maxC)
+        ? cellRef(minR, minC)
+        : cellRef(minR, minC) + ':' + cellRef(maxR, maxC);
+      const cur = editingCell !== null ? editValue : formulaBarVal;
+      const newVal = cur.slice(0, pos.start) + refStr + cur.slice(pos.start + pos.len);
+      formulaRefInsertPosRef.current = { start: pos.start, len: refStr.length };
+      if (editingCell !== null) {
+        setEditValue(newVal); setFormulaBarVal(newVal);
+      } else {
+        setFormulaBarVal(newVal); setEditValue(newVal);
+      }
+    }
+
+    // Clears all formula ref selection state (called when leaving formula editing).
+    function clearFormulaRefSel() {
+      setFormulaRefSel(null);
+      formulaRefInsertPosRef.current = null;
+      formulaTouchRef.current = null;
+      formulaHandleDragRef.current = null;
+    }
+
     function startEdit(ri, ci) {
       const row = rows[ri];
       const col = columns[ci];
@@ -6224,6 +6313,7 @@
       updateCell(row.id, col.id, val.trim());
       setEditingCell(null);
       setFormulaBarVal(val.trim());
+      clearFormulaRefSel();
     }
 
     function handleCellKeyDown(e, ri, ci) {
@@ -6495,6 +6585,7 @@
           updateCell(row.id, col.id, formulaBarVal.trim());
           setEditingCell(null);
           fbInputRef.current?.blur();
+          clearFormulaRefSel();
         }
       } else if (e.key === 'Escape') {
         // Revert to saved value
@@ -6505,6 +6596,7 @@
           setEditValue(orig);
         }
         setEditingCell(null);
+        clearFormulaRefSel();
         fbInputRef.current?.blur();
       } else if (e.key === 'F4') {
         e.preventDefault();
@@ -7169,6 +7261,9 @@
             value={formulaBarVal}
             onChange={e => {
               setFormulaBarVal(e.target.value);
+              // User typed manually — invalidate the tracked insert position so next
+              // cell tap appends rather than accidentally overwriting existing text.
+              formulaRefInsertPosRef.current = null;
               if (activeCell) {
                 const row = rows[activeCell.rowIdx];
                 const col = columns[activeCell.colIdx];
@@ -7205,14 +7300,24 @@
         {/* ── Table ── */}
         <div ref={tableRef} tabIndex={0} onKeyDown={handleGridKeyDown} onPaste={handleGridPaste}
           onPointerMove={e => {
-            // Cancel long-press if finger has scrolled (moved > 8px before timer fires)
-            if (e.pointerType === 'touch' && lpStartRef.current && lpTimerRef.current) {
-              const dx = e.clientX - lpStartRef.current.x;
-              const dy = e.clientY - lpStartRef.current.y;
-              if (Math.hypot(dx, dy) > 8) {
-                clearTimeout(lpTimerRef.current);
-                lpTimerRef.current = null;
-                lpStartRef.current = null;
+            if (e.pointerType === 'touch') {
+              // Cancel formula-mode touch ref if finger moved too far (it became a scroll)
+              if (formulaTouchRef.current) {
+                const dx = e.clientX - formulaTouchRef.current.x;
+                const dy = e.clientY - formulaTouchRef.current.y;
+                if (Math.hypot(dx, dy) > 10) {
+                  formulaTouchRef.current = null; // finger is scrolling — don't insert ref
+                }
+              }
+              // Cancel long-press if finger has scrolled (moved > 8px before timer fires)
+              if (lpStartRef.current && lpTimerRef.current) {
+                const dx = e.clientX - lpStartRef.current.x;
+                const dy = e.clientY - lpStartRef.current.y;
+                if (Math.hypot(dx, dy) > 8) {
+                  clearTimeout(lpTimerRef.current);
+                  lpTimerRef.current = null;
+                  lpStartRef.current = null;
+                }
               }
             }
             // Edge-scroll while drag-selecting
@@ -7227,6 +7332,17 @@
           }}
           onPointerUp={e => {
             if (e.pointerType !== 'touch') return;
+            // ── Formula mode: tap detection (tap = select cell ref, swipe = scroll) ──
+            if (isFormulaEditing && formulaTouchRef.current) {
+              const { x, y, ri: tapRi, ci: tapCi } = formulaTouchRef.current;
+              formulaTouchRef.current = null;
+              const dist = Math.hypot(e.clientX - x, e.clientY - y);
+              if (dist < 12) {
+                // Confirmed tap — insert/replace cell ref
+                insertFormulaRef(cellRef(tapRi, tapCi), tapRi, tapCi);
+              }
+              return; // don't fall through to normal tap-select
+            }
             // Short tap (timer still running) = single-cell select, no drag
             if (lpTimerRef.current) {
               clearTimeout(lpTimerRef.current);
@@ -7303,35 +7419,55 @@
                     const isFillPreview = fillDragRow !== null &&
                       activeCell && ci === activeCell.colIdx &&
                       ri > activeCell.rowIdx && ri <= fillDragRow;
+                    // ── Formula ref selection box ──────────────────────────────
+                    let frefClass = '';
+                    let isFrefHandleTR = false, isFrefHandleBL = false;
+                    if (formulaRefSel) {
+                      const fMinR = Math.min(formulaRefSel.r1, formulaRefSel.r2);
+                      const fMaxR = Math.max(formulaRefSel.r1, formulaRefSel.r2);
+                      const fMinC = Math.min(formulaRefSel.c1, formulaRefSel.c2);
+                      const fMaxC = Math.max(formulaRefSel.c1, formulaRefSel.c2);
+                      if (ri >= fMinR && ri <= fMaxR && ci >= fMinC && ci <= fMaxC) {
+                        frefClass = 'dp-fref-sel';
+                        if (ri === fMinR) frefClass += ' dp-fref-top';
+                        if (ri === fMaxR) frefClass += ' dp-fref-bottom';
+                        if (ci === fMinC) frefClass += ' dp-fref-left';
+                        if (ci === fMaxC) frefClass += ' dp-fref-right';
+                      }
+                      // Top-right handle: top row, rightmost col
+                      isFrefHandleTR = ri === fMinR && ci === fMaxC;
+                      // Bottom-left handle: bottom row, leftmost col
+                      isFrefHandleBL = ri === fMaxR && ci === fMinC;
+                    }
+                    const needsRelative = isActive || !!refColor || isFrefHandleTR || isFrefHandleBL;
                     return (
                       <td key={col.id}
-                        className={`${isActive ? 'dp-cell-active' : isFillPreview ? 'dp-cell-fill-preview' : inSel ? 'dp-cell-selected' : ''}`}
+                        data-cell-ri={ri}
+                        data-cell-ci={ci}
+                        className={`${isActive ? 'dp-cell-active' : isFillPreview ? 'dp-cell-fill-preview' : inSel ? 'dp-cell-selected' : ''}${frefClass ? ' ' + frefClass : ''}`}
                         style={{
                           width: colWidth(col), minWidth: colWidth(col),
-                          // Always relative when active (needed to anchor the fill handle)
-                          ...(isActive ? { position: 'relative' } : {}),
+                          // Relative positioning needed for fill handle and formula ref handles
+                          ...(needsRelative ? { position: 'relative' } : {}),
+                          // Allow corner handles to visually overflow cell boundaries
+                          ...(isFrefHandleTR || isFrefHandleBL ? { overflow: 'visible' } : {}),
                           // Colour-coded border when this cell is referenced by the formula being edited
-                          ...(refColor ? { outline: `2px solid ${refColor}`, outlineOffset: '-1px', zIndex: 1, position: 'relative' } : {}),
+                          ...(refColor ? { outline: `2px solid ${refColor}`, outlineOffset: '-1px', zIndex: 1 } : {}),
                         }}
                         onPointerDown={e => {
                           if (e.button !== 0) return;
 
                           // ── Point-to-select: insert cell ref into formula being edited ──
                           if (isFormulaEditing) {
-                            e.preventDefault(); // keeps focus on the edit input
-                            const ref = myCellRef;
-                            if (editingCell !== null) {
-                              const newVal = editValue + ref;
-                              setEditValue(newVal);
-                              setFormulaBarVal(newVal);
-                              requestAnimationFrame(() => inputRef.current?.focus());
-                            } else {
-                              // Editing from formula bar
-                              const newVal = formulaBarVal + ref;
-                              setFormulaBarVal(newVal);
-                              setEditValue(newVal);
-                              requestAnimationFrame(() => fbInputRef.current?.focus());
+                            if (e.pointerType === 'touch') {
+                              // Touch: DON'T preventDefault so native scroll still works.
+                              // Record start position; tap-vs-scroll decided in onPointerUp.
+                              formulaTouchRef.current = { x: e.clientX, y: e.clientY, ri, ci };
+                              return; // wait for pointerUp to confirm it was a tap
                             }
+                            // Mouse / stylus: insert ref immediately
+                            e.preventDefault();
+                            insertFormulaRef(myCellRef, ri, ci);
                             return;
                           }
 
@@ -7372,7 +7508,11 @@
                             type="text"
                             inputMode={isDMSCell ? 'none' : 'text'}
                             value={editValue}
-                            onChange={e => { setEditValue(e.target.value); setFormulaBarVal(e.target.value); }}
+                            onChange={e => {
+                              setEditValue(e.target.value); setFormulaBarVal(e.target.value);
+                              // User typed — invalidate tracked insert pos so next cell tap appends
+                              formulaRefInsertPosRef.current = null;
+                            }}
                             onBlur={() => commitEdit(ri, ci, editValue)}
                             onKeyDown={e => handleCellKeyDown(e, ri, ci)}
                             style={{ display: 'block', width: '100%', height: 32, padding: '0 5px',
@@ -7424,6 +7564,76 @@
                               if (endRow !== null && endRow > startRow) {
                                 performFillDown(startRow, startCol, endRow);
                               }
+                            }}
+                          />
+                        )}
+                        {/* ── Formula ref selection handles (top-right & bottom-left) ── */}
+                        {isFrefHandleTR && (
+                          <div
+                            className="dp-fref-handle dp-fref-handle-tr"
+                            title="Drag to expand range selection"
+                            onPointerDown={e => {
+                              e.stopPropagation(); e.preventDefault();
+                              // Anchor = bottom-left corner
+                              const fMinR = Math.min(formulaRefSel.r1, formulaRefSel.r2);
+                              const fMaxR = Math.max(formulaRefSel.r1, formulaRefSel.r2);
+                              const fMinC = Math.min(formulaRefSel.c1, formulaRefSel.c2);
+                              formulaHandleDragRef.current = { handle: 'tr', anchorRi: fMaxR, anchorCi: fMinC };
+                              e.currentTarget.setPointerCapture(e.pointerId);
+                            }}
+                            onPointerMove={e => {
+                              if (!formulaHandleDragRef.current || formulaHandleDragRef.current.handle !== 'tr') return;
+                              const el = document.elementFromPoint(e.clientX, e.clientY);
+                              const td2 = el?.closest('td[data-cell-ri]');
+                              if (!td2) return;
+                              const tRi = parseInt(td2.getAttribute('data-cell-ri'));
+                              const tCi = parseInt(td2.getAttribute('data-cell-ci'));
+                              if (isNaN(tRi) || isNaN(tCi)) return;
+                              const { anchorRi, anchorCi } = formulaHandleDragRef.current;
+                              const newSel = {
+                                r1: Math.min(anchorRi, tRi), c1: Math.min(anchorCi, tCi),
+                                r2: Math.max(anchorRi, tRi), c2: Math.max(anchorCi, tCi),
+                              };
+                              setFormulaRefSel(newSel);
+                              updateFormulaRefRange(newSel);
+                            }}
+                            onPointerUp={e => {
+                              e.currentTarget.releasePointerCapture(e.pointerId);
+                              formulaHandleDragRef.current = null;
+                            }}
+                          />
+                        )}
+                        {isFrefHandleBL && (
+                          <div
+                            className="dp-fref-handle dp-fref-handle-bl"
+                            title="Drag to expand range selection"
+                            onPointerDown={e => {
+                              e.stopPropagation(); e.preventDefault();
+                              // Anchor = top-right corner
+                              const fMinR = Math.min(formulaRefSel.r1, formulaRefSel.r2);
+                              const fMaxC = Math.max(formulaRefSel.c1, formulaRefSel.c2);
+                              formulaHandleDragRef.current = { handle: 'bl', anchorRi: fMinR, anchorCi: fMaxC };
+                              e.currentTarget.setPointerCapture(e.pointerId);
+                            }}
+                            onPointerMove={e => {
+                              if (!formulaHandleDragRef.current || formulaHandleDragRef.current.handle !== 'bl') return;
+                              const el = document.elementFromPoint(e.clientX, e.clientY);
+                              const td2 = el?.closest('td[data-cell-ri]');
+                              if (!td2) return;
+                              const tRi = parseInt(td2.getAttribute('data-cell-ri'));
+                              const tCi = parseInt(td2.getAttribute('data-cell-ci'));
+                              if (isNaN(tRi) || isNaN(tCi)) return;
+                              const { anchorRi, anchorCi } = formulaHandleDragRef.current;
+                              const newSel = {
+                                r1: Math.min(anchorRi, tRi), c1: Math.min(anchorCi, tCi),
+                                r2: Math.max(anchorRi, tRi), c2: Math.max(anchorCi, tCi),
+                              };
+                              setFormulaRefSel(newSel);
+                              updateFormulaRefRange(newSel);
+                            }}
+                            onPointerUp={e => {
+                              e.currentTarget.releasePointerCapture(e.pointerId);
+                              formulaHandleDragRef.current = null;
                             }}
                           />
                         )}
