@@ -603,7 +603,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.150';
+  const APP_VERSION = '1.151';
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO STORAGE — IndexedDB
@@ -5925,6 +5925,8 @@
     const copyAnchorRef   = useRef(null); // { rowIdx, colIdx } of top-left cell at last copy
     const isDraggingSelRef = useRef(false); // true while mouse-drag cell selection is active
     const fbFocusedRef     = useRef(false); // true while formula bar input has focus
+    const rowsHistoryRef  = useRef([]);    // undo stack — array of past rows snapshots (max 50)
+    const [canUndo, setCanUndo] = useState(false);
     const fillDragRef      = useRef({ active: false, startRow: -1, startCol: -1 });
     const lpTimerRef       = useRef(null);  // long-press timer ID (touch only)
     const lpStartRef       = useRef(null);  // { x, y, ri, ci } at touch pointerdown
@@ -6023,6 +6025,10 @@
     }, [rows, page.id]);
 
     function persistRows(updated) {
+      // Push current state to undo stack before applying (cap at 50 steps)
+      rowsHistoryRef.current.push(rows);
+      if (rowsHistoryRef.current.length > 50) rowsHistoryRef.current.shift();
+      setCanUndo(true);
       setRows(updated);
       DB.updatePage(projectId, page.id, { rows: updated });
     }
@@ -6359,6 +6365,9 @@
       if (!activeCell) return;
       const { rowIdx: ri, colIdx: ci } = activeCell;
 
+      // ── Ctrl+Z / Cmd+Z ── Undo
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undoRows(); return; }
+
       // ── Ctrl+C / Cmd+C ── Copy selection
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') { e.preventDefault(); copyCells(); return; }
 
@@ -6584,6 +6593,14 @@
     }
 
     // ── Edit menu operations ──────────────────────────────────────────────
+    function undoRows() {
+      const prev = rowsHistoryRef.current.pop();
+      if (!prev) { toast.error('Nothing to undo'); return; }
+      setCanUndo(rowsHistoryRef.current.length > 0);
+      setRows(prev);
+      DB.updatePage(projectId, page.id, { rows: prev });
+    }
+
     function clearSelectedCells() {
       const b = getSelectionBounds();
       if (!b) return;
@@ -7308,6 +7325,8 @@
           )}
           {openTbMenu === 'edit' && (
             <div ref={tbMenuRef} className="dp-drop-panel" style={{ top: menuPos.top, left: menuPos.left }}>
+              <button disabled={!canUndo} onClick={() => { undoRows(); setOpenTbMenu(null); }}>↩ Undo</button>
+              <div className="dp-drop-sep" />
               <div className="dp-drop-section">Clipboard</div>
               <button onClick={() => { copyCells(); setOpenTbMenu(null); }}>Copy</button>
               <button onClick={() => { cutCells(); setOpenTbMenu(null); }}>Cut</button>
