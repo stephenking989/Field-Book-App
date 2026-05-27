@@ -310,6 +310,7 @@
       white-space: nowrap;
     }
     .dp-drop-panel button:active { background: #D2E8DA; }
+    .dp-drop-panel button:disabled { opacity: 0.35; pointer-events: none; }
     .dp-drop-panel .dp-drop-sep {
       height: 1px; background: #CEC5B0; margin: 4px 6px;
     }
@@ -602,7 +603,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.149';
+  const APP_VERSION = '1.150';
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO STORAGE — IndexedDB
@@ -6582,6 +6583,78 @@
       }
     }
 
+    // ── Edit menu operations ──────────────────────────────────────────────
+    function clearSelectedCells() {
+      const b = getSelectionBounds();
+      if (!b) return;
+      const updated = rows.map((row, r) => {
+        if (r < b.minR || r > b.maxR) return row;
+        const newCells = { ...row.cells };
+        for (let c = b.minC; c <= b.maxC; c++) {
+          const col = columns[c];
+          if (col) newCells[col.id] = '';
+        }
+        return { ...row, cells: newCells };
+      });
+      persistRows(updated);
+      setFormulaBarVal('');
+    }
+
+    function insertRowAt(atRowIdx, position) {
+      const insertIdx = position === 'above' ? atRowIdx : atRowIdx + 1;
+      const cells = {};
+      columns.forEach(c => { cells[c.id] = ''; });
+      if (page.type === 'points') cells['col_ptnum'] = nextPointNum(rows);
+      const newRow = { id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2), cells };
+      const next = [...rows];
+      next.splice(insertIdx, 0, newRow);
+      persistRows(next);
+      setActiveCell({ rowIdx: insertIdx, colIdx: activeCell?.colIdx ?? 0 });
+      setSelectionAnchor(null);
+    }
+
+    function deleteSelectedRows() {
+      const b = getSelectionBounds();
+      if (!b) return;
+      if (page.type === 'points') {
+        // Cross-page sync: deleteRow handles sketch canvas removal and DB reload per row
+        const ids = rows.slice(b.minR, b.maxR + 1).map(r => r.id);
+        ids.forEach(id => deleteRow(id));
+      } else {
+        const ids = new Set(rows.slice(b.minR, b.maxR + 1).map(r => r.id));
+        persistRows(rows.filter(r => !ids.has(r.id)));
+      }
+      setActiveCell(null);
+      setSelectionAnchor(null);
+    }
+
+    function duplicateRow(rowIdx) {
+      const src = rows[rowIdx];
+      if (!src) return;
+      const newRow = { id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2), cells: { ...src.cells } };
+      const next = [...rows];
+      next.splice(rowIdx + 1, 0, newRow);
+      persistRows(next);
+      setActiveCell({ rowIdx: rowIdx + 1, colIdx: activeCell?.colIdx ?? 0 });
+      setSelectionAnchor(null);
+    }
+
+    function selectAll() {
+      if (!rows.length || !columns.length) return;
+      setActiveCell({ rowIdx: 0, colIdx: 0 });
+      setSelectionAnchor({ rowIdx: rows.length - 1, colIdx: columns.length - 1 });
+    }
+
+    function selectEntireRow(rowIdx) {
+      setActiveCell({ rowIdx, colIdx: 0 });
+      setSelectionAnchor({ rowIdx, colIdx: columns.length - 1 });
+    }
+
+    function selectEntireColumn(colIdx) {
+      setActiveCell({ rowIdx: 0, colIdx });
+      setSelectionAnchor({ rowIdx: rows.length - 1, colIdx });
+    }
+
     function handleFormulaBarCommit(e) {
       if (e.key === 'Enter' && activeCell) {
         const { rowIdx: ri, colIdx: ci } = activeCell;
@@ -7142,14 +7215,23 @@
             View ▾
           </button>
 
+          <div className="dp-tb-sep" />
+
+          {/* Edit ▾ */}
+          <button
+            className={`dp-drop-btn${openTbMenu === 'edit' ? ' active' : ''}`}
+            onPointerDown={e => {
+              e.preventDefault();
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenuPos({ top: r.bottom + 4, left: r.left });
+              setOpenTbMenu(m => m === 'edit' ? null : 'edit');
+            }}>
+            Edit ▾
+          </button>
+
           {/* ── Dropdown panels — fixed-position, avoids toolbar overflow clipping ── */}
           {openTbMenu === 'insert' && (
             <div ref={tbMenuRef} className="dp-drop-panel" style={{ top: menuPos.top, left: menuPos.left }}>
-              <div className="dp-drop-section">Clipboard</div>
-              <button onClick={() => { copyCells(); setOpenTbMenu(null); }}>Copy</button>
-              <button onClick={() => { cutCells(); setOpenTbMenu(null); }}>Cut</button>
-              <button onClick={() => { pasteCells(); setOpenTbMenu(null); }}>Paste</button>
-              <div className="dp-drop-sep" />
               <div className="dp-drop-section">Rows {page.type !== 'points' && '& Columns'}</div>
               <button onClick={() => { addRow(); setOpenTbMenu(null); }}>＋ Row</button>
               <button onClick={() => { addRows(5); setOpenTbMenu(null); }}>＋ 5 Rows</button>
@@ -7222,6 +7304,26 @@
                   <span className={dmsKeyboard ? 'off' : 'on'}>OFF</span>
                 </span>
               </button>
+            </div>
+          )}
+          {openTbMenu === 'edit' && (
+            <div ref={tbMenuRef} className="dp-drop-panel" style={{ top: menuPos.top, left: menuPos.left }}>
+              <div className="dp-drop-section">Clipboard</div>
+              <button onClick={() => { copyCells(); setOpenTbMenu(null); }}>Copy</button>
+              <button onClick={() => { cutCells(); setOpenTbMenu(null); }}>Cut</button>
+              <button onClick={() => { pasteCells(); setOpenTbMenu(null); }}>Paste</button>
+              <button onClick={() => { clearSelectedCells(); setOpenTbMenu(null); }}>Clear Cells</button>
+              <div className="dp-drop-sep" />
+              <div className="dp-drop-section">Select</div>
+              <button onClick={() => { selectAll(); setOpenTbMenu(null); }}>Select All</button>
+              <button disabled={!activeCell} onClick={() => { if (activeCell) { selectEntireRow(activeCell.rowIdx); setOpenTbMenu(null); } }}>Select Row</button>
+              <button disabled={!activeCell} onClick={() => { if (activeCell) { selectEntireColumn(activeCell.colIdx); setOpenTbMenu(null); } }}>Select Column</button>
+              <div className="dp-drop-sep" />
+              <div className="dp-drop-section">Rows</div>
+              <button disabled={!activeCell} onClick={() => { if (activeCell) { insertRowAt(activeCell.rowIdx, 'above'); setOpenTbMenu(null); } }}>Insert Row Above</button>
+              <button disabled={!activeCell} onClick={() => { if (activeCell) { insertRowAt(activeCell.rowIdx, 'below'); setOpenTbMenu(null); } }}>Insert Row Below</button>
+              <button disabled={!activeCell} onClick={() => { deleteSelectedRows(); setOpenTbMenu(null); }}>Delete Row(s)</button>
+              <button disabled={!activeCell} onClick={() => { if (activeCell) { duplicateRow(activeCell.rowIdx); setOpenTbMenu(null); } }}>Duplicate Row</button>
             </div>
           )}
 
