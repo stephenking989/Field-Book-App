@@ -356,8 +356,12 @@
     }
     /* ── Multi-cell selection ─────────────────────────────────── */
     .dp-cell-selected {
-      background: rgba(78,120,100,0.07) !important;
+      background: rgba(78,120,100,0.15) !important;
     }
+    .dp-sel-top    { border-top:    2px solid #2a5c41 !important; }
+    .dp-sel-bottom { border-bottom: 2px solid #2a5c41 !important; }
+    .dp-sel-left   { border-left:   2px solid #2a5c41 !important; }
+    .dp-sel-right  { border-right:  2px solid #2a5c41 !important; }
     /* ── Formula ref selection — dashed range box ─────────────── */
     .dp-fref-sel {
       background: rgba(29,111,160,0.09) !important;
@@ -7413,6 +7417,15 @@
                     const isActive = activeCell && activeCell.rowIdx === ri && activeCell.colIdx === ci;
                     const isEditing = editingCell && editingCell.rowIdx === ri && editingCell.colIdx === ci;
                     const inSel = isInRange(ri, ci);
+                    let selClass = '';
+                    if (inSel && !isActive) {
+                      selClass = 'dp-cell-selected';
+                      const b = getSelectionBounds();
+                      if (ri === b.minR) selClass += ' dp-sel-top';
+                      if (ri === b.maxR) selClass += ' dp-sel-bottom';
+                      if (ci === b.minC) selClass += ' dp-sel-left';
+                      if (ci === b.maxC) selClass += ' dp-sel-right';
+                    }
                     const { text, isFormula, isDMS, isError } = displayValue(row, col);
                     const myCellRef = cellRef(ri, ci);
                     const refColor = refColorMap[myCellRef] || null;
@@ -7445,7 +7458,7 @@
                       <td key={col.id}
                         data-cell-ri={ri}
                         data-cell-ci={ci}
-                        className={`${isActive ? 'dp-cell-active' : isFillPreview ? 'dp-cell-fill-preview' : inSel ? 'dp-cell-selected' : ''}${frefClass ? ' ' + frefClass : ''}`}
+                        className={`${isActive ? 'dp-cell-active' : isFillPreview ? 'dp-cell-fill-preview' : selClass}${frefClass ? ' ' + frefClass : ''}`}
                         style={{
                           width: colWidth(col), minWidth: colWidth(col),
                           // Relative positioning needed for fill handle and formula ref handles
