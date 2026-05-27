@@ -2090,10 +2090,34 @@ function detectClosedRegionFromSegments(clickPt, shapes, snapTol) {
       }
     } else if (s.type === 'path' && s.nodes && s.nodes.length >= 2) {
       const nodes = s.nodes;
-      for (let i = 0; i < nodes.length - 1; i++)
-        rawSegs.push([nodes[i].x, nodes[i].y, nodes[i+1].x, nodes[i+1].y]);
-      if (s.closed)
-        rawSegs.push([nodes[nodes.length-1].x, nodes[nodes.length-1].y, nodes[0].x, nodes[0].y]);
+      // Iterate every segment, including the wrap-around segment for closed paths
+      const segCount = s.closed ? nodes.length : nodes.length - 1;
+      for (let i = 0; i < segCount; i++) {
+        const n0 = nodes[i];
+        const n1 = nodes[(i + 1) % nodes.length];
+        // Outgoing control point from n0, incoming control point to n1
+        const cp1x = n0.cp2x ?? n0.x, cp1y = n0.cp2y ?? n0.y;
+        const cp2x = n1.cp1x ?? n1.x, cp2y = n1.cp1y ?? n1.y;
+        // If both control points sit on their node, this segment is straight
+        const isStraight =
+          Math.abs(cp1x - n0.x) < 0.01 && Math.abs(cp1y - n0.y) < 0.01 &&
+          Math.abs(cp2x - n1.x) < 0.01 && Math.abs(cp2y - n1.y) < 0.01;
+        if (isStraight) {
+          rawSegs.push([n0.x, n0.y, n1.x, n1.y]);
+        } else {
+          // Approximate the cubic Bezier as a 20-step polyline so curved
+          // pen/pencil paths intersect correctly with other shapes
+          const STEPS = 20;
+          let px = n0.x, py = n0.y;
+          for (let t = 1; t <= STEPS; t++) {
+            const u  = t / STEPS, mu = 1 - u;
+            const nx = mu*mu*mu*n0.x + 3*mu*mu*u*cp1x + 3*mu*u*u*cp2x + u*u*u*n1.x;
+            const ny = mu*mu*mu*n0.y + 3*mu*mu*u*cp1y + 3*mu*u*u*cp2y + u*u*u*n1.y;
+            rawSegs.push([px, py, nx, ny]);
+            px = nx; py = ny;
+          }
+        }
+      }
     }
   });
 
