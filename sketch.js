@@ -715,6 +715,39 @@ function fmtPxAsReal(px, scaleDenom, units) {
   return formatReal(pxToReal(px, scaleDenom, units), units);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// COGO TRAVERSE  —  turned-angle line entry (Phase 1)
+// ─────────────────────────────────────────────────────────────────────────────
+// Compute a new traverse leg turned off a backsight line. Works entirely in
+// screen-azimuth space (clockwise from screen-up), matching applyLineBearing and
+// the line dim-label, so the drawn leg's bearing label reads correctly with no
+// extra conversion.
+//   occEnd:    'p1' (x1/y1) or 'p2' (x2/y2) — the occupied (setup) end.
+//   turn:      'R' (clockwise) or 'L' (counter-clockwise).
+//   angleDeg:  turned angle off the backsight, decimal degrees.
+//   distReal:  distance in display units; mode 'HD' (horizontal) or 'SD' (slope).
+//   zenithDeg: zenith angle from vertical (decimal deg), used only when mode==='SD'.
+// Returns { x1, y1, x2, y2 } in world px, or null on invalid geometry.
+function computeCogoLeg(line, occEnd, turn, angleDeg, distReal, mode, zenithDeg, scaleDenom, units) {
+  const ox = occEnd === 'p1' ? line.x1 : line.x2;
+  const oy = occEnd === 'p1' ? line.y1 : line.y2;
+  const bx = occEnd === 'p1' ? line.x2 : line.x1;
+  const by = occEnd === 'p1' ? line.y2 : line.y1;
+  if (ox === bx && oy === by) return null;              // zero-length backsight
+  let hd = distReal;
+  if (mode === 'SD') {
+    const sinZ = Math.sin((zenithDeg || 0) * Math.PI / 180);
+    if (!(sinZ > 0)) return null;
+    hd = distReal * sinZ;                                // HD = SD · sin(zenith)
+  }
+  if (!(hd > 0)) return null;
+  const hdPx  = realToPx(hd, scaleDenom, units);
+  const backAz = Math.atan2(bx - ox, -(by - oy));       // occupied → backsight
+  const A = (angleDeg || 0) * Math.PI / 180;
+  const fsAz = backAz + (turn === 'R' ? A : -A);         // R = clockwise
+  return { x1: ox, y1: oy, x2: ox + Math.sin(fsAz) * hdPx, y2: oy - Math.cos(fsAz) * hdPx };
+}
+
 // Choose a round-number distance that will produce a scale-bar ≈ 60–150 screen px wide.
 function niceScaleBarValue(scaleDenom, vbW, containerW, units) {
   const targetScreenPx = 100;
@@ -1473,6 +1506,155 @@ function LayerCard({ layer, onRename }) {
         <span style={{ color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 }}>Shapes</span>
         <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>{layer._shapeCount ?? 0}</span>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COGO PANEL  —  right-panel section for turned-angle traverse entry.
+// Module-level (per the React architecture rule) so its input state survives
+// SketchPage re-renders. Requires a single straight `line` selected as backsight.
+//   line:    the selected backsight line, or null when selection isn't one line.
+//   occEnd:  'p1' | 'p2' — which end is occupied (owned by SketchPage).
+//   onSwap:  toggle the occupied end.
+//   onActive(bool): notifies SketchPage when a field is focused (drives the
+//                   on-canvas occupied marker — only shown during entry).
+//   onConfirm(args) -> boolean: builds + commits the leg; returns true on success.
+// ─────────────────────────────────────────────────────────────────────────────
+function CogoPanel({ line, occEnd, onSwap, onActive, onConfirm, scaleDenom, units }) {
+  const [angle,    setAngle]    = useState('');
+  const [turn,     setTurn]     = useState('R');
+  const [dist,     setDist]     = useState('');
+  const [distMode, setDistMode] = useState('HD');
+  const [zenith,   setZenith]   = useState('');
+  const [err,      setErr]      = useState('');
+
+  const enabled = !!line;
+  const parse = (raw) => (window._fb && window._fb.parseDMSInput) ? window._fb.parseDMSInput(raw) : parseFloat(raw);
+
+  const fieldStyle = (ok = true) => ({
+    width: '100%', background: enabled ? PT.inputBg : PT.bgAlt,
+    border: `1px solid ${ok ? PT.border : '#C0392B'}`, borderRadius: 3,
+    color: PT.text, fontFamily: 'Courier New, monospace', fontSize: 11,
+    padding: '3px 5px', outline: 'none', boxSizing: 'border-box',
+  });
+  const lbl = { fontSize: 9, color: PT.muted, display: 'block', marginBottom: 2, letterSpacing: '0.03em' };
+
+  // Backsight readout — length + bearing (occupied → backsight direction).
+  let readout = null;
+  if (enabled) {
+    const ox = occEnd === 'p1' ? line.x1 : line.x2;
+    const oy = occEnd === 'p1' ? line.y1 : line.y2;
+    const bx = occEnd === 'p1' ? line.x2 : line.x1;
+    const by = occEnd === 'p1' ? line.y2 : line.y1;
+    const len = Math.hypot(line.x2 - line.x1, line.y2 - line.y1);
+    const az  = ((Math.atan2(bx - ox, -(by - oy)) * 180 / Math.PI) + 360) % 360;
+    readout = { len: fmtPxAsReal(len, scaleDenom, units), bsAz: toDMS(az), occLabel: occEnd === 'p1' ? 'End 1' : 'End 2' };
+  }
+
+  function handleConfirm() {
+    if (!enabled) return;
+    setErr('');
+    const A = parse(angle);
+    if (A === null || A === undefined || isNaN(A) || A < 0) { setErr('Enter a valid angle'); return; }
+    const d = parseFloat(dist);
+    if (!(d > 0)) { setErr('Distance must be > 0'); return; }
+    let z = null;
+    if (distMode === 'SD') {
+      z = parse(zenith);
+      if (z === null || z === undefined || isNaN(z) || !(Math.sin(z * Math.PI / 180) > 0)) { setErr('Enter a valid zenith'); return; }
+    }
+    const ok = onConfirm({ angleDeg: A, turn, distReal: d, mode: distMode, zenithDeg: z });
+    if (ok) { setAngle(''); setDist(''); setZenith(''); }   // ready for next leg
+    else setErr('Could not compute leg');
+  }
+
+  return (
+    <div
+      onFocusCapture={() => onActive(true)}
+      onBlurCapture={() => onActive(false)}
+      style={{ padding: '6px 8px 9px', display: 'flex', flexDirection: 'column', gap: 6 }}
+    >
+      {!enabled && (
+        <div style={{ fontSize: 10, color: PT.muted, lineHeight: 1.5, padding: '2px 0' }}>
+          Select a <b>line</b> to turn from.
+        </div>
+      )}
+
+      {/* Backsight readout + occupied end / swap */}
+      {enabled && (
+        <div style={{ background: PT.bgAlt, border: `1px solid ${PT.border}`, borderRadius: 4, padding: '4px 6px', fontSize: 9.5, color: PT.text, lineHeight: 1.5 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: PT.muted }}>BS dist</span><span>{readout.len}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: PT.muted }}>BS brg</span><span>{readout.bsAz}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 3 }}>
+            <span style={{ color: PT.muted }}>Occ: <b style={{ color: PT.accent }}>{readout.occLabel}</b></span>
+            <button onClick={onSwap} title="Swap occupied end" style={{
+              fontSize: 9, fontFamily: 'Courier New, monospace', cursor: 'pointer',
+              background: PT.bg, border: `1px solid ${PT.border}`, borderRadius: 3,
+              color: PT.text, padding: '1px 6px',
+            }}>⇄ Swap</button>
+          </div>
+        </div>
+      )}
+
+      {/* Turn angle */}
+      <div>
+        <span style={lbl}>Turned angle</span>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <div style={{ display: 'flex', flexShrink: 0 }}>
+            {['L', 'R'].map(t => (
+              <button key={t} disabled={!enabled} onClick={() => setTurn(t)} style={{
+                fontSize: 10, fontFamily: 'Courier New, monospace', cursor: enabled ? 'pointer' : 'default',
+                width: 24, padding: '3px 0',
+                background: turn === t ? PT.accent : PT.bg,
+                color: turn === t ? '#FFF' : PT.muted,
+                border: `1px solid ${PT.border}`,
+                borderRadius: t === 'L' ? '3px 0 0 3px' : '0 3px 3px 0',
+                borderLeft: t === 'R' ? 'none' : `1px solid ${PT.border}`,
+              }}>{t}</button>
+            ))}
+          </div>
+          <input value={angle} disabled={!enabled} onChange={e => setAngle(e.target.value)}
+            placeholder="45 30 10" style={fieldStyle()} />
+        </div>
+      </div>
+
+      {/* Distance + mode */}
+      <div>
+        <span style={lbl}>Distance</span>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <input value={dist} disabled={!enabled} onChange={e => setDist(e.target.value)}
+            inputMode="decimal" placeholder={units === 'ft' ? 'ft' : 'm'} style={fieldStyle()} />
+          <select value={distMode} disabled={!enabled} onChange={e => setDistMode(e.target.value)} style={{
+            ...fieldStyle(), width: 56, flexShrink: 0, cursor: enabled ? 'pointer' : 'default',
+          }}>
+            <option value="HD">HD</option>
+            <option value="SD">SD</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Zenith — only for SD */}
+      {distMode === 'SD' && (
+        <div>
+          <span style={lbl}>Zenith angle</span>
+          <input value={zenith} disabled={!enabled} onChange={e => setZenith(e.target.value)}
+            placeholder="90 00 00" style={fieldStyle()} />
+        </div>
+      )}
+
+      {err && <div style={{ fontSize: 9.5, color: '#C0392B' }}>{err}</div>}
+
+      <button onClick={handleConfirm} disabled={!enabled} style={{
+        marginTop: 1, padding: '5px 0', fontSize: 11, fontFamily: 'Courier New, monospace',
+        cursor: enabled ? 'pointer' : 'default',
+        background: enabled ? PT.accent : PT.bgAlt, color: enabled ? '#FFF' : PT.faint,
+        border: `1px solid ${PT.border}`, borderRadius: 4, fontWeight: 700,
+      }}>Draw leg</button>
     </div>
   );
 }
@@ -2903,6 +3085,16 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   const [dimsOnDraw,    setDimsOnDraw]    = useState(page.dimsOnDraw   !== false);
   const [showValueCard, setShowValueCard] = useState(page.showValueCard !== false);
 
+  // ── COGO traverse (turned-angle line entry) ────────────────────────────────
+  // showCogo: opt-in COGO section in the right panel. Default OFF to save space.
+  // cogoOccupiedEnd: which end of the selected backsight line is "occupied".
+  //   'p2' = x2/y2 (last-drawn end, default) · 'p1' = x1/y1.
+  // cogoActive: true while a COGO field is focused — drives the on-canvas
+  //   occupied-end marker so it only shows during data entry, not all the time.
+  const [showCogo,        setShowCogo]        = useState(page.showCogo === true);
+  const [cogoOccupiedEnd, setCogoOccupiedEnd] = useState('p2');
+  const [cogoActive,      setCogoActive]      = useState(false);
+
   // ── North direction (Phase 7) ──────────────────────────────────────────────
   // northAzimuth: clockwise degrees from screen-up that true North points.
   // Default 0 = North is straight up the screen.  Affects dim-bearing display
@@ -3094,11 +3286,11 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   useEffect(() => {
     const t = setTimeout(() => {
       window._fb.DB.updatePage(projectId, page.id, {
-        showGrid, showDims, dimsOnDraw, showValueCard, showScaleBar, showNorthArrow,
+        showGrid, showDims, dimsOnDraw, showValueCard, showScaleBar, showNorthArrow, showCogo,
       });
     }, 400);
     return () => clearTimeout(t);
-  }, [showGrid, showDims, dimsOnDraw, showValueCard, showScaleBar, showNorthArrow]);
+  }, [showGrid, showDims, dimsOnDraw, showValueCard, showScaleBar, showNorthArrow, showCogo]);
 
   // ── Native canvas input handlers (wheel zoom, middle-mouse pan, context menu) ──
   // All three are attached as native DOM listeners on svgWrapRef rather than as
@@ -7863,6 +8055,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               { label: 'Card',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><rect x="1" y="2" width="12" height="10" rx="1.5"/><line x1="1" y1="5.5" x2="13" y2="5.5" strokeWidth="1.2"/><line x1="3" y1="8" x2="8" y2="8" strokeWidth="1"/><line x1="3" y1="10" x2="6" y2="10" strokeWidth="1"/></svg>, state: showValueCard, set: () => setShowValueCard(v => !v), activeCol: '#6B4FA8', activeBg: 'rgba(107,79,168,0.12)' },
               { label: 'Scale Bar',    icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><rect x="1" y="5" width="12" height="4" rx="0.5"/><line x1="4.3" y1="5" x2="4.3" y2="9" strokeWidth="1"/><line x1="7.7" y1="5" x2="7.7" y2="9" strokeWidth="1"/></svg>, state: showScaleBar,  set: () => setShowScaleBar(v => !v),  activeCol: '#8A6A10', activeBg: 'rgba(138,106,16,0.12)' },
               { label: 'N Arrow',      icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><line x1="7" y1="12" x2="7" y2="2"/><polyline points="4 5 7 2 10 5"/><text x="5.5" y="11" fontSize="4" fill="currentColor" stroke="none" fontFamily="sans-serif" fontWeight="bold">N</text></svg>, state: showNorthArrow, set: () => setShowNorthArrow(v => !v), activeCol: '#8A6A10', activeBg: 'rgba(138,106,16,0.12)' },
+              { label: 'COGO',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><circle cx="3.2" cy="10.8" r="1.4"/><line x1="3.2" y1="10.8" x2="11" y2="6"/><path d="M3.2 6.5 A 4.6 4.6 0 0 1 6 5.4" strokeWidth="1"/></svg>, state: showCogo,      set: () => setShowCogo(v => !v),      activeCol: '#2D6A8A', activeBg: 'rgba(45,106,138,0.12)' },
               { label: 'Bg Color',     icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><rect x="1" y="1" width="12" height="12" rx="2"/><path d="M4 10 L7 4 L10 10" strokeWidth="1.2"/><line x1="5.5" y1="8" x2="8.5" y2="8" strokeWidth="1"/></svg>, state: !!bgColor,     set: () => { setBgColor(null); persist(undefined, undefined, undefined, { bgColor: null }); }, activeCol: '#A8326A', activeBg: 'rgba(168,50,106,0.12)' },
             ].map(({ label, icon, state, set, activeCol, activeBg }) => (
               <button key={label}
@@ -9118,6 +9311,33 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             {/* Single-select: full handles (geometry + pivot + rotate) */}
             {selectedShape && selectedIds.length <= 1 && (tool === 'select' || tool === 'text' || prevTool !== null || (tool === 'node' && selectedShape.type !== 'path')) && renderNodes(selectedShape)}
 
+            {/* COGO occupied-end marker — only while a COGO field is focused,
+                so it isn't visible all the time. Pure overlay (not shape data). */}
+            {showCogo && cogoActive && selectedShape && selectedShape.type === 'line' && selectedIds.length === 1 && (() => {
+              const _ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+              const L = selectedShape;
+              const ox = cogoOccupiedEnd === 'p1' ? L.x1 : L.x2;
+              const oy = cogoOccupiedEnd === 'p1' ? L.y1 : L.y2;
+              const bx = cogoOccupiedEnd === 'p1' ? L.x2 : L.x1;
+              const by = cogoOccupiedEnd === 'p1' ? L.y2 : L.y1;
+              const r = 7 * _ps;
+              return (
+                <g style={{ pointerEvents: 'none' }}>
+                  {/* Backsight direction highlight (occupied → backsight) */}
+                  <line x1={ox} y1={oy} x2={bx} y2={by}
+                    stroke="#2D6A8A" strokeWidth={2 * _ps}
+                    strokeDasharray={`${5 * _ps},${4 * _ps}`} opacity={0.7} />
+                  {/* Occupied station marker */}
+                  <circle cx={ox} cy={oy} r={r} fill="rgba(45,106,138,0.18)"
+                    stroke="#2D6A8A" strokeWidth={1.6 * _ps} />
+                  <circle cx={ox} cy={oy} r={1.6 * _ps} fill="#2D6A8A" />
+                  <text x={ox + r + 3 * _ps} y={oy - r} fontSize={11 * _ps} fill="#2D6A8A"
+                    fontFamily="Courier New, monospace" fontWeight="700"
+                    paintOrder="stroke" stroke="#F5F0E3" strokeWidth={3 * _ps}>OCC</text>
+                </g>
+              );
+            })()}
+
             {/* Preview shape while drawing */}
             {renderPreview()}
 
@@ -9794,6 +10014,46 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                   />
                 )}
               </div>
+
+              {/* ── COGO SECTION ───────────────────────────────────────── */}
+              {showCogo && (() => {
+                const bsLine = (selectedIds.length === 1 && selectedShape && selectedShape.type === 'line') ? selectedShape : null;
+                return (
+                  <div style={{ borderTop: `1px solid ${PT.border}` }}>
+                    <div style={{
+                      display: 'flex', alignItems: 'center',
+                      padding: '4px 6px 4px 8px',
+                      background: PT.bgAlt, borderBottom: `1px solid ${PT.border}`,
+                    }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
+                        textTransform: 'uppercase', letterSpacing: '0.08em' }}>COGO</span>
+                    </div>
+                    <CogoPanel
+                      line={bsLine}
+                      occEnd={cogoOccupiedEnd}
+                      onSwap={() => setCogoOccupiedEnd(e => e === 'p1' ? 'p2' : 'p1')}
+                      onActive={setCogoActive}
+                      scaleDenom={scaleDenom}
+                      units={units}
+                      onConfirm={(args) => {
+                        if (!bsLine) return false;
+                        const leg = computeCogoLeg(bsLine, cogoOccupiedEnd, args.turn, args.angleDeg, args.distReal, args.mode, args.zenithDeg, scaleDenom, units);
+                        if (!leg) return false;
+                        const newLine = {
+                          id: newId(), type: 'line',
+                          x1: leg.x1, y1: leg.y1, x2: leg.x2, y2: leg.y2,
+                          stroke: bsLine.stroke, fill: bsLine.fill,
+                          strokeWidth: bsLine.strokeWidth, strokeDash: bsLine.strokeDash,
+                          layerId: bsLine.layerId || activeLayerId,
+                          ...(dimsOnDraw ? {} : { _hideDims: true }),
+                        };
+                        commitShapes([...shapes, newLine]);
+                        return true;
+                      }}
+                    />
+                  </div>
+                );
+              })()}
 
               {/* ── INFO SECTION ───────────────────────────────────────── */}
               {showValueCard && (selectedIds.length > 0 || (selectedLayerForCard && selectedIds.length === 0)) && (
