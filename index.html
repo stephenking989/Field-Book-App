@@ -603,7 +603,18 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.154';
+  const APP_VERSION = '1.155';
+
+  // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
+  // which rolls to the *next* calendar day in western timezones after early
+  // evening (e.g. Nova Scotia, UTC-3/-4) — stamping tomorrow's date onto field
+  // notes. Auto-dates must always reflect the surveyor's LOCAL date.
+  function todayLocalISO() {
+    const d = new Date();
+    const m   = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${m}-${day}`;
+  }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHOTO STORAGE — IndexedDB
@@ -886,7 +897,7 @@
         pageNumber: proj.pages.length + 1,
         type: 'data',
         title: '',
-        date: new Date().toISOString().split('T')[0],
+        date: todayLocalISO(),
         weather: '',
         notes: '',
         columns: [],
@@ -1383,7 +1394,7 @@
 
     function exportBackup() {
       const data = localStorage.getItem('fb_projects') || '[]';
-      const date = new Date().toISOString().split('T')[0];
+      const date = todayLocalISO();
       const blob = new Blob([data], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -2278,7 +2289,7 @@
         jobNumber: form.jobNumber.trim(),
         client: form.client.trim(),
         surveyor: form.surveyor.trim() || 'Surveyor',
-        date: new Date().toISOString().split('T')[0],
+        date: todayLocalISO(),
       });
       toast.success('Project created');
       onCreate(proj);
@@ -3037,9 +3048,21 @@
       pdf.line(28, 27, W - 28, 27);
 
       // ── Project name — vertically centred in upper half ───────────────────
-      const nameLines = pdf.splitTextToSize(proj.name, W - 40);
-      const nameFontSize = nameLines.length > 1 ? 26 : 32;
-      pdf.setFontSize(nameFontSize); pdf.setFont('helvetica', 'bold');
+      // splitTextToSize measures at the CURRENT font size, so the size must be
+      // set BEFORE wrapping. Try 32pt first; if it needs >1 line, drop to 26pt
+      // and re-wrap. (Previously this measured at the leftover 7pt label size,
+      // so long names "fit" on one line and then overflowed the page at 32pt.)
+      pdf.setFont('helvetica', 'bold');
+      const nameMaxW = W - 56; // matches the 28mm side margins / rules
+      pdf.setFontSize(32);
+      let nameLines = pdf.splitTextToSize(proj.name, nameMaxW);
+      let nameFontSize = 32;
+      if (nameLines.length > 1) {
+        nameFontSize = 26;
+        pdf.setFontSize(26);
+        nameLines = pdf.splitTextToSize(proj.name, nameMaxW);
+      }
+      pdf.setFontSize(nameFontSize);
       pdf.setTextColor(15, 15, 15);
       // Sit the name around 38% down the page
       const nameY = H * 0.38 - ((nameLines.length - 1) * nameFontSize * 0.3528 * 0.6);
@@ -3142,8 +3165,10 @@
             try {
               const canvas = await window.html2canvas(tmp, { scale: 1.2, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
               document.body.removeChild(tmp);
-              // Place image filling the entire content area — use PNG to keep transparency so the grid shows through
-              pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH);
+              // Place image filling the entire content area — use PNG to keep transparency so the grid shows through.
+              // 'FAST' enables jsPDF's Flate compression on both the RGB image and its alpha SMask; without it jsPDF
+              // stores the full 1920×2448 bitmap RAW (~14 MB) plus an uncompressed alpha mask (~5 MB) on EVERY export.
+              pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH, undefined, 'FAST');
               // North arrow and scale bar drawn directly in PDF (on top of sketch)
               if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
               if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin, page.viewBox?.w, availW);
@@ -3474,7 +3499,7 @@
       pdf.text('2', W - margin - 4, H - margin - 4, { align: 'right' });
 
       // ── Save ──────────────────────────────────────────────────────────────
-      const fname = `${proj.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_fieldbook_${new Date().toISOString().split('T')[0]}.pdf`;
+      const fname = `${proj.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_fieldbook_${todayLocalISO()}.pdf`;
       pdf.save(fname);
       toast.success(`Exported ${fname}`);
 
@@ -3535,8 +3560,9 @@
           try {
             const canvas = await window.html2canvas(tmp, { scale: 1.2, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
             document.body.removeChild(tmp);
-            // Fill the entire content area — use PNG to keep transparency so the grid shows through
-            pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH);
+            // Fill the entire content area — use PNG to keep transparency so the grid shows through.
+            // 'FAST' = jsPDF Flate compression on the bitmap + alpha SMask (otherwise stored raw, ~18 MB/page).
+            pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH, undefined, 'FAST');
             // North arrow and scale bar drawn directly in PDF (on top of sketch)
             if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
             if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin, page.viewBox?.w, availW);
@@ -3707,7 +3733,7 @@
       pdf.text(`Exported  ${exportTsSP}`, W - margin - 4, H - margin - 4, { align: 'right' });
 
       const slug = (page.title?.trim() || `P${page.pageNumber}`).replace(/[^a-zA-Z0-9_-]/g, '_');
-      const fname = `${proj.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_${slug}_${new Date().toISOString().split('T')[0]}.pdf`;
+      const fname = `${proj.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_${slug}_${todayLocalISO()}.pdf`;
       pdf.save(fname);
       toast.success(`Exported ${fname}`);
     } catch (err) {
@@ -3728,6 +3754,7 @@
     title:  { label: 'Title',  color: '#D97706', bg: '#FEF3C7', Icon: () => <Ico.File />   },
     photo:  { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE', Icon: () => <Ico.Camera /> },
     points: { label: 'Points', color: '#0E7490', bg: '#E0F2FE', Icon: () => <Ico.Pin />    },
+    notes:  { label: 'Notes',  color: '#B45309', bg: '#FEF3C7', Icon: () => <Ico.Pencil /> },
   };
 
   function ProjectView({ projectId }) {
@@ -7076,7 +7103,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${(page.label || 'data').replace(/[^a-zA-Z0-9_-]/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`;
+      a.download = `${(page.label || 'data').replace(/[^a-zA-Z0-9_-]/g, '_')}_${todayLocalISO()}.csv`;
       a.click(); URL.revokeObjectURL(url);
       toast.success('CSV exported');
     }
@@ -7107,8 +7134,8 @@
         const imgH = canvas.height / 2;
         const orientation = imgW > imgH ? 'landscape' : 'portrait';
         const pdf = new jsPDF({ orientation, unit: 'px', format: [imgW, imgH] });
-        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, imgW, imgH);
-        pdf.save(`${(page.label || 'data').replace(/[^a-zA-Z0-9_-]/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`);
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, imgW, imgH, undefined, 'FAST');
+        pdf.save(`${(page.label || 'data').replace(/[^a-zA-Z0-9_-]/g, '_')}_${todayLocalISO()}.pdf`);
         toast.success('PDF saved');
       } catch {
         toast.error('PDF export failed');
