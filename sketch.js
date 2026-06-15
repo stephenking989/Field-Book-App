@@ -648,8 +648,11 @@ function applyArcRadius(s, newR) {
   const { px: cpx, py: cpy } = getCurvePI(s);
   const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
   // Which side of chord BC→EC is the current PI on?
+  // `cross` here equals −dot(PI−BC, perp) for the left-hand `perp` below, so the
+  // side that keeps the new PI on the SAME side as the old one is sign(−cross).
+  // (Using +cross flips the arc to the opposite side of the chord on radius edit.)
   const cross = (cpx - x1) * (y2 - y1) - (cpy - y1) * (x2 - x1);
-  const side  = cross >= 0 ? 1 : -1;
+  const side  = cross >= 0 ? -1 : 1;
   // New PI distance from chord midpoint along perpendicular bisector:
   // sin(Δ/2) = h/R → T = R*tan(Δ/2) → PI_dist = sqrt(T²-h²)
   const sinHalf = Math.min(1, h / r);
