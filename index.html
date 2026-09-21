@@ -603,7 +603,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.155';
+  const APP_VERSION = '1.156';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -3773,7 +3773,11 @@
     const pageImportInputRef = useRef(null);
     const toast = useToast();
 
-    function reload() { setProject(DB.getProject(projectId)); }
+    // getProject returns the in-memory cached object, and DB mutations (reorder,
+    // duplicate, etc.) mutate that same object in place. Passing the identical
+    // reference to setProject makes React bail out (Object.is), so the UI wouldn't
+    // update until a remount. Spread into a new object to force the re-render.
+    function reload() { const p = DB.getProject(projectId); setProject(p ? { ...p } : null); }
     useEffect(() => { reload(); }, [projectId]);
 
     function startEditCover() {
