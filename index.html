@@ -603,7 +603,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.156';
+  const APP_VERSION = '1.157';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -775,46 +775,134 @@
   // DATA LAYER
   // ─────────────────────────────────────────────────────────────────────────────
 
-  // ── Per-project storage helpers ───────────────────────────────────────────
-  // Each project lives in its own localStorage key (fb_project_<id>).
-  // A lightweight index (fb_project_index) holds [{id,name,createdAt}] for
-  // listing without loading full project data.
-  let _indexCache   = null;  // [{id, name, createdAt}]
+  // ── Project storage — IndexedDB with a synchronous write-through cache ────
+  // Projects used to live in localStorage (fb_project_<id>), which mobile
+  // browsers cap at ~5 MB per origin — a few active fieldbooks hit that
+  // ceiling. Projects now live in their own IndexedDB database, whose quota
+  // is a share of free disk (typically GBs).
+  //
+  // The DB API stays synchronous: every project is loaded into memory once at
+  // boot (`_dataReady`, awaited before React mounts), reads come from the
+  // cache, and writes update the cache immediately then persist to IDB on a
+  // short coalescing timer. Pending writes are flushed when the app is hidden.
+  //
+  // Each project is one record keyed by id (value = JSON string); the listing
+  // index [{id,name,createdAt}] is the record '__index__'. If IndexedDB can't
+  // be opened (rare: some private-browsing modes) the layer falls back to the
+  // old localStorage keys so the app still works.
+  const projectDB = (() => {
+    const DB_NAME = 'fieldbook-data';
+    const STORE   = 'projects';
+    let _dbPromise = null;
+
+    function open() {
+      if (_dbPromise) return _dbPromise;
+      _dbPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror   = () => reject(req.error);
+      });
+      return _dbPromise;
+    }
+
+    // Every record as { key: jsonString }.
+    async function getAll() {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const out = {};
+        const req = db.transaction(STORE, 'readonly').objectStore(STORE).openCursor();
+        req.onsuccess = e => {
+          const cur = e.target.result;
+          if (cur) { out[cur.key] = cur.value; cur.continue(); } else resolve(out);
+        };
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    // Apply puts ({key: jsonString}) and deletes ([key]) in one transaction.
+    // Resolves only once the transaction has committed.
+    async function write(puts, dels) {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readwrite');
+        const st = tx.objectStore(STORE);
+        Object.keys(puts).forEach(k => st.put(puts[k], k));
+        dels.forEach(k => st.delete(k));
+        tx.oncomplete = () => resolve();
+        tx.onerror    = () => reject(tx.error);
+        tx.onabort    = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
+      });
+    }
+
+    return { open, getAll, write };
+  })();
+
+  const INDEX_KEY = '__index__';
+  let _backend      = 'idb'; // 'idb' | 'ls' (fallback when IndexedDB is unavailable)
+  let _indexCache   = [];    // [{id, name, createdAt}]
   let _projectCache = {};    // full project objects keyed by id
+  const _dirty   = new Set(); // record keys awaiting an IDB put
+  const _deleted = new Set(); // project ids awaiting an IDB delete
+  let _flushTimer = null;
+  let _flushChain = Promise.resolve();
+
+  function _reportWriteError(err) {
+    console.error('FieldBook: project save failed', err);
+    if (window._fbShowStorageError) window._fbShowStorageError();
+  }
+
+  // Write all pending changes to IDB now. Returns a promise that settles when
+  // they have committed (DataManagementModal awaits this before reloading).
+  function _flush() {
+    if (_flushTimer) { clearTimeout(_flushTimer); _flushTimer = null; }
+    if (_backend !== 'idb' || (_dirty.size === 0 && _deleted.size === 0)) return _flushChain;
+    const puts = {};
+    _dirty.forEach(k => {
+      if (k === INDEX_KEY)    puts[k] = JSON.stringify(_indexCache);
+      else if (_projectCache[k]) puts[k] = JSON.stringify(_projectCache[k]);
+    });
+    const dels = [..._deleted];
+    _dirty.clear(); _deleted.clear();
+    _flushChain = _flushChain.then(() => projectDB.write(puts, dels)).catch(err => {
+      // Re-queue so the next save retries these records.
+      Object.keys(puts).forEach(k => { if (k === INDEX_KEY || _projectCache[k]) _dirty.add(k); });
+      dels.forEach(k => { if (!_projectCache[k]) _deleted.add(k); });
+      _reportWriteError(err);
+    });
+    return _flushChain;
+  }
+  function _scheduleFlush() {
+    if (!_flushTimer) _flushTimer = setTimeout(_flush, 200);
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') _flush();
+  });
+  window.addEventListener('pagehide', () => _flush());
+
+  function _lsSet(key, value) {
+    try { localStorage.setItem(key, value); }
+    catch (e) { _reportWriteError(e); }
+  }
 
   function _getIndex() {
-    if (_indexCache) return _indexCache;
-    try { _indexCache = JSON.parse(localStorage.getItem('fb_project_index') || '[]'); }
-    catch { _indexCache = []; }
     return _indexCache;
   }
   function _saveIndex(arr) {
     _indexCache = arr;
-    try {
-      localStorage.setItem('fb_project_index', JSON.stringify(arr));
-    } catch(e) {
-      if (e.name === 'QuotaExceededError' || e.code === 22) {
-        if (window._fbShowStorageError) window._fbShowStorageError();
-        else console.error('FieldBook: localStorage quota exceeded saving project index');
-      }
-    }
+    if (_backend === 'idb') { _dirty.add(INDEX_KEY); _scheduleFlush(); }
+    else _lsSet('fb_project_index', JSON.stringify(arr));
   }
   function _getProjectRaw(id) {
-    if (_projectCache[id] !== undefined) return _projectCache[id];
-    try { _projectCache[id] = JSON.parse(localStorage.getItem('fb_project_' + id)); }
-    catch { _projectCache[id] = null; }
-    return _projectCache[id];
+    return _projectCache[id] ?? null;
   }
   function _saveProjectRaw(proj) {
     _projectCache[proj.id] = proj;
-    try {
-      localStorage.setItem('fb_project_' + proj.id, JSON.stringify(proj));
-    } catch(e) {
-      if (e.name === 'QuotaExceededError' || e.code === 22) {
-        if (window._fbShowStorageError) window._fbShowStorageError();
-        else console.error('FieldBook: localStorage quota exceeded saving project', proj.id);
-      }
-    }
+    if (_backend === 'idb') { _deleted.delete(proj.id); _dirty.add(proj.id); _scheduleFlush(); }
+    else _lsSet('fb_project_' + proj.id, JSON.stringify(proj));
     const idx = _getIndex();
     const i = idx.findIndex(e => e.id === proj.id);
     const entry = { id: proj.id, name: proj.name || '', createdAt: proj.createdAt };
@@ -823,19 +911,101 @@
   }
   function _deleteProjectRaw(id) {
     delete _projectCache[id];
-    localStorage.removeItem('fb_project_' + id);
+    if (_backend === 'idb') { _dirty.delete(id); _deleted.add(id); _scheduleFlush(); }
+    else localStorage.removeItem('fb_project_' + id);
     _saveIndex(_getIndex().filter(e => e.id !== id));
   }
 
-  // One-time migration: split legacy fb_projects blob into per-project keys.
-  (function _migrateIfNeeded() {
-    if (localStorage.getItem('fb_project_index') !== null) return;
-    const raw = localStorage.getItem('fb_projects');
-    if (!raw) return;
+  // Read the pre-IndexedDB localStorage layout: per-project keys plus the
+  // even older single `fb_projects` blob (only used when no index exists,
+  // matching the original split-migration rule).
+  function _readLocalStorageProjects() {
+    const projects = {};
+    const keys = [];
+    let index = null;
     try {
-      JSON.parse(raw).forEach(p => _saveProjectRaw(p));
-      localStorage.removeItem('fb_projects');
-    } catch(e) { /* leave old data intact on parse error */ }
+      index = JSON.parse(localStorage.getItem('fb_project_index') || 'null');
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith('fb_project_') || k === 'fb_project_index') continue;
+        keys.push(k);
+        try { const p = JSON.parse(localStorage.getItem(k)); if (p && p.id) projects[p.id] = p; } catch {}
+      }
+      if (index === null) {
+        const blob = JSON.parse(localStorage.getItem('fb_projects') || 'null');
+        if (Array.isArray(blob)) {
+          blob.forEach(p => { if (p && p.id && !projects[p.id]) projects[p.id] = p; });
+          keys.push('fb_projects');
+        }
+      }
+    } catch (e) { console.error('FieldBook: reading localStorage projects failed', e); }
+    if (index !== null) keys.push('fb_project_index');
+    return { index, projects, keys };
+  }
+
+  // Build a listing index that covers exactly the projects we have, keeping
+  // the stored order and prepending any project the index doesn't mention.
+  function _buildIndex(index, projects) {
+    const seen = new Set();
+    const out = [];
+    (index || []).forEach(e => {
+      if (e && projects[e.id] && !seen.has(e.id)) { seen.add(e.id); out.push(e); }
+    });
+    Object.values(projects).forEach(p => {
+      if (!seen.has(p.id)) { seen.add(p.id); out.unshift({ id: p.id, name: p.name || '', createdAt: p.createdAt }); }
+    });
+    return out;
+  }
+
+  // Boot: load every project into memory and migrate any localStorage
+  // projects into IndexedDB. localStorage copies are removed only after the
+  // IDB transaction commits, so an interrupted migration just re-runs.
+  const _dataReady = (async () => {
+    const ls = _readLocalStorageProjects();
+    let stored;
+    try {
+      stored = await Promise.race([
+        projectDB.getAll(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('IndexedDB open timed out')), 10000)),
+      ]);
+    } catch (err) {
+      console.error('FieldBook: IndexedDB unavailable — using localStorage', err);
+      _backend = 'ls';
+      _projectCache = ls.projects;
+      _indexCache = _buildIndex(ls.index, ls.projects);
+      return;
+    }
+
+    const projects = {};
+    let index = null;
+    Object.keys(stored).forEach(k => {
+      try {
+        if (k === INDEX_KEY) index = JSON.parse(stored[k]);
+        else { const p = JSON.parse(stored[k]); if (p && p.id) projects[p.id] = p; }
+      } catch {}
+    });
+    // A project already in IDB is the live copy; only bring over new ones.
+    const migrated = Object.keys(ls.projects).filter(id => !projects[id]);
+    migrated.forEach(id => { projects[id] = ls.projects[id]; });
+    _projectCache = projects;
+    _indexCache = _buildIndex([...(index || []), ...(ls.index || [])], projects);
+
+    if (ls.keys.length > 0) {
+      const puts = { [INDEX_KEY]: JSON.stringify(_indexCache) };
+      migrated.forEach(id => { puts[id] = JSON.stringify(projects[id]); });
+      try {
+        await projectDB.write(puts, []);
+        ls.keys.forEach(k => localStorage.removeItem(k));
+        if (migrated.length) console.log(`[projectDB] migrated ${migrated.length} project(s) from localStorage`);
+      } catch (err) {
+        // Keep localStorage intact; queue the records so normal saves retry.
+        console.error('FieldBook: migration to IndexedDB failed — localStorage copy kept', err);
+        Object.keys(puts).forEach(k => _dirty.add(k));
+      }
+    }
+
+    // Ask the browser not to evict our data under storage pressure.
+    try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch {}
   })();
 
   const DB = {
@@ -983,6 +1153,8 @@
 
   // Single-project save — used by importProjectFromFile to avoid re-saving all projects.
   DB.saveProject = function(proj) { _saveProjectRaw(proj); };
+  // Force pending IndexedDB writes to commit (e.g. before a reload).
+  DB.flush = _flush;
 
   // ─────────────────────────────────────────────────────────────────────────────
   // ROUTER
@@ -1351,25 +1523,26 @@
     const fileInputRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
 
-    // Storage usage gauge: localStorage bytes for projects/pages/shapes/etc
-    // vs IndexedDB bytes for photos. Tracked separately because they have
-    // independent caps (localStorage ~5-10 MB, IDB 60%+ of free disk).
-    const [usage, setUsage] = useState({ ls: 0, idb: 0, quota: null });
+    // Storage usage gauge: project data and photos both live in IndexedDB,
+    // sharing the origin quota reported by navigator.storage.estimate().
+    const [usage, setUsage] = useState({ ls: 0, idb: 0, used: null, quota: null, persisted: null });
 
     useEffect(() => {
       (async () => {
         let lsBytes = 0;
-        try { lsBytes = (localStorage.getItem('fb_projects') || '').length; } catch {}
+        try { lsBytes = JSON.stringify(DB.getProjects()).length; } catch {}
         let idbBytes = 0;
         try { idbBytes = await photoDB.getUsageBytes(); } catch {}
-        let quota = null;
+        let quota = null, used = null, persisted = null;
         try {
           if (navigator.storage?.estimate) {
             const est = await navigator.storage.estimate();
             quota = est.quota || null;
+            used  = est.usage ?? null;
           }
+          if (navigator.storage?.persisted) persisted = await navigator.storage.persisted();
         } catch {}
-        setUsage({ ls: lsBytes, idb: idbBytes, quota });
+        setUsage({ ls: lsBytes, idb: idbBytes, used, quota, persisted });
       })();
     }, []);
 
@@ -1392,35 +1565,45 @@
       }
     }
 
-    function exportBackup() {
-      const data = localStorage.getItem('fb_projects') || '[]';
-      const date = todayLocalISO();
-      const blob = new Blob([data], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `fieldbook_backup_${date}.json`;
-      a.click(); URL.revokeObjectURL(url);
-      toast.success('Backup downloaded');
+    // Photos and sketch images are inlined so the backup is self-contained.
+    async function exportBackup() {
+      try {
+        const projects = await Promise.all(DB.getProjects().map(inlinePhotosForExport));
+        const blob = new Blob([JSON.stringify(projects)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `fieldbook_backup_${todayLocalISO()}.json`;
+        a.click(); URL.revokeObjectURL(url);
+        toast.success(`Backup downloaded (${projects.length} project${projects.length === 1 ? '' : 's'})`);
+      } catch (err) {
+        console.error('Backup export failed:', err);
+        toast.error('Backup failed');
+      }
     }
 
     function importBackup(e) {
       const file = e.target.files[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = ev => {
+      reader.onload = async ev => {
+        let parsed;
+        try { parsed = JSON.parse(ev.target.result); }
+        catch { toast.error('Failed to parse backup file'); return; }
+        if (!Array.isArray(parsed) || parsed.some(p => !p || !p.id || !Array.isArray(p.pages))) {
+          toast.error('Invalid backup — expected a project array');
+          return;
+        }
+        if (!window.confirm(`Replace ALL existing projects with ${parsed.length} project(s) from this backup?\n\nThis cannot be undone.`)) return;
         try {
-          const parsed = JSON.parse(ev.target.result);
-          if (!Array.isArray(parsed)) {
-            toast.error('Invalid backup — expected a project array');
-            return;
-          }
-          if (!window.confirm(`Replace ALL existing projects with ${parsed.length} project(s) from this backup?\n\nThis cannot be undone.`)) return;
-          localStorage.setItem('fb_projects', JSON.stringify(parsed));
+          for (const proj of parsed) await extractPhotosFromImport(proj);
+          DB.saveProjects(parsed);
+          await DB.flush();
           toast.success(`Restored ${parsed.length} project(s)`);
           onClose();
           window.location.reload();
-        } catch {
-          toast.error('Failed to parse backup file');
+        } catch (err) {
+          console.error('Backup restore failed:', err);
+          toast.error('Restore failed');
         }
       };
       reader.readAsText(file);
@@ -1439,26 +1622,27 @@
         <div ref={trapRef} className="modal-sheet">
           <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
           <h2 className="text-xl font-bold text-fb-dark mb-1">Data Management</h2>
-          <p className="text-fb-muted text-sm mb-4">Back up or restore all projects. Photos live in a separate IndexedDB with its own storage budget.</p>
+          <p className="text-fb-muted text-sm mb-4">Back up or restore all projects, photos included. Everything is stored on this device.</p>
 
           {/* Storage gauge */}
           <div style={{ borderRadius: 12, border: '1px solid #CEC5B0', background: '#EBE5D5', padding: 12, marginBottom: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: '#1A1A1A', marginBottom: 8 }}>Storage</div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#5A5248', marginBottom: 4 }}>
-              <span>Projects &amp; data (localStorage)</span>
+              <span>Projects &amp; data</span>
               <span style={{ fontFamily: "'Share Tech Mono', 'Courier New', monospace", color: '#1A1A1A' }}>{fmtMB(usage.ls)}</span>
             </div>
-            <div style={{ height: 6, borderRadius: 4, background: '#D2C9B7', overflow: 'hidden', marginBottom: 10 }}>
-              <div style={{ height: '100%', width: `${Math.min(100, usage.ls / 5e6 * 100)}%`, background: '#4E7864' }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#5A5248', marginBottom: 8 }}>
+              <span>Photos &amp; images</span>
+              <span style={{ fontFamily: "'Share Tech Mono', 'Courier New', monospace", color: '#1A1A1A' }}>{fmtMB(usage.idb)}</span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#5A5248', marginBottom: 4 }}>
-              <span>Photos (IndexedDB)</span>
-              <span style={{ fontFamily: "'Share Tech Mono', 'Courier New', monospace", color: '#1A1A1A' }}>
-                {fmtMB(usage.idb)}{usage.quota ? ` / ${fmtMB(usage.quota)}` : ''}
+            <div style={{ height: 6, borderRadius: 4, background: '#D2C9B7', overflow: 'hidden', marginBottom: 4 }}>
+              <div style={{ height: '100%', width: `${usage.quota && usage.used != null ? Math.min(100, usage.used / usage.quota * 100) : 0}%`, background: '#4E7864' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#5A5248' }}>
+              <span>{usage.persisted === true ? 'Protected from auto-cleanup' : usage.persisted === false ? 'Not protected — keep backups' : ''}</span>
+              <span style={{ fontFamily: "'Share Tech Mono', 'Courier New', monospace" }}>
+                {usage.quota && usage.used != null ? `${fmtMB(usage.used)} of ${fmtMB(usage.quota)}` : ''}
               </span>
-            </div>
-            <div style={{ height: 6, borderRadius: 4, background: '#D2C9B7', overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${usage.quota ? Math.min(100, usage.idb / usage.quota * 100) : 0}%`, background: '#7C3AED' }} />
             </div>
             <button onClick={doPrune}
               style={{ marginTop: 10, width: '100%', padding: '8px 0', borderRadius: 8,
@@ -8418,7 +8602,7 @@
   function _StorageErrorBridge() {
     const toast = useToast();
     useEffect(() => {
-      window._fbShowStorageError = () => toast.error('Storage full — sketch could not be saved. Delete unused projects to free space.');
+      window._fbShowStorageError = () => toast.error('Changes could not be saved — device storage may be full. Export a backup, then free up space.');
       return () => { window._fbShowStorageError = null; };
     }, []);
     return null;
@@ -8540,7 +8724,7 @@
                  photoDB, parseDMSInput, formatDMS };
 
   // Mount the app only after sketch.js has loaded and resolved _sketchPromise
-  _sketchPromise.then(() => {
+  Promise.all([_sketchPromise, _dataReady.catch(() => {})]).then(() => {
     // Route persistence: restore last route on fresh PWA launch so the user
     // lands back on their project/page instead of the home screen.
     // Also primes the DB cache so React's first getProjects() call is free.
