@@ -603,7 +603,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.157';
+  const APP_VERSION = '1.158';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1008,6 +1008,23 @@
     try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch {}
   })();
 
+  // Day folders are derived from page order, not stored: a title page starts a
+  // day and every page after it, up to the next title page, is its sub-page.
+  // Pages above the first title page form a leading group with title: null.
+  // Returns [{ title: page|null, pages: [subPages] }].
+  function groupPages(pages) {
+    const groups = [];
+    let cur = null;
+    for (const pg of (pages || [])) {
+      if (pg.type === 'title') { cur = { title: pg, pages: [] }; groups.push(cur); }
+      else {
+        if (!cur) { cur = { title: null, pages: [] }; groups.push(cur); }
+        cur.pages.push(pg);
+      }
+    }
+    return groups;
+  }
+
   const DB = {
     getProjects() {
       return _getIndex().map(e => _getProjectRaw(e.id)).filter(Boolean);
@@ -1059,7 +1076,9 @@
       _saveProjectRaw(newProj);
       return newProj;
     },
-    addPage(projectId, pageData) {
+    // atIndex (optional) inserts at that position in the flat page list instead
+    // of appending — used to add a page inside a specific day folder.
+    addPage(projectId, pageData, atIndex) {
       const proj = _getProjectRaw(projectId);
       if (!proj) return null;
       const page = {
@@ -1086,7 +1105,12 @@
         shapes: [],
         ...pageData,
       };
-      proj.pages.push(page);
+      if (Number.isInteger(atIndex) && atIndex >= 0 && atIndex < proj.pages.length) {
+        proj.pages.splice(atIndex, 0, page);
+        proj.pages.forEach((g, i) => { g.pageNumber = i + 1; });
+      } else {
+        proj.pages.push(page);
+      }
       _saveProjectRaw(proj);
       return page;
     },
@@ -1118,11 +1142,19 @@
       const uid = () => String(++n);
       const newPage = JSON.parse(JSON.stringify(src));
       newPage.id = uid();
-      newPage.pageNumber = proj.pages.length + 1;
       newPage.title = (src.title?.trim() ? src.title.trim() + ' (Copy)' : '(Copy)');
+      delete newPage.collapsed;
       if (newPage.rows)   newPage.rows   = newPage.rows.map(r => ({ ...r, id: uid() }));
       if (newPage.shapes) newPage.shapes = newPage.shapes.map(s => ({ ...s, id: uid() }));
-      proj.pages.push(newPage);
+      // Insert beside the source so the copy stays in the same day folder. A
+      // title page is inserted after its whole day, so the copy starts a new
+      // empty day instead of taking over the original's sub-pages.
+      let at = proj.pages.indexOf(src) + 1;
+      if (src.type === 'title') {
+        while (at < proj.pages.length && proj.pages[at].type !== 'title') at++;
+      }
+      proj.pages.splice(at, 0, newPage);
+      proj.pages.forEach((g, i) => { g.pageNumber = i + 1; });
       _saveProjectRaw(proj);
       return newPage;
     },
@@ -1134,6 +1166,52 @@
       pages.splice(toIdx, 0, moved);
       pages.forEach((pg, i) => { pg.pageNumber = i + 1; });
       proj.pages = pages;
+      _saveProjectRaw(proj);
+    },
+    // Move a title page together with its sub-pages past the neighbouring day.
+    // dir: -1 = up, 1 = down.
+    moveGroup(projectId, titlePageId, dir) {
+      const proj = _getProjectRaw(projectId);
+      if (!proj) return;
+      const groups = groupPages(proj.pages);
+      const gi = groups.findIndex(g => g.title && g.title.id === titlePageId);
+      const ni = gi + dir;
+      // Loose pages above the first title page always stay at the top.
+      if (gi === -1 || ni < 0 || ni >= groups.length || !groups[ni].title) return;
+      [groups[gi], groups[ni]] = [groups[ni], groups[gi]];
+      proj.pages = groups.flatMap(g => g.title ? [g.title, ...g.pages] : g.pages);
+      proj.pages.forEach((pg, i) => { pg.pageNumber = i + 1; });
+      _saveProjectRaw(proj);
+    },
+    // Move a page to the end of a day folder (titlePageId = null → the loose
+    // pages above the first title page).
+    movePageToGroup(projectId, pageId, titlePageId) {
+      const proj = _getProjectRaw(projectId);
+      if (!proj) return;
+      const moved = proj.pages.find(g => g.id === pageId);
+      if (!moved || moved.type === 'title') return;
+      const pages = proj.pages.filter(g => g.id !== pageId);
+      let at = 0;
+      if (titlePageId) {
+        const ti = pages.findIndex(g => g.id === titlePageId);
+        if (ti === -1) return;
+        at = ti + 1;
+      }
+      while (at < pages.length && pages[at].type !== 'title') at++;
+      pages.splice(at, 0, moved);
+      pages.forEach((pg, i) => { pg.pageNumber = i + 1; });
+      proj.pages = pages;
+      _saveProjectRaw(proj);
+    },
+    // excludeMap: { [pageId]: bool } — pages left out of PDF exports by default.
+    setPdfExclude(projectId, excludeMap) {
+      const proj = _getProjectRaw(projectId);
+      if (!proj) return;
+      proj.pages.forEach(pg => {
+        if (!(pg.id in excludeMap)) return;
+        if (excludeMap[pg.id]) pg.pdfExclude = true;
+        else delete pg.pdfExclude;
+      });
       _saveProjectRaw(proj);
     },
     // ── Custom data-page templates ────────────────────────────────────────────
@@ -3187,13 +3265,23 @@
   }
 
   // Main project PDF export — called from ProjectView.
-  async function exportProjectPDF(projectId, toast, setExporting) {
+  // pageIds (optional array) limits the export to those pages; omitted = whole job.
+  async function exportProjectPDF(projectId, toast, setExporting, pageIds) {
     if (!window.jspdf?.jsPDF) { toast.error('PDF library not loaded'); return; }
     setExporting(true);
 
     try {
       const proj = DB.getProject(projectId);
       if (!proj) { toast.error('Project not found'); return; }
+      const allPages = proj.pages || [];
+      const idSet = pageIds ? new Set(pageIds) : null;
+      const exportPages = idSet ? allPages.filter(p => idSet.has(p.id)) : allPages;
+      // Day each page belongs to (its title page), for TOC headings + filename.
+      const dayOf = {};
+      groupPages(allPages).forEach(g => {
+        if (g.title) dayOf[g.title.id] = g.title;
+        g.pages.forEach(p => { dayOf[p.id] = g.title; });
+      });
 
       const { jsPDF } = window.jspdf;
       const W = 210, H = 297, margin = 14;
@@ -3284,13 +3372,15 @@
       pdf.line(28, afterMetaY, W - 28, afterMetaY);
 
       // ── Page count + created date ─────────────────────────────────────────
-      const pageCount = proj.pages?.length || 0;
+      const pageCount = exportPages.length < allPages.length
+        ? `${exportPages.length} of ${allPages.length}`
+        : String(allPages.length);
       const createdStr = new Date(proj.createdAt).toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' });
       const infoY = afterMetaY + 10;
       pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(120, 120, 120);
       pdf.text('PAGES', mLeft, infoY);
       pdf.setFontSize(11); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(20, 20, 20);
-      pdf.text(String(pageCount), mLeft, infoY + 7);
+      pdf.text(pageCount, mLeft, infoY + 7);
       pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(120, 120, 120);
       pdf.text('CREATED', mRight, infoY);
       pdf.setFontSize(11); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(20, 20, 20);
@@ -3305,23 +3395,35 @@
       pdf.text('FieldBook  ·  Digital Field Notebook', 28, ftRuleY + 6);
       pdf.text(`Exported  ${exportDateStr}`, W - 28, ftRuleY + 6, { align: 'right' });
 
-      // ── PAGE 2: TOC PLACEHOLDER (filled in below) ──────────────────────────
-      pdf.addPage();
+      // ── TOC PLACEHOLDER PAGES (filled in below) ────────────────────────────
+      // The TOC row count is known up front (one row per page + one heading per
+      // day), so reserve as many TOC pages as it needs before the content.
+      const TOC_TOP = margin + 46, TOC_ROW_H = 12;
+      const tocPerPage = Math.floor((H - margin - 20 - TOC_TOP) / TOC_ROW_H) + 1;
+      let tocRowCount = 0, _prevDay;
+      exportPages.forEach(p => {
+        const day = dayOf[p.id] || null;
+        if (day !== _prevDay) { if (day) tocRowCount++; _prevDay = day; }
+        tocRowCount++;
+      });
+      const tocPageCount = Math.max(1, Math.ceil(tocRowCount / tocPerPage));
+      for (let i = 0; i < tocPageCount; i++) pdf.addPage();
 
       // ── CONTENT PAGES ─────────────────────────────────────────────────────
       const tocEntries = [];
 
-      for (const page of (proj.pages || [])) {
+      for (const page of exportPages) {
         pdf.addPage();
-        const pdfPageNum = pdf.getNumberOfPages(); // 3, 4, 5, ...
+        const pdfPageNum = pdf.getNumberOfPages();
         const meta = { data:   { label: 'Data',   color: '#606060', bg: '#EEEEEE' },
                        sketch: { label: 'Sketch', color: '#606060', bg: '#EEEEEE' },
                        title:  { label: 'Title',  color: '#606060', bg: '#EEEEEE' },
                        photo:  { label: 'Photos', color: '#606060', bg: '#EEEEEE' },
+                       points: { label: 'Points', color: '#606060', bg: '#EEEEEE' },
                        notes:  { label: 'Notes',  color: '#606060', bg: '#EEEEEE' } }[page.type]
                    || { label: 'Data', color: '#606060', bg: '#EEEEEE' };
         const displayTitle = page.title?.trim() || `P.${page.pageNumber} — ${meta.label}`;
-        tocEntries.push({ pageNum: page.pageNumber, typeLabel: meta.label, title: displayTitle, pdfPage: pdfPageNum });
+        tocEntries.push({ pageNum: page.pageNumber, typeLabel: meta.label, title: displayTitle, pdfPage: pdfPageNum, day: dayOf[page.id] || null });
 
         if (page.type === 'sketch') {
           const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
@@ -3568,7 +3670,7 @@
             }));
 
             const typeColMap = cols.reduce((acc, col, i) => {
-              acc[i] = { halign: col.colType === 'text' ? 'left' : 'center', font: F.mono };
+              acc[i] = { halign: 'center', font: F.mono };
               return acc;
             }, {});
 
@@ -3618,24 +3720,64 @@
         pdf.text(`Exported  ${exportTs}`, W - margin - 4, H - margin - 4, { align: 'right' });
       }
 
-      // ── DRAW TOC on page 2 ─────────────────────────────────────────────────
-      pdf.setPage(2);
+      // ── DRAW TOC on the reserved pages (2 …) ───────────────────────────────
+      // Rows = one heading per day + one entry per exported page.
+      const tocRows = [];
+      let _tocDay;
+      tocEntries.forEach(entry => {
+        if (entry.day !== _tocDay) {
+          if (entry.day) tocRows.push({ heading: entry.day });
+          _tocDay = entry.day;
+        }
+        tocRows.push({ entry });
+      });
 
-      // White background
-      pdf.setFillColor(255, 255, 255);
-      pdf.rect(0, 0, W, H, 'F');
-      // Dark grey TOC header band
-      pdf.setFillColor(50, 50, 50);
-      pdf.roundedRect(margin, margin + 10, W - margin*2, 24, 4, 4, 'F');
-      pdf.rect(margin, margin + 10 + 20, W - margin*2, 4, 'F');
-      pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(255, 255, 255);
-      pdf.text('TABLE OF CONTENTS', W/2, margin + 25, { align: 'center' });
-      pdf.setFontSize(7.5); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(180, 180, 180);
-      pdf.text(proj.name, W/2, margin + 20, { align: 'center' });
+      let ty = 0, _entryIdx = 0;
+      tocRows.forEach((row, ri) => {
+        if (ri % tocPerPage === 0) {
+          const tocPageNo = 2 + ri / tocPerPage;
+          pdf.setPage(tocPageNo);
 
-      let ty = margin + 46;
-      tocEntries.forEach((entry, i) => {
-        if (ty > H - margin - 20) return;
+          // White background
+          pdf.setFillColor(255, 255, 255);
+          pdf.rect(0, 0, W, H, 'F');
+          // Dark grey TOC header band
+          pdf.setFillColor(50, 50, 50);
+          pdf.roundedRect(margin, margin + 10, W - margin*2, 24, 4, 4, 'F');
+          pdf.rect(margin, margin + 10 + 20, W - margin*2, 4, 'F');
+          pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(255, 255, 255);
+          pdf.text('TABLE OF CONTENTS', W/2, margin + 25, { align: 'center' });
+          pdf.setFontSize(7.5); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(180, 180, 180);
+          pdf.text(proj.name, W/2, margin + 20, { align: 'center' });
+
+          // TOC footer
+          pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.3);
+          pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
+          pdf.setFontSize(6.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(110, 110, 110);
+          pdf.text(proj.name, margin + 4, H - margin - 4);
+          pdf.text(String(tocPageNo), W - margin - 4, H - margin - 4, { align: 'right' });
+
+          ty = TOC_TOP;
+        }
+
+        if (row.heading) {
+          // Day heading — title page name + date, thin rule beneath
+          const d = row.heading;
+          pdf.setFontSize(9); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(30, 30, 30);
+          const dayLine = pdf.splitTextToSize((d.title?.trim() || 'Untitled day').toUpperCase(), W - margin*2 - 50)[0];
+          pdf.text(dayLine, margin + 4, ty + 1);
+          if (d.date) {
+            pdf.setFontSize(8); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(110, 110, 110);
+            pdf.text(String(d.date), W - margin - 4, ty + 1, { align: 'right' });
+          }
+          pdf.setDrawColor(120, 120, 120); pdf.setLineWidth(0.3);
+          pdf.line(margin + 2, ty + 3.5, W - margin - 2, ty + 3.5);
+          ty += TOC_ROW_H;
+          return;
+        }
+
+        const entry = row.entry;
+        const i = _entryIdx++;
 
         // Alternate row shade
         if (i % 2 === 0) {
@@ -3672,18 +3814,14 @@
         pdf.setFontSize(10); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(40, 40, 40);
         pdf.text(String(entry.pdfPage), W - margin - 4, ty + 0.5, { align: 'right' });
 
-        ty += 12;
+        ty += TOC_ROW_H;
       });
 
-      // TOC footer
-      pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.3);
-      pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
-      pdf.setFontSize(6.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(110, 110, 110);
-      pdf.text(proj.name, margin + 4, H - margin - 4);
-      pdf.text('2', W - margin - 4, H - margin - 4, { align: 'right' });
-
       // ── Save ──────────────────────────────────────────────────────────────
-      const fname = `${proj.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_fieldbook_${todayLocalISO()}.pdf`;
+      // A partial export covering exactly one day is named for that day's date.
+      const exportDays = [...new Set(exportPages.map(p => dayOf[p.id] || null))];
+      const oneDay = exportPages.length < allPages.length && exportDays.length === 1 && exportDays[0]?.date;
+      const fname = `${proj.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_fieldbook_${oneDay ? exportDays[0].date : todayLocalISO()}.pdf`;
       pdf.save(fname);
       toast.success(`Exported ${fname}`);
 
@@ -3892,7 +4030,7 @@
                           cellPadding: { top: 2.5, bottom: 2.5, left: 3, right: 3 } },
             alternateRowStyles: { fillColor: [245, 245, 245] },
             columnStyles: cols.reduce((acc, col, i) => {
-              acc[i] = { halign: col.colType === 'text' ? 'left' : 'center', font: F.mono };
+              acc[i] = { halign: 'center', font: F.mono };
               return acc;
             }, {}),
           });
@@ -3944,6 +4082,8 @@
   function ProjectView({ projectId }) {
     const [project, setProject] = useState(null);
     const [addStep, setAddStep] = useState(null); // null | 'type'
+    const [addAtIndex, setAddAtIndex] = useState(null); // insert position for the page being added (null = end)
+    const [showPdfSheet, setShowPdfSheet] = useState(false);
     const [editingCover, setEditingCover] = useState(false);
     const [coverForm, setCoverForm] = useState({});
     const [exporting, setExporting] = useState(false);
@@ -4069,11 +4209,48 @@
         // on the sketch canvas (one row per placed point).
         pageData = { type: 'points', columns: cols, rows: [] };
       }
-      const page = DB.addPage(projectId, pageData);
-      if (page) { reload(); setAddStep(null); navigate(`#/project/${projectId}/page/${page.id}`); }
+      const page = DB.addPage(projectId, pageData, addAtIndex);
+      if (page) { reload(); setAddStep(null); setAddAtIndex(null); navigate(`#/project/${projectId}/page/${page.id}`); }
     }
 
     const pageCount = project.pages?.length || 0;
+    const groups = groupPages(project.pages);
+    const dayTitles = groups.filter(g => g.title).map(g => g.title);
+
+    function setCollapsed(titleId, collapsed) {
+      DB.updatePage(projectId, titleId, { collapsed });
+      reload();
+    }
+    function setAllCollapsed(collapsed) {
+      dayTitles.forEach(t => DB.updatePage(projectId, t.id, { collapsed }));
+      reload();
+    }
+    // Moving a sub-page past a title page drops it into the neighbouring day —
+    // expand that day so the page doesn't disappear into a collapsed folder.
+    function movePage(idx, dir) {
+      const pages = project.pages;
+      const crossed = pages[idx + dir];
+      if (pages[idx].type !== 'title' && crossed?.type === 'title') {
+        const dest = dir > 0 ? crossed : [...pages.slice(0, idx + dir)].reverse().find(p => p.type === 'title');
+        if (dest?.collapsed) DB.updatePage(projectId, dest.id, { collapsed: false });
+      }
+      DB.reorderPages(projectId, idx, idx + dir);
+      reload();
+    }
+    function renderPageRow(pg, indent) {
+      const idx = project.pages.indexOf(pg);
+      return (
+        <PageListRow key={pg.id} page={pg} projectId={projectId} indent={indent}
+          canMoveUp={idx > 0}
+          canMoveDown={idx < project.pages.length - 1}
+          onMoveUp={() => movePage(idx, -1)}
+          onMoveDown={() => movePage(idx, 1)}
+          onDuplicate={() => { DB.duplicatePage(projectId, pg.id); reload(); }}
+          onPageAction={pg2 => setPageActionTarget(pg2)}
+          onChainBadge={pg2 => setPageChainTarget(pg2)}
+        />
+      );
+    }
 
     return (
       <div className="flex flex-col h-full" style={{ background: '#3C5445' }}>
@@ -4083,9 +4260,9 @@
           actions={
             <>
               <button
-                onClick={() => exportProjectPDF(projectId, toast, setExporting)}
+                onClick={() => setShowPdfSheet(true)}
                 disabled={exporting}
-                title="Export entire project to PDF"
+                title="Export pages to PDF"
                 className="p-2 rounded-xl active:bg-white/10 transition-colors"
                 style={{ opacity: exporting ? 0.5 : 1 }}
               >
@@ -4203,37 +4380,74 @@
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2 px-1">
                 <p className="text-white/45 text-[10px] font-bold uppercase tracking-widest">Pages</p>
-                <button onClick={() => pageImportInputRef.current && pageImportInputRef.current.click()}
-                  className="text-[10px] font-semibold px-2 py-0.5 rounded-md transition-colors active:bg-fb-mid/20"
-                  style={{ color: 'rgba(99,179,237,0.7)', background: 'rgba(99,179,237,0.1)' }}>
-                  ↑ Import Page
-                </button>
+                <div className="flex items-center gap-1.5">
+                  {dayTitles.length > 0 && (
+                    <button onClick={() => setAllCollapsed(!dayTitles.every(t => t.collapsed))}
+                      className="text-[10px] font-semibold px-2 py-0.5 rounded-md transition-colors active:bg-white/20"
+                      style={{ color: 'rgba(255,255,255,0.6)', background: 'rgba(255,255,255,0.08)' }}>
+                      {dayTitles.every(t => t.collapsed) ? 'Expand all' : 'Collapse all'}
+                    </button>
+                  )}
+                  <button onClick={() => pageImportInputRef.current && pageImportInputRef.current.click()}
+                    className="text-[10px] font-semibold px-2 py-0.5 rounded-md transition-colors active:bg-fb-mid/20"
+                    style={{ color: 'rgba(99,179,237,0.7)', background: 'rgba(99,179,237,0.1)' }}>
+                    ↑ Import Page
+                  </button>
+                </div>
               </div>
               <div className="space-y-1.5">
-                {project.pages.map((pg, idx) => (
-                  <PageListRow key={pg.id} page={pg} projectId={projectId}
-                    canMoveUp={idx > 0}
-                    canMoveDown={idx < project.pages.length - 1}
-                    onMoveUp={() => { DB.reorderPages(projectId, idx, idx - 1); reload(); }}
-                    onMoveDown={() => { DB.reorderPages(projectId, idx, idx + 1); reload(); }}
-                    onDuplicate={() => { DB.duplicatePage(projectId, pg.id); reload(); }}
-                    onPageAction={pg2 => setPageActionTarget(pg2)}
-                    onChainBadge={pg2 => setPageChainTarget(pg2)}
-                  />
-                ))}
+                {groups.map((g, gi) => {
+                  if (!g.title) return g.pages.map(pg => renderPageRow(pg, false));
+                  const t = g.title;
+                  const tIdx = project.pages.indexOf(t);
+                  return (
+                    <React.Fragment key={t.id}>
+                      <PageListRow page={t} projectId={projectId}
+                        folder={{ collapsed: !!t.collapsed, count: g.pages.length, onToggle: () => setCollapsed(t.id, !t.collapsed) }}
+                        canMoveUp={gi > 0 && !!groups[gi - 1].title}
+                        canMoveDown={gi < groups.length - 1}
+                        onMoveUp={() => { DB.moveGroup(projectId, t.id, -1); reload(); }}
+                        onMoveDown={() => { DB.moveGroup(projectId, t.id, 1); reload(); }}
+                        onDuplicate={() => { DB.duplicatePage(projectId, t.id); reload(); }}
+                        onPageAction={pg2 => setPageActionTarget(pg2)}
+                        onChainBadge={pg2 => setPageChainTarget(pg2)}
+                      />
+                      {!t.collapsed && g.pages.map(pg => renderPageRow(pg, true))}
+                      {!t.collapsed && (
+                        <button onClick={() => { setAddAtIndex(tIdx + 1 + g.pages.length); setAddStep('type'); }}
+                          className="w-full py-2 rounded-xl border border-dashed text-xs font-semibold transition-colors active:bg-white/10"
+                          style={{ marginLeft: 14, width: 'calc(100% - 14px)', borderColor: 'rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.5)' }}>
+                          + Add page to this day
+                        </button>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </div>
             </div>
           )}
 
-          <button onClick={() => setAddStep('type')}
+          <button onClick={() => { setAddAtIndex(null); setAddStep('type'); }}
             className="w-full py-4 rounded-2xl border-2 border-dashed border-fb-mid/50 text-fb-light font-semibold flex items-center justify-center gap-2 active:bg-fb-mid/10 transition-colors text-sm">
             <Ico.Plus /> Add Page
           </button>
         </div>
 
         {addStep === 'type' && (
-          <AddPageTypeModal onSelect={handleTypeSelect} onClose={() => setAddStep(null)}
-            onCopyFrom={() => { setAddStep(null); setCopyFromOpen(true); }} />
+          <AddPageTypeModal onSelect={handleTypeSelect} onClose={() => { setAddStep(null); setAddAtIndex(null); }}
+            onCopyFrom={() => { setAddStep(null); setAddAtIndex(null); setCopyFromOpen(true); }} />
+        )}
+        {showPdfSheet && (
+          <PdfExportSheet
+            project={project}
+            onClose={() => setShowPdfSheet(false)}
+            onExport={(ids, excludeMap) => {
+              DB.setPdfExclude(projectId, excludeMap);
+              reload();
+              setShowPdfSheet(false);
+              exportProjectPDF(projectId, toast, setExporting, ids);
+            }}
+          />
         )}
         {showSettings && (
           <ProjectSettingsModal
@@ -4271,8 +4485,24 @@
             onCopyTo={pg => { setPageActionTarget(null); setPageCopyToTarget(pg); }}
             onExport={pg => { setPageActionTarget(null); setPageExportTarget(pg); }}
             onChain={pg => { setPageActionTarget(null); setPageChainTarget(pg); }}
+            days={dayTitles}
+            onMoveToDay={(pg, titleId) => {
+              if (titleId) DB.updatePage(projectId, titleId, { collapsed: false });
+              DB.movePageToGroup(projectId, pg.id, titleId);
+              setPageActionTarget(null);
+              reload();
+            }}
+            onTogglePdf={pg => {
+              DB.setPdfExclude(projectId, { [pg.id]: !pg.pdfExclude });
+              setPageActionTarget(null);
+              reload();
+            }}
             onDelete={pg => {
-              if (!window.confirm(`Delete "${pg.title || 'Untitled'}"? This cannot be undone.`)) return;
+              const subCount = pg.type === 'title' ? (groups.find(g => g.title?.id === pg.id)?.pages.length || 0) : 0;
+              const subNote = subCount > 0
+                ? ` Its ${subCount} sub-page${subCount !== 1 ? 's are' : ' is'} kept and will join the day above.`
+                : '';
+              if (!window.confirm(`Delete "${pg.title || 'Untitled'}"?${subNote} This cannot be undone.`)) return;
               DB.deletePage(projectId, pg.id);
               setPageActionTarget(null);
               reload();
@@ -4322,13 +4552,16 @@
     );
   }
 
-  function PageListRow({ page, projectId, canMoveUp, canMoveDown, onMoveUp, onMoveDown, onDuplicate, onPageAction, onChainBadge }) {
+  // folder: { collapsed, count, onToggle } — set on a title page, which heads a
+  // day folder. indent: true for the sub-pages listed under one.
+  function PageListRow({ page, projectId, canMoveUp, canMoveDown, onMoveUp, onMoveDown, onDuplicate, onPageAction, onChainBadge, folder, indent }) {
     const meta = TYPE_META[page.type] || TYPE_META.data;
     const rowCount = page.rows?.length || 0;
     const displayTitle = page.title && page.title.trim() ? page.title.trim() : null;
     const hasChain = (page.pageChain || []).length > 0;
     return (
-      <div className="flex items-stretch gap-1">
+      <div className="flex items-stretch gap-1"
+        style={indent ? { marginLeft: 14, paddingLeft: 6, borderLeft: '2px solid rgba(255,255,255,0.18)' } : undefined}>
         {/* Reorder + duplicate + actions buttons */}
         <div className="flex flex-col gap-0.5 flex-shrink-0 justify-center">
           <button
@@ -4360,10 +4593,20 @@
             ···
           </button>
         </div>
+        {/* Folder toggle (day header only) */}
+        {folder && (
+          <button onClick={folder.onToggle}
+            title={folder.collapsed ? 'Show sub-pages' : 'Hide sub-pages'}
+            aria-expanded={!folder.collapsed}
+            className="w-10 flex-shrink-0 flex items-center justify-center rounded-xl transition-colors active:bg-white/20"
+            style={{ background: 'rgba(255,255,255,0.14)', color: 'rgba(255,255,255,0.8)' }}>
+            {folder.collapsed ? <Ico.ChevR /> : <Ico.ChevDown />}
+          </button>
+        )}
         {/* Main row */}
         <button onClick={() => navigate(`#/project/${projectId}/page/${page.id}`)}
           className="flex-1 min-w-0 rounded-xl px-3 py-2.5 flex items-center gap-3 text-left transition-colors active:bg-white/15"
-          style={{ background: 'rgba(255,255,255,0.07)' }}>
+          style={{ background: folder ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.07)' }}>
           <span className="font-data text-fb-light text-sm font-bold w-7 flex-shrink-0">{page.pageNumber}</span>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
@@ -4378,8 +4621,16 @@
             <p className="text-white/30 text-xs mt-0.5 truncate">
               {page.date}
               {(page.type === 'data' || page.type === 'points') && rowCount > 0 ? ` · ${rowCount} pts` : ''}
+              {folder ? ` · ${folder.count} sub-page${folder.count !== 1 ? 's' : ''}` : ''}
             </p>
           </div>
+          {page.pdfExclude && (
+            <span title="Left out of PDF exports by default"
+              className="flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider"
+              style={{ background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.45)' }}>
+              No PDF
+            </span>
+          )}
           {hasChain && (
             <button
               onClick={e => { e.stopPropagation(); onChainBadge && onChainBadge(page); }}
@@ -4395,11 +4646,13 @@
     );
   }
 
-  function PageActionsSheet({ page, projectId, onClose, onCopyTo, onExport, onChain, onDelete }) {
+  function PageActionsSheet({ page, projectId, onClose, onCopyTo, onExport, onChain, onDelete, days, onMoveToDay, onTogglePdf }) {
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
+    const [moving, setMoving] = useState(false);
     const hasChain = (page.pageChain || []).length > 0;
     const meta = TYPE_META[page.type] || TYPE_META.data;
+    const canMove = page.type !== 'title' && (days || []).length > 0;
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
         <div ref={trapRef} className="modal-sheet">
@@ -4409,7 +4662,37 @@
               style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
             <span className="text-fb-text font-semibold text-sm truncate">{page.title || 'Untitled'}</span>
           </div>
+          {moving ? (
           <div className="space-y-2">
+            <p className="text-fb-muted text-xs font-bold uppercase tracking-widest mb-1">Move to day</p>
+            {days.map(d => (
+              <button key={d.id} onClick={() => onMoveToDay(page, d.id)}
+                className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-gray-100"
+                style={{ background: '#f4f4f4' }}>
+                {d.title?.trim() || 'Untitled day'}
+                <span className="text-fb-muted text-xs font-normal"> · {d.date}</span>
+              </button>
+            ))}
+            <button onClick={() => onMoveToDay(page, null)}
+              className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-muted transition-colors active:bg-gray-100"
+              style={{ background: '#f4f4f4' }}>
+              Top of job (no day)
+            </button>
+          </div>
+          ) : (
+          <div className="space-y-2">
+            {canMove && (
+              <button onClick={() => setMoving(true)}
+                className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-gray-100"
+                style={{ background: '#f4f4f4' }}>
+                ↕ Move to Day…
+              </button>
+            )}
+            <button onClick={() => onTogglePdf(page)}
+              className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-gray-100"
+              style={{ background: '#f4f4f4' }}>
+              {page.pdfExclude ? '✓ Include in PDF Exports' : '⊘ Leave Out of PDF Exports'}
+            </button>
             <button onClick={() => onCopyTo(page)}
               className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-gray-100"
               style={{ background: '#f4f4f4' }}>
@@ -4433,8 +4716,124 @@
               🗑 Delete Page
             </button>
           </div>
-          <button onClick={onClose}
+          )}
+          <button onClick={moving ? () => setMoving(false) : onClose}
             className="w-full mt-4 py-3 rounded-xl text-fb-muted font-medium transition-colors active:bg-gray-100"
+            style={{ background: '#f4f4f4' }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Checkbox with an indeterminate ("some ticked") state for day rows.
+  function TriCheck({ checked, indeterminate, onChange }) {
+    const ref = useRef(null);
+    useEffect(() => { if (ref.current) ref.current.indeterminate = !!indeterminate; }, [indeterminate]);
+    return (
+      <input ref={ref} type="checkbox" checked={checked} onChange={onChange}
+        style={{ width: 22, height: 22, accentColor: '#3C5445', flexShrink: 0 }} />
+    );
+  }
+
+  // PDF export checklist — pick whole days or individual pages. Pages flagged
+  // pdfExclude start unticked and are skipped when a whole day is ticked.
+  // onExport(pageIds, excludeMap): excludeMap holds the remembered per-page
+  // choice, only for days that have at least one page in this export — a day
+  // left out wholesale keeps its pages' existing flags.
+  function PdfExportSheet({ project, onClose, onExport }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const pages = project.pages || [];
+    const groups = groupPages(pages).map(g => ({ title: g.title, all: g.title ? [g.title, ...g.pages] : g.pages }));
+    const [checked, setChecked] = useState(() => new Set(pages.filter(p => !p.pdfExclude).map(p => p.id)));
+
+    function toggle(id) {
+      setChecked(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    }
+    function toggleGroup(g) {
+      setChecked(prev => {
+        const n = new Set(prev);
+        if (g.all.some(p => n.has(p.id))) g.all.forEach(p => n.delete(p.id));
+        else {
+          // Tick the day, minus its left-out pages (unless that's all it has)
+          const wanted = g.all.filter(p => !p.pdfExclude);
+          (wanted.length ? wanted : g.all).forEach(p => n.add(p.id));
+        }
+        return n;
+      });
+    }
+    function doExport() {
+      const excludeMap = {};
+      groups.forEach(g => {
+        if (!g.all.some(p => checked.has(p.id))) return;
+        g.all.forEach(p => { excludeMap[p.id] = !checked.has(p.id); });
+      });
+      onExport(pages.filter(p => checked.has(p.id)).map(p => p.id), excludeMap);
+    }
+
+    const pageRow = (p, indent) => {
+      const meta = TYPE_META[p.type] || TYPE_META.data;
+      return (
+        <label key={p.id} className="flex items-center gap-3 rounded-xl px-3 active:bg-gray-100"
+          style={{ minHeight: 44, marginLeft: indent ? 18 : 0, background: '#f4f4f4', cursor: 'pointer' }}>
+          <TriCheck checked={checked.has(p.id)} onChange={() => toggle(p.id)} />
+          <span className="font-data text-fb-muted text-xs w-6 flex-shrink-0">{p.pageNumber}</span>
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider flex-shrink-0"
+            style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
+          <span className="flex-1 min-w-0 text-sm text-fb-text truncate">{p.title?.trim() || 'Untitled'}</span>
+          {p.pdfExclude && !checked.has(p.id) && (
+            <span className="text-[9px] font-bold uppercase tracking-wider text-fb-muted flex-shrink-0">Left out</span>
+          )}
+        </label>
+      );
+    };
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-lg font-bold text-fb-dark">Export PDF</h2>
+            <div className="flex gap-2">
+              <button onClick={() => setChecked(new Set(pages.map(p => p.id)))}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg text-fb-text active:bg-gray-200" style={{ background: '#e9e6dc' }}>
+                All
+              </button>
+              <button onClick={() => setChecked(new Set())}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg text-fb-text active:bg-gray-200" style={{ background: '#e9e6dc' }}>
+                None
+              </button>
+            </div>
+          </div>
+          <p className="text-fb-muted text-sm mb-3">Tick the days or pages to include.</p>
+          <div className="space-y-1.5" style={{ maxHeight: '52vh', overflowY: 'auto' }}>
+            {groups.map((g, gi) => {
+              if (!g.title) return g.all.map(p => pageRow(p, false));
+              const n = g.all.filter(p => checked.has(p.id)).length;
+              return (
+                <React.Fragment key={g.title.id}>
+                  <label className="flex items-center gap-3 rounded-xl px-3 active:bg-gray-200"
+                    style={{ minHeight: 48, background: '#e2decf', cursor: 'pointer', marginTop: gi > 0 ? 8 : 0 }}>
+                    <TriCheck checked={n === g.all.length} indeterminate={n > 0 && n < g.all.length} onChange={() => toggleGroup(g)} />
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm font-bold text-fb-dark truncate">{g.title.title?.trim() || 'Untitled day'}</span>
+                      <span className="block text-xs text-fb-muted">{g.title.date} · {n} of {g.all.length} pages</span>
+                    </span>
+                  </label>
+                  {g.all.map(p => pageRow(p, true))}
+                </React.Fragment>
+              );
+            })}
+          </div>
+          <button onClick={doExport} disabled={checked.size === 0}
+            className="w-full mt-4 py-3 rounded-xl text-white font-semibold transition-colors active:opacity-80"
+            style={{ background: checked.size ? '#3C5445' : '#aaa' }}>
+            Export {checked.size} of {pages.length} page{pages.length !== 1 ? 's' : ''}
+          </button>
+          <button onClick={onClose}
+            className="w-full mt-2 py-3 rounded-xl text-fb-muted font-medium transition-colors active:bg-gray-100"
             style={{ background: '#f4f4f4' }}>
             Cancel
           </button>
@@ -4984,7 +5383,12 @@
     );
 
     function handleDelete() {
-      if (window.confirm(`Delete Page ${page.pageNumber}? This cannot be undone.`)) {
+      const subCount = page.type === 'title'
+        ? (groupPages(project.pages).find(g => g.title?.id === pageId)?.pages.length || 0) : 0;
+      const subNote = subCount > 0
+        ? ` Its ${subCount} sub-page${subCount !== 1 ? 's are' : ' is'} kept and will join the day above.`
+        : '';
+      if (window.confirm(`Delete Page ${page.pageNumber}?${subNote} This cannot be undone.`)) {
         DB.deletePage(projectId, pageId);
         navigate(`#/project/${projectId}`);
       }
