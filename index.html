@@ -603,7 +603,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.158';
+  const APP_VERSION = '1.159';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1034,6 +1034,40 @@
       const keepIds = new Set(p.map(proj => proj.id));
       _getIndex().filter(e => !keepIds.has(e.id)).forEach(e => _deleteProjectRaw(e.id));
       p.forEach(proj => _saveProjectRaw(proj));
+      // _saveProjectRaw prepends new projects; put the listing back in p's order.
+      const idx = _getIndex();
+      const ordered = p.map(proj => idx.find(e => e.id === proj.id)).filter(Boolean);
+      _saveIndex([...ordered, ...idx.filter(e => !ordered.includes(e))]);
+    },
+    // Move a project up/down the home list (dir: -1 / 1). Active and archived
+    // projects are listed separately, so it swaps with the nearest neighbour
+    // in the same archived state.
+    moveProject(id, dir) {
+      const idx = [..._getIndex()];
+      const i = idx.findIndex(e => e.id === id);
+      if (i === -1) return;
+      const isArch = pid => !!_getProjectRaw(pid)?.archived;
+      const mine = isArch(id);
+      let j = i + dir;
+      while (j >= 0 && j < idx.length && isArch(idx[j].id) !== mine) j += dir;
+      if (j < 0 || j >= idx.length) return;
+      [idx[i], idx[j]] = [idx[j], idx[i]];
+      _saveIndex(idx);
+    },
+    // Archived projects drop out of the working list on the home screen but
+    // stay fully usable. Restoring puts the project back at the top.
+    setProjectArchived(id, archived) {
+      const proj = _getProjectRaw(id);
+      if (!proj) return;
+      const next = { ...proj };
+      if (archived) { next.archived = true; next.archivedAt = new Date().toISOString(); }
+      else { delete next.archived; delete next.archivedAt; }
+      _saveProjectRaw(next);
+      if (!archived) {
+        const idx = _getIndex();
+        const entry = idx.find(e => e.id === id);
+        _saveIndex([entry, ...idx.filter(e => e.id !== id)]);
+      }
     },
     createProject(data) {
       const proj = {
@@ -1067,6 +1101,8 @@
       newProj.name = (src.name?.trim() ? src.name.trim() + ' (Copy)' : '(Copy)');
       newProj.createdAt = new Date().toISOString();
       newProj.exportChain = [];
+      delete newProj.archived;
+      delete newProj.archivedAt;
       newProj.pages = newProj.pages.map(pg => ({
         ...pg,
         id: uid(),
@@ -2288,6 +2324,24 @@
           )}
 
           {tab === 'settings' && (
+            <>
+              <button
+                onClick={() => {
+                  const archiving = !project.archived;
+                  DB.setProjectArchived(projectId, archiving);
+                  onClose();
+                  if (archiving) { toast.success('Project archived'); navigate('#/'); }
+                  else { onReload(); toast.success('Project restored'); }
+                }}
+                className="w-full py-3 rounded-xl font-semibold text-sm text-fb-text active:opacity-80 mb-1"
+                style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                {project.archived ? 'Restore Project to Active' : 'Archive Project'}
+              </button>
+              <p className="text-xs text-fb-muted text-center">
+                {project.archived
+                  ? 'Moves this project back to the top of the working list.'
+                  : 'Moves this project out of the working list. Nothing is deleted.'}
+              </p>
             <div className="py-8 text-center">
               <p className="text-4xl mb-3">⚙️</p>
               <p className="text-fb-text font-semibold mb-2">Project Settings</p>
@@ -2296,6 +2350,7 @@
                 project-wide settings will appear here.
               </p>
             </div>
+            </>
           )}
         </div>
 
@@ -2318,6 +2373,10 @@
     const [showDataMgr, setShowDataMgr] = useState(false);
     const [delTarget, setDelTarget] = useState(null);
     const [pendingImport, setPendingImport] = useState(null);
+    const [actionTarget, setActionTarget] = useState(null); // project object
+    const [archivedOpen, setArchivedOpen] = useState(() => {
+      try { return localStorage.getItem('fb_archivedOpen') === '1'; } catch { return false; }
+    });
     const toast = useToast();
     const delModalRef = useRef(null);
     const importInputRef = useRef(null);
@@ -2380,6 +2439,42 @@
       toast.success(`"${p.name}" duplicated`);
     }
 
+    function handleArchive(p) {
+      const archiving = !p.archived;
+      DB.setProjectArchived(p.id, archiving);
+      setProjects(DB.getProjects());
+      toast.success(archiving
+        ? `"${p.name}" archived — find it under Archived at the bottom`
+        : `"${p.name}" restored`);
+    }
+
+    function handleMove(p, dir) {
+      DB.moveProject(p.id, dir);
+      setProjects(DB.getProjects());
+    }
+
+    function toggleArchivedOpen() {
+      setArchivedOpen(o => {
+        try { localStorage.setItem('fb_archivedOpen', o ? '0' : '1'); } catch {}
+        return !o;
+      });
+    }
+
+    const active   = projects.filter(p => !p.archived);
+    const archived = projects.filter(p => p.archived);
+    const renderCard = (p, i, list) => (
+      <ProjectCard key={p.id} project={p}
+        canMoveUp={i > 0}
+        canMoveDown={i < list.length - 1}
+        onMoveUp={() => handleMove(p, -1)}
+        onMoveDown={() => handleMove(p, 1)}
+        onActions={() => setActionTarget(p)}
+        onDelete={() => setDelTarget(p.id)}
+        onRename={handleRename}
+        onDuplicate={handleDuplicate}
+        onArchive={handleArchive} />
+    );
+
     return (
       <div className="flex flex-col h-full bg-fb-dark">
         <NavBar title="FieldBook"
@@ -2416,14 +2511,22 @@
               : (
                 <div className="p-4 space-y-3 screen-enter">
                   <p className="text-xs font-semibold text-fb-muted uppercase tracking-widest px-1 pt-1">
-                    {projects.length} Project{projects.length !== 1 ? 's' : ''}
+                    {active.length} Project{active.length !== 1 ? 's' : ''}
                   </p>
-                  {projects.map(p => (
-                    <ProjectCard key={p.id} project={p}
-                      onDelete={(e) => { e.stopPropagation(); setDelTarget(p.id); }}
-                      onRename={handleRename}
-                      onDuplicate={handleDuplicate} />
-                  ))}
+                  {active.length === 0 && (
+                    <p className="text-sm text-fb-muted text-center py-6">No active projects.</p>
+                  )}
+                  {active.map(renderCard)}
+                  {archived.length > 0 && (
+                    <>
+                      <button onClick={toggleArchivedOpen} aria-expanded={archivedOpen}
+                        className="w-full flex items-center gap-2 px-1 pt-4 pb-1 text-xs font-semibold text-fb-muted uppercase tracking-widest active:opacity-60">
+                        {archivedOpen ? <Ico.ChevDown /> : <Ico.ChevR />}
+                        Archived ({archived.length})
+                      </button>
+                      {archivedOpen && archived.map(renderCard)}
+                    </>
+                  )}
                 </div>
               )
             }
@@ -2458,6 +2561,17 @@
           />
         )}
 
+        {actionTarget && (
+          <ProjectActionsSheet
+            project={actionTarget}
+            onClose={() => setActionTarget(null)}
+            onRename={p => { setActionTarget(null); handleRename(p); }}
+            onDuplicate={p => { setActionTarget(null); handleDuplicate(p); }}
+            onArchive={p => { setActionTarget(null); handleArchive(p); }}
+            onDelete={p => { setActionTarget(null); setDelTarget(p.id); }}
+          />
+        )}
+
         {delTarget && (
           <div className="modal-backdrop" onClick={() => setDelTarget(null)}>
             <div ref={delModalRef} className="modal-sheet" onClick={e => e.stopPropagation()}>
@@ -2475,25 +2589,43 @@
     );
   }
 
-  function ProjectCard({ project, onDelete, onRename, onDuplicate }) {
+  function ProjectCard({ project, canMoveUp, canMoveDown, onMoveUp, onMoveDown, onActions, onDelete, onRename, onDuplicate, onArchive }) {
     const pageCount = project.pages?.length || 0;
     const [ctxMenu, setCtxMenu] = useState(null);
+    const sideBtn = enabled => ({
+      color: enabled ? '#7A7066' : '#D3CCBE', background: 'rgba(60,84,69,0.08)',
+    });
     return (
       <>
+        <div className="flex items-stretch gap-1.5">
+        {/* Reorder + actions buttons */}
+        <div className="flex flex-col gap-1 flex-shrink-0 justify-center">
+          <button onClick={canMoveUp ? onMoveUp : undefined} disabled={!canMoveUp} title="Move up"
+            className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors" style={sideBtn(canMoveUp)}>
+            <Ico.ChevUp />
+          </button>
+          <button onClick={canMoveDown ? onMoveDown : undefined} disabled={!canMoveDown} title="Move down"
+            className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors" style={sideBtn(canMoveDown)}>
+            <Ico.ChevDown />
+          </button>
+          <button onClick={onActions} title="Project actions"
+            className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
+            style={{ ...sideBtn(true), fontSize: 15, letterSpacing: '-1px' }}>
+            ···
+          </button>
+        </div>
         <div onClick={() => navigate(`#/project/${project.id}`)}
           onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
-          className="bg-white rounded-2xl shadow-sm border border-fb-border overflow-hidden active:scale-[0.98] transition-transform cursor-pointer">
-          <div className="flex">
-            <div className="w-1.5 bg-fb-mid flex-shrink-0" />
-            <div className="flex-1 p-4">
+          className="flex-1 min-w-0 bg-white rounded-2xl shadow-sm border border-fb-border overflow-hidden active:scale-[0.98] transition-transform cursor-pointer"
+          style={project.archived ? { opacity: 0.75 } : undefined}>
+          <div className="flex h-full">
+            <div className="w-1.5 flex-shrink-0" style={{ background: project.archived ? '#B8AFA2' : '#3C5445' }} />
+            <div className="flex-1 min-w-0 p-4">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <h3 className="font-bold text-fb-text text-base leading-tight truncate">{project.name}</h3>
                   {project.client && <p className="text-sm text-fb-muted mt-0.5 truncate">{project.client}</p>}
                 </div>
-                <button onClick={onDelete} className="p-1.5 text-gray-300 active:text-red-400 transition-colors flex-shrink-0">
-                  <Ico.Trash />
-                </button>
               </div>
               <div className="flex items-center gap-3 mt-2.5 flex-wrap">
                 {project.jobNumber && (
@@ -2502,19 +2634,60 @@
                   </span>
                 )}
                 <span className="text-xs text-fb-muted">{pageCount} page{pageCount !== 1 ? 's' : ''}</span>
-                <span className="text-xs text-fb-muted ml-auto font-data">{new Date(project.createdAt).toLocaleDateString('en-CA')}</span>
+                <span className="text-xs text-fb-muted ml-auto font-data">
+                  {project.archived && project.archivedAt
+                    ? `Archived ${new Date(project.archivedAt).toLocaleDateString('en-CA')}`
+                    : new Date(project.createdAt).toLocaleDateString('en-CA')}
+                </span>
               </div>
             </div>
           </div>
+        </div>
         </div>
         {ctxMenu && (
           <ContextMenu x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)} items={[
             { icon: <Ico.Rename />,          label: 'Rename',    action: () => onRename(project)    },
             { icon: <Ico.Duplicate />,        label: 'Duplicate', action: () => onDuplicate(project) },
-            { icon: <Ico.DeleteProject />,    label: 'Delete',    action: () => onDelete({ stopPropagation: () => {} }), danger: true },
+            { icon: <Ico.File />,             label: project.archived ? 'Restore to Active' : 'Archive', action: () => onArchive(project) },
+            { icon: <Ico.DeleteProject />,    label: 'Delete',    action: () => onDelete(), danger: true },
           ]} />
         )}
       </>
+    );
+  }
+
+  function ProjectActionsSheet({ project, onClose, onRename, onDuplicate, onArchive, onDelete }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const rowCls = 'w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-gray-100';
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+          <p className="text-fb-text font-semibold text-sm truncate mb-4">{project.name}</p>
+          <div className="space-y-2">
+            <button onClick={() => onRename(project)} className={rowCls} style={{ background: '#f4f4f4' }}>
+              ✎ Rename
+            </button>
+            <button onClick={() => onDuplicate(project)} className={rowCls} style={{ background: '#f4f4f4' }}>
+              ⧉ Duplicate
+            </button>
+            <button onClick={() => onArchive(project)} className={rowCls} style={{ background: '#f4f4f4' }}>
+              {project.archived ? '↑ Restore to Active' : '▤ Archive Project'}
+            </button>
+            <button onClick={() => onDelete(project)}
+              className="w-full text-left px-4 py-3 rounded-xl font-medium transition-colors active:bg-red-100"
+              style={{ background: '#fff1f0', color: '#dc2626' }}>
+              🗑 Delete Project
+            </button>
+          </div>
+          <button onClick={onClose}
+            className="w-full mt-4 py-3 rounded-xl text-fb-muted font-medium transition-colors active:bg-gray-100"
+            style={{ background: '#f4f4f4' }}>
+            Cancel
+          </button>
+        </div>
+      </div>
     );
   }
 
@@ -4282,6 +4455,18 @@
           }
         />
 
+        {project.archived && (
+          <div className="flex items-center justify-between gap-3 px-4 py-2"
+            style={{ background: '#EBE5D5', borderBottom: '1px solid #CEC5B0' }}>
+            <p className="text-xs font-bold uppercase tracking-widest text-fb-muted">Archived project</p>
+            <button onClick={() => { DB.setProjectArchived(projectId, false); reload(); toast.success('Project restored'); }}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white active:opacity-80"
+              style={{ background: '#3C5445' }}>
+              Restore
+            </button>
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto p-4 screen-enter">
           {/* Cover */}
           <div className="rounded-2xl overflow-hidden shadow-2xl mb-4" style={{ background: '#1a3526', border: '1.5px solid #2D6A4F' }}>
@@ -4860,7 +5045,7 @@
     useFocusTrap(trapRef, true, onClose);
     const [by, setBy] = useState(() => localStorage.getItem('fb_lastExportName') || '');
     const allProjects = DB.getProjects()
-      .filter(p => p.id !== fromProjectId)
+      .filter(p => p.id !== fromProjectId && !p.archived)
       .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     const meta = TYPE_META[page.type] || TYPE_META.data;
 
@@ -5064,7 +5249,7 @@
 
     const allProjects = DB.getProjects()
       .filter(p => p.id !== toProjectId)
-      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      .sort((a, b) => (!!a.archived - !!b.archived) || ((b.updatedAt || 0) - (a.updatedAt || 0)));
 
     function togglePage(id) {
       setSelected(prev => {
@@ -5098,7 +5283,7 @@
                       style={{ background: '#f4f4f4' }}>
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-fb-text text-sm truncate">{p.name || 'Unnamed'}</p>
-                        <p className="text-fb-muted text-xs">{p.jobNumber ? `#${p.jobNumber} · ` : ''}{(p.pages||[]).length} pages</p>
+                        <p className="text-fb-muted text-xs">{p.jobNumber ? `#${p.jobNumber} · ` : ''}{(p.pages||[]).length} pages{p.archived ? ' · Archived' : ''}</p>
                       </div>
                       <Ico.ChevR />
                     </button>
