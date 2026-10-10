@@ -249,8 +249,11 @@
     if (!geo && N === null && E === null) return null;
     let ll = (N !== null && E !== null) ? toLatLon(N, E, crsId) : null;
     if (!ll && geo) ll = { lat: geo.lat, lon: geo.lon };
+    const txt = (v, n) => n === null ? '' : String(v).trim();
     return {
       id: r.id, number: String(c.col_ptnum ?? '').trim(), N, E, Z,
+      // coordinates exactly as they appear in the Points page (decimals kept)
+      text: { n: txt(c.col_north, N), e: txt(c.col_east, E), z: txt(c.col_elev, Z) },
       desc: String(c.col_desc ?? ''),
       lat: ll ? ll.lat : null, lon: ll ? ll.lon : null,
       source: geo ? (geo.source || 'gps') : 'instrument',
@@ -296,61 +299,85 @@
     return box.innerHTML;
   }
 
-  function getProjectPoints(project) {
+  // Points-page rows of a project as index entries, in page order.
+  function rowPoints(project) {
     const out = [];
-    if (!project) return out;
     const crsId = projectCrsId(project);
-    const pages = project.pages || [];
-
-    // A media record (photo / voice) that carries its own phone position.
-    function pushMedia(rec, source, pg, fallbackDesc) {
-      if (!rec || !rec.geo || !fin(rec.geo.lat) || !fin(rec.geo.lon)) return;
-      const g = toGrid(rec.geo.lat, rec.geo.lon, crsId);
-      out.push({
-        id: rec.id, number: String(rec.ptNum ?? '').trim(),
-        N: g ? g.n : null, E: g ? g.e : null,
-        Z: (project.gpsUseZ && fin(rec.geo.H)) ? rec.geo.H : null,
-        desc: rec.title || rec.note || rec.desc || fallbackDesc || '',
-        lat: rec.geo.lat, lon: rec.geo.lon,
-        source, phone: true, acc: rec.geo.acc ?? null, ts: rec.geo.ts || null,
-        pageId: pg.id, pageType: pg.type, pageTitle: pg.title || '',
+    (project.pages || []).forEach(pg => {
+      if (pg.type !== 'points') return;
+      (pg.rows || []).forEach(r => {
+        const pt = rowPoint(r, crsId);
+        if (pt) out.push({ ...pt, pageId: pg.id, pageType: pg.type, pageTitle: pg.title || '' });
       });
-    }
-
-    pages.forEach(pg => {
-      if (pg.type === 'points') {
-        (pg.rows || []).forEach(r => {
-          const pt = rowPoint(r, crsId);
-          if (pt) out.push({ ...pt, pageId: pg.id, pageType: pg.type, pageTitle: pg.title || '' });
-        });
-      }
-      if (pg.type === 'photo') {
-        (pg.photos || []).forEach(ph => {
-          pushMedia(ph, 'photo', pg, 'Photo');
-          (ph && ph.voice || []).forEach(v => pushMedia(v, 'voice', pg, 'Voice memo'));
-        });
-        (pg.voiceNotes || []).forEach(v => pushMedia(v, 'voice', pg, 'Voice note'));
-      }
     });
     return out;
   }
 
+  // A media record (photo / standalone voice note) as a point, or null when it
+  // has no position. A record whose point number matches a Points-page row is
+  // LINKED to that point and takes the point's coordinates (matching by number
+  // survives import/duplicate, where row ids are regenerated). Otherwise it is
+  // its own point at the phone position it was captured with.
+  //   rows — optional pre-built rowPoints(project), to avoid rebuilding per record
+  function mediaPoint(rec, project, source, rows) {
+    if (!rec) return null;
+    const number = String(rec.ptNum ?? '').trim();
+    const link = number ? (rows || rowPoints(project)).find(r => r.number === number) : null;
+    const geo = (rec.geo && fin(rec.geo.lat) && fin(rec.geo.lon)) ? rec.geo : null;
+    if (!link && !geo) return null;
+    const desc = rec.title || rec.note || rec.desc || '';
+    if (link) {
+      return {
+        id: rec.id, number, N: link.N, E: link.E, Z: link.Z, text: link.text,
+        desc: desc || link.desc, lat: link.lat, lon: link.lon,
+        source, phone: link.phone, acc: link.acc, ts: (geo && geo.ts) || rec.createdAt || link.ts,
+        linkedRowId: link.id, linkedDesc: link.desc,
+      };
+    }
+    const g = toGrid(geo.lat, geo.lon, projectCrsId(project));
+    const Z = (project.gpsUseZ && fin(geo.H)) ? geo.H : null;
+    return {
+      id: rec.id, number,
+      N: g ? g.n : null, E: g ? g.e : null, Z,
+      text: { n: g ? fmtGrid(g.n) : '', e: g ? fmtGrid(g.e) : '', z: Z !== null ? fmtElev(Z) : '' },
+      desc, lat: geo.lat, lon: geo.lon,
+      source, phone: true, acc: geo.acc ?? null, ts: geo.ts || rec.createdAt || null,
+      from: geo.from || 'device', linkedRowId: null,
+    };
+  }
+
+  function getProjectPoints(project) {
+    if (!project) return [];
+    const rows = rowPoints(project);
+    const out = rows.slice();
+    (project.pages || []).forEach(pg => {
+      if (pg.type !== 'photo') return;
+      const push = (rec, source, fallback) => {
+        const pt = mediaPoint(rec, project, source, rows);
+        if (pt) out.push({ ...pt, desc: pt.desc || fallback, pageId: pg.id, pageType: pg.type, pageTitle: pg.title || '' });
+      };
+      // Voice memos attached to a photo belong to that photo — they are not
+      // points of their own.
+      (pg.photos || []).forEach(ph => push(ph, 'photo', 'Photo'));
+      (pg.voiceNotes || []).forEach(v => push(v, 'voice', 'Voice note'));
+    });
+    return out;
+  }
+
+  // How many records (point rows + photos + voice notes) carry each number.
+  function pointNumberCounts(project) {
+    const counts = {};
+    const add = v => { const n = String(v ?? '').trim(); if (n) counts[n] = (counts[n] || 0) + 1; };
+    (project && project.pages || []).forEach(pg => {
+      if (pg.type === 'points') (pg.rows || []).forEach(r => add(r.cells?.col_ptnum));
+      (pg.photos || []).forEach(ph => ph && add(ph.ptNum));
+      (pg.voiceNotes || []).forEach(v => v && add(v.ptNum));
+    });
+    return counts;
+  }
   // Every point number in use anywhere in the project (as trimmed strings).
   function usedPointNumbers(project) {
-    const used = new Set();
-    (project && project.pages || []).forEach(pg => {
-      (pg.rows || []).forEach(r => {
-        if (pg.type !== 'points') return;
-        const n = String(r.cells?.col_ptnum ?? '').trim();
-        if (n) used.add(n);
-      });
-      (pg.photos || []).forEach(ph => {
-        if (ph && String(ph.ptNum ?? '').trim()) used.add(String(ph.ptNum).trim());
-        (ph && ph.voice || []).forEach(v => { if (String(v.ptNum ?? '').trim()) used.add(String(v.ptNum).trim()); });
-      });
-      (pg.voiceNotes || []).forEach(v => { if (String(v.ptNum ?? '').trim()) used.add(String(v.ptNum).trim()); });
-    });
-    return used;
+    return new Set(Object.keys(pointNumberCounts(project)));
   }
 
   // Phone-captured points number from their own per-project range (default
@@ -559,8 +586,8 @@
     toLatLon, toGrid, geoidN, orthoHeight,
     fmtGrid, fmtElev, fmtAcc, fmtLatLon, fmtPosition, geoUri,
     makeGeo, gpsCells,
-    rowPoint, pinText, refreshPins,
-    getProjectPoints, usedPointNumbers, gpsPtStart, nextGpsPtNum,
+    rowPoint, rowPoints, mediaPoint, pinText, refreshPins,
+    getProjectPoints, pointNumberCounts, usedPointNumbers, gpsPtStart, nextGpsPtNum,
     crsChangeSummary, applyCrsChange, datumMatchesCrs,
     parseRange, inRanges,
     geoSelfTest,

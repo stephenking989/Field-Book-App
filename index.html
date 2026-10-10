@@ -70,6 +70,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/paper.js/0.12.17/paper-core.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.22.0/proj4.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/lite.umd.js"></script>
   <!-- Coordinate engine (CRS registry, grid/lat-lon, geoid, point index) -->
   <script src="./geoid-ns.js"></script>
   <script src="./geo.js"></script>
@@ -614,7 +615,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.162';
+  const APP_VERSION = '1.163';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -777,6 +778,132 @@
 
     return { open, put, get, getMany, del, deleteMany, keys, getUsageBytes, pruneOrphans, newRef };
   })();
+
+  // ─── audioDB — voice-note recordings ───────────────────────────────────────
+  // Recordings are stored as Blobs (not base64 — a third smaller, and they play
+  // straight from an object URL) in their OWN IndexedDB database rather than a
+  // store inside `fieldbook-photos`: no version upgrade of the photo database,
+  // and photoDB.pruneOrphans never sees a key it doesn't understand.
+  //
+  // Voice records live on photo pages:
+  //   page.voiceNotes      = [rec]   standalone voice entries
+  //   page.photos[i].voice = [rec]   memos attached to a photo
+  //   rec = { id, audioRef, mime, dur, size, title, desc, createdAt, geo?, ptNum? }
+  // `audioRef` keys into this database. At export the Blob is inlined as
+  // `audioDataUrl` (base64) and turned back into a Blob on import.
+  const audioDB = (() => {
+    const DB_NAME = 'fieldbook-audio';
+    const STORE   = 'audio';
+    let _dbPromise = null;
+
+    function open() {
+      if (_dbPromise) return _dbPromise;
+      _dbPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror   = () => reject(req.error);
+      });
+      return _dbPromise;
+    }
+    function tx(mode) {
+      return open().then(db => db.transaction(STORE, mode).objectStore(STORE));
+    }
+    function wrap(makeReq) {
+      return new Promise((resolve, reject) => {
+        const r = makeReq();
+        r.onsuccess = () => resolve(r.result);
+        r.onerror   = () => reject(r.error);
+      });
+    }
+    function newRef() {
+      return 'au_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+    }
+    async function put(ref, blob) { const s = await tx('readwrite'); await wrap(() => s.put(blob, ref)); return ref; }
+    async function get(ref)       { if (!ref) return null; const s = await tx('readonly'); return (await wrap(() => s.get(ref))) || null; }
+    async function del(ref)       { if (!ref) return; const s = await tx('readwrite'); await wrap(() => s.delete(ref)); }
+    async function keys()         { const s = await tx('readonly'); return (await wrap(() => s.getAllKeys())) || []; }
+
+    async function getUsageBytes() {
+      const store = await tx('readonly');
+      return new Promise((resolve, reject) => {
+        let total = 0;
+        const req = store.openCursor();
+        req.onsuccess = (e) => {
+          const cur = e.target.result;
+          if (cur) { total += (cur.value && cur.value.size) || 0; cur.continue(); }
+          else resolve(total);
+        };
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    // Delete recordings no page references any more (page/project deletes,
+    // failed saves). Same contract as photoDB.pruneOrphans.
+    async function pruneOrphans(allProjects) {
+      const live = new Set();
+      (allProjects || []).forEach(proj => (proj.pages || []).forEach(pg =>
+        pageVoiceRecs(pg).forEach(v => { if (v.audioRef) live.add(v.audioRef); })));
+      const orphans = (await keys()).filter(k => !live.has(k));
+      for (const k of orphans) await del(k);
+      return orphans.length;
+    }
+
+    return { open, put, get, del, keys, getUsageBytes, pruneOrphans, newRef };
+  })();
+
+  // Every voice record on a page — standalone notes and per-photo memos.
+  function pageVoiceRecs(pg) {
+    const out = [];
+    (pg.voiceNotes || []).forEach(v => { if (v) out.push(v); });
+    (pg.photos || []).forEach(ph => { if (ph && Array.isArray(ph.voice)) ph.voice.forEach(v => { if (v) out.push(v); }); });
+    return out;
+  }
+
+  // Replace every voice record on a page with `await fn(rec)` (in place).
+  async function mapVoiceRecs(pg, fn) {
+    if (Array.isArray(pg.voiceNotes)) {
+      const next = [];
+      for (const v of pg.voiceNotes) next.push(v ? await fn(v) : v);
+      pg.voiceNotes = next;
+    }
+    if (Array.isArray(pg.photos)) {
+      for (const ph of pg.photos) {
+        if (!ph || !Array.isArray(ph.voice)) continue;
+        const next = [];
+        for (const v of ph.voice) next.push(v ? await fn(v) : v);
+        ph.voice = next;
+      }
+    }
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload  = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+  }
+  async function dataUrlToBlob(dataUrl) {
+    return (await fetch(dataUrl)).blob();
+  }
+
+  // Best-effort removal of a recording once nothing references it (copied
+  // pages share refs). audioDB.pruneOrphans catches anything this misses.
+  function dropAudioIfUnused(ref) {
+    if (!ref) return;
+    queueMicrotask(() => {
+      try {
+        const used = DB.getProjects().some(pr => (pr.pages || []).some(pg =>
+          pageVoiceRecs(pg).some(v => v.audioRef === ref)));
+        if (!used) audioDB.del(ref).catch(() => {});
+      } catch {}
+    });
+  }
 
   // Sketch engine (sketch.js) loads async. This promise gates the ReactDOM mount
   // so SketchPage is guaranteed to be defined before the app first renders.
@@ -1650,7 +1777,7 @@
 
     // Storage usage gauge: project data and photos both live in IndexedDB,
     // sharing the origin quota reported by navigator.storage.estimate().
-    const [usage, setUsage] = useState({ ls: 0, idb: 0, used: null, quota: null, persisted: null });
+    const [usage, setUsage] = useState({ ls: 0, idb: 0, audio: 0, used: null, quota: null, persisted: null });
 
     useEffect(() => {
       (async () => {
@@ -1658,6 +1785,8 @@
         try { lsBytes = JSON.stringify(DB.getProjects()).length; } catch {}
         let idbBytes = 0;
         try { idbBytes = await photoDB.getUsageBytes(); } catch {}
+        let audioBytes = 0;
+        try { audioBytes = await audioDB.getUsageBytes(); } catch {}
         let quota = null, used = null, persisted = null;
         try {
           if (navigator.storage?.estimate) {
@@ -1667,7 +1796,7 @@
           }
           if (navigator.storage?.persisted) persisted = await navigator.storage.persisted();
         } catch {}
-        setUsage({ ls: lsBytes, idb: idbBytes, used, quota, persisted });
+        setUsage({ ls: lsBytes, idb: idbBytes, audio: audioBytes, used, quota, persisted });
       })();
     }, []);
 
@@ -1679,12 +1808,13 @@
 
     async function doPrune() {
       try {
-        const n = await photoDB.pruneOrphans(DB.getProjects());
-        if (n > 0) toast.success(`Cleaned up ${n} orphan photo${n === 1 ? '' : 's'}`);
-        else       toast.success('No orphan photos found');
+        const n = (await photoDB.pruneOrphans(DB.getProjects())) + (await audioDB.pruneOrphans(DB.getProjects()));
+        if (n > 0) toast.success(`Cleaned up ${n} orphan photo${n === 1 ? '' : 's'} / recording${n === 1 ? '' : 's'}`);
+        else       toast.success('No orphan photos or recordings found');
         // Refresh gauge
         const idbBytes = await photoDB.getUsageBytes();
-        setUsage(u => ({ ...u, idb: idbBytes }));
+        const audioBytes = await audioDB.getUsageBytes();
+        setUsage(u => ({ ...u, idb: idbBytes, audio: audioBytes }));
       } catch (err) {
         toast.error('Cleanup failed');
       }
@@ -1760,6 +1890,10 @@
               <span>Photos &amp; images</span>
               <span style={{ fontFamily: "'Share Tech Mono', 'Courier New', monospace", color: '#1A1A1A' }}>{fmtMB(usage.idb)}</span>
             </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#5A5248', marginBottom: 8 }}>
+              <span>Voice notes</span>
+              <span style={{ fontFamily: "'Share Tech Mono', 'Courier New', monospace", color: '#1A1A1A' }}>{fmtMB(usage.audio)}</span>
+            </div>
             <div style={{ height: 6, borderRadius: 4, background: '#D2C9B7', overflow: 'hidden', marginBottom: 4 }}>
               <div style={{ height: '100%', width: `${usage.quota && usage.used != null ? Math.min(100, usage.used / usage.quota * 100) : 0}%`, background: '#4E7864' }} />
             </div>
@@ -1826,6 +1960,18 @@
     const clone = JSON.parse(JSON.stringify(projOrPage));
     const pages = clone.pages ? clone.pages : [clone];
 
+    // Voice recordings: audioDB Blob -> base64 `audioDataUrl` (audioRef dropped)
+    for (const pg of pages) {
+      await mapVoiceRecs(pg, async v => {
+        if (!v.audioRef) return v;
+        let blob = null;
+        try { blob = await audioDB.get(v.audioRef); } catch {}
+        if (!blob) return v;
+        const { audioRef, ...rest } = v;
+        return { ...rest, audioDataUrl: await blobToDataUrl(blob) };
+      });
+    }
+
     // Collect all IDB keys: DataPage photoRefs + sketch imageIds
     const allRefs = [];
     pages.forEach(pg => {
@@ -1866,6 +2012,19 @@
   async function extractPhotosFromImport(projOrPage) {
     const pages = projOrPage.pages ? projOrPage.pages : [projOrPage];
     for (const pg of pages) {
+      // Voice recordings: inline base64 -> Blob in audioDB under a fresh audioRef
+      await mapVoiceRecs(pg, async v => {
+        if (!v.audioDataUrl || v.audioRef) return v;
+        try {
+          const ref = audioDB.newRef();
+          await audioDB.put(ref, await dataUrlToBlob(v.audioDataUrl));
+          const { audioDataUrl, ...rest } = v;
+          return { ...rest, audioRef: ref };
+        } catch (err) {
+          console.error('Voice note extract-on-import failed:', err);
+          return v;
+        }
+      });
       // Extract DataPage photos
       if (Array.isArray(pg.photos)) {
         const next = [];
@@ -1997,7 +2156,7 @@
   // PAGE TRANSFER HELPERS
   // ─────────────────────────────────────────────────────────────────────────────
 
-  // Deep-clone a page with all-new IDs (page, rows, shapes, photos).
+  // Deep-clone a page with all-new IDs (page, rows, shapes, photos, voice notes).
   // Does NOT modify pageChain — callers append chain records themselves.
   function freshPageIds(page) {
     let n = Date.now();
@@ -2011,7 +2170,13 @@
       cloned.shapes = cloned.shapes.map(s => ({ ...s, id: uid() }));
     }
     if (Array.isArray(cloned.photos)) {
-      cloned.photos = cloned.photos.map(ph => ({ ...ph, id: uid() }));
+      cloned.photos = cloned.photos.map(ph => ({
+        ...ph, id: uid(),
+        ...(Array.isArray(ph.voice) ? { voice: ph.voice.map(v => ({ ...v, id: uid() })) } : {}),
+      }));
+    }
+    if (Array.isArray(cloned.voiceNotes)) {
+      cloned.voiceNotes = cloned.voiceNotes.map(v => ({ ...v, id: uid() }));
     }
     return cloned;
   }
@@ -2392,7 +2557,7 @@
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
         <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 32 }}>
-          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+          <div tabIndex={0} className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" style={{ outline: 'none' }} />
           <div className="flex items-baseline justify-between mb-3">
             <h2 className="text-xl font-bold text-fb-text">📍 {heading}</h2>
             <span className="text-xs font-semibold text-fb-muted">{crs.short}</span>
@@ -6331,6 +6496,415 @@
     }
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // MEDIA GEOTAGGING + VOICE NOTES (used by PhotoPage)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Watch the phone position and keep the most accurate fix seen. Used for
+  // media, where a quick "about here" position is wanted without a dialog.
+  function startFixTracker(onBest) {
+    let best = null, id = null;
+    if (navigator.geolocation) {
+      id = navigator.geolocation.watchPosition(
+        pos => {
+          const c = pos.coords;
+          const f = { lat: c.latitude, lon: c.longitude, h: c.altitude, acc: c.accuracy, fixes: 1 };
+          if (!best || f.acc <= best.acc) { best = f; onBest && onBest(best); }
+        },
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+      );
+    }
+    return {
+      best: () => best,
+      stop: () => { if (id !== null) { navigator.geolocation.clearWatch(id); id = null; } },
+    };
+  }
+
+  // One-shot position: resolves with the best fix seen within maxMs (early
+  // once it is good enough), or null when there is no fix / no permission.
+  function getQuickFix(maxMs = 8000, goodEnough = 8) {
+    return new Promise(resolve => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; clearTimeout(timer); tracker.stop(); resolve(tracker.best()); };
+      const timer = setTimeout(finish, maxMs);
+      const tracker = startFixTracker(best => { if (best.acc <= goodEnough) setTimeout(finish, 0); });
+    });
+  }
+
+  // GPS position written into an uploaded photo by the camera that took it.
+  // Returns a `geo` block or null. EXIF altitude is ignored — cameras disagree
+  // on whether it is ellipsoidal or sea-level, so it can't be reduced honestly.
+  async function readExifGeo(file) {
+    if (!window.exifr) return null;
+    try {
+      const pos = await window.exifr.gps(file);
+      if (!pos || !isFinite(pos.latitude) || !isFinite(pos.longitude)) return null;
+      if (pos.latitude === 0 && pos.longitude === 0) return null;   // unset tags
+      let acc = null, ts = null;
+      try {
+        const x = await window.exifr.parse(file, ['GPSHPositioningError', 'DateTimeOriginal']);
+        if (x && isFinite(x.GPSHPositioningError)) acc = Number(x.GPSHPositioningError);
+        if (x && x.DateTimeOriginal instanceof Date && !isNaN(x.DateTimeOriginal)) ts = x.DateTimeOriginal.toISOString();
+      } catch {}
+      return { ...fbGeo.makeGeo({ lat: pos.latitude, lon: pos.longitude, h: null, acc, ts }, 'photo'), from: 'exif' };
+    } catch { return null; }
+  }
+
+  function fmtDur(secs) {
+    const s = Math.max(0, Math.round(secs || 0));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  const VOICE_MAX_SECS = 300;   // hard stop so a forgotten recorder can't fill storage
+  function pickAudioMime() {
+    if (typeof MediaRecorder === 'undefined') return '';
+    return ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
+      .find(m => MediaRecorder.isTypeSupported(m)) || '';
+  }
+
+  // Bottom sheet: record → review → save a voice note. Hands the finished
+  // record (audio already in audioDB) to onSave.
+  function VoiceRecorderSheet({ projectId, geotag, heading = 'Voice Note', onSave, onClose }) {
+    const crsId = fbGeo.projectCrsId(DB.getProject(projectId));
+    const [phase, setPhase] = useState('idle');   // 'idle' | 'recording' | 'recorded' | 'saving'
+    const [err, setErr]     = useState(null);
+    const [secs, setSecs]   = useState(0);
+    const [title, setTitle] = useState('');
+    const [desc, setDesc]   = useState('');
+    const [fix, setFix]     = useState(null);
+    const [previewUrl, setPreviewUrl] = useState(null);
+    const recRef = useRef(null), streamRef = useRef(null), chunksRef = useRef([]);
+    const blobRef = useRef(null), urlRef = useRef(null), trackerRef = useRef(null);
+    const t0Ref = useRef(0), durRef = useRef(0);
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+
+    function stopStream() {
+      if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+    }
+
+    // Position warms up while the sheet is open; the best fix is taken at save.
+    useEffect(() => {
+      if (geotag) trackerRef.current = startFixTracker(best => setFix(best));
+      return () => {
+        try { if (recRef.current && recRef.current.state === 'recording') { recRef.current.onstop = null; recRef.current.stop(); } } catch {}
+        stopStream();
+        if (trackerRef.current) trackerRef.current.stop();
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      };
+    }, []);
+
+    useEffect(() => {
+      if (phase !== 'recording') return;
+      const t = setInterval(() => {
+        const s = Math.floor((Date.now() - t0Ref.current) / 1000);
+        setSecs(s);
+        if (s >= VOICE_MAX_SECS) stop();
+      }, 250);
+      return () => clearInterval(t);
+    }, [phase]);
+
+    async function start() {
+      setErr(null);
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+        setErr('This browser cannot record audio.');
+        return;
+      }
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        setErr(
+          (e.name === 'NotAllowedError' || e.name === 'SecurityError')
+            ? 'Microphone permission denied. Allow the microphone for this site in your browser settings, then try again.'
+          : e.name === 'NotFoundError' ? 'No microphone found on this device.'
+          : 'Could not start the microphone.');
+        return;
+      }
+      streamRef.current = stream;
+      const mime = pickAudioMime();
+      let rec;
+      try { rec = new MediaRecorder(stream, { ...(mime ? { mimeType: mime } : {}), audioBitsPerSecond: 32000 }); }
+      catch { rec = new MediaRecorder(stream); }
+      chunksRef.current = [];
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        stopStream();
+        const blob = new Blob(chunksRef.current, { type: rec.mimeType || mime || 'audio/webm' });
+        blobRef.current = blob;
+        durRef.current = Math.max(1, Math.round((Date.now() - t0Ref.current) / 1000));
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+        urlRef.current = URL.createObjectURL(blob);
+        setPreviewUrl(urlRef.current);
+        setPhase('recorded');
+      };
+      recRef.current = rec;
+      t0Ref.current = Date.now();
+      setSecs(0);
+      rec.start(1000);
+      setPhase('recording');
+    }
+
+    function stop() {
+      try { if (recRef.current && recRef.current.state === 'recording') recRef.current.stop(); } catch {}
+    }
+
+    async function save() {
+      const blob = blobRef.current;
+      if (!blob || !blob.size) { setErr('Nothing was recorded — try again.'); setPhase('idle'); return; }
+      setPhase('saving');
+      try {
+        const ref = audioDB.newRef();
+        await audioDB.put(ref, blob);
+        const best = trackerRef.current ? trackerRef.current.best() : null;
+        onSave({
+          id: 'vn_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+          audioRef: ref, mime: blob.type, dur: durRef.current, size: blob.size,
+          title: title.trim(), desc: desc.trim(),
+          createdAt: new Date().toISOString(),
+          ...(best ? { geo: fbGeo.makeGeo(best, 'voice') } : {}),
+        });
+      } catch (e) {
+        console.error('Voice note save failed:', e);
+        setErr('Recording could not be saved — device storage may be full.');
+        setPhase('recorded');
+      }
+    }
+
+    const fieldCls = 'w-full px-3 py-3 rounded-xl text-base text-fb-text outline-none';
+    const fieldSty = { background: '#FDFAF4', border: '1px solid #CEC5B0' };
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && phase !== 'recording' && onClose()}>
+        <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 32 }}>
+          <div tabIndex={0} className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" style={{ outline: 'none' }} />
+          <h2 className="text-xl font-bold text-fb-text mb-3">🎙 {heading}</h2>
+
+          <div className="rounded-xl px-4 py-4 mb-3 text-center" style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+            <p className="font-data text-fb-text" style={{ fontSize: 34, lineHeight: 1.1, color: phase === 'recording' ? '#B3261E' : undefined }}>
+              {fmtDur(phase === 'recording' ? secs : phase === 'idle' ? 0 : durRef.current)}
+            </p>
+            <p className="text-xs text-fb-muted mt-1">
+              {phase === 'recording' ? `Recording… (max ${VOICE_MAX_SECS / 60} min)`
+                : phase === 'idle' ? 'Tap Record to start'
+                : 'Recorded — play it back, then save'}
+            </p>
+            {geotag && (
+              <p className="text-xs font-data mt-2" style={{ color: fix ? '#3C5445' : '#9A908A' }}>
+                {fix ? `📍 ${fbGeo.fmtPosition(fix.lat, fix.lon, crsId)} · ${fbGeo.fmtAcc(fix.acc)}` : '📍 Locating…'}
+              </p>
+            )}
+          </div>
+
+          {err && (
+            <p className="text-sm rounded-xl px-3 py-2.5 mb-3" style={{ background: '#FBE9E7', border: '1px solid #E6B8AF', color: '#8A2B1D' }}>{err}</p>
+          )}
+
+          {(phase === 'recorded' || phase === 'saving') && (
+            <>
+              <audio controls src={previewUrl || undefined} style={{ width: '100%', marginBottom: 12 }} />
+              <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Title (optional)"
+                className={fieldCls + ' mb-2'} style={fieldSty} maxLength={80} />
+              <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder="Description (optional)" rows={2}
+                className={fieldCls + ' mb-3'} style={{ ...fieldSty, resize: 'none' }} />
+            </>
+          )}
+
+          {phase === 'idle' && (
+            <button onClick={start}
+              className="w-full py-4 rounded-xl font-semibold text-base text-white active:opacity-80"
+              style={{ background: '#B3261E' }}>
+              ● Record
+            </button>
+          )}
+          {phase === 'recording' && (
+            <button onClick={stop}
+              className="w-full py-4 rounded-xl font-semibold text-base text-white active:opacity-80"
+              style={{ background: '#3C5445' }}>
+              ■ Stop
+            </button>
+          )}
+          {(phase === 'recorded' || phase === 'saving') && (
+            <div className="flex gap-2">
+              <button onClick={() => { setPreviewUrl(null); blobRef.current = null; setPhase('idle'); }} disabled={phase === 'saving'}
+                className="py-3.5 px-5 rounded-xl font-semibold text-sm text-fb-text active:opacity-80"
+                style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                Redo
+              </button>
+              <button onClick={save} disabled={phase === 'saving'}
+                className="flex-1 py-3.5 rounded-xl font-semibold text-base text-white active:opacity-80"
+                style={{ background: '#4E7864', opacity: phase === 'saving' ? 0.6 : 1 }}>
+                {phase === 'saving' ? 'Saving…' : 'Save voice note'}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // One saved voice record: play/pause, title, duration, delete. The full
+  // (standalone) form adds a description; `compact` is the per-photo memo row.
+  function VoiceCard({ rec, compact, onChange, onDelete, children }) {
+    const [playing, setPlaying] = useState(false);
+    const [missing, setMissing] = useState(false);
+    const audioRef = useRef(null), urlRef = useRef(null);
+
+    useEffect(() => () => {
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    }, []);
+
+    async function toggle() {
+      if (audioRef.current) {
+        if (playing) audioRef.current.pause(); else audioRef.current.play().catch(() => {});
+        return;
+      }
+      let blob = null;
+      try { blob = await audioDB.get(rec.audioRef); } catch {}
+      if (!blob) { setMissing(true); return; }
+      urlRef.current = URL.createObjectURL(blob);
+      const a = new Audio(urlRef.current);
+      a.onplay  = () => setPlaying(true);
+      a.onpause = () => setPlaying(false);
+      a.onended = () => setPlaying(false);
+      audioRef.current = a;
+      a.play().catch(() => setMissing(true));
+    }
+
+    return (
+      <div style={compact
+        ? { padding: '6px 0' }
+        : { flexShrink: 0, borderRadius: 16, border: '1px solid #E5E1D8', background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', padding: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button onClick={toggle} disabled={missing} title={playing ? 'Pause' : 'Play'}
+            style={{ width: 44, height: 44, borderRadius: 22, flexShrink: 0, border: 'none', cursor: 'pointer',
+                     background: missing ? '#CEC5B0' : '#3C5445', color: '#FDFAF4', fontSize: 16 }}>
+            {playing ? '❚❚' : '▶'}
+          </button>
+          <input type="text" value={rec.title || ''} onChange={e => onChange({ title: e.target.value })}
+            placeholder={compact ? 'Voice memo…' : 'Voice note title…'} maxLength={80}
+            style={{ flex: 1, minWidth: 0, fontFamily: "'Caveat', cursive", fontSize: 17, border: 'none',
+                     borderBottom: '1px solid #E5E1D8', background: 'transparent', outline: 'none', color: '#1A1A1A', padding: '2px 0' }} />
+          <span className="font-data" style={{ fontSize: 13, color: '#6B635C', flexShrink: 0 }}>{fmtDur(rec.dur)}</span>
+          <button onClick={onDelete} title="Delete recording"
+            style={{ width: 36, height: 36, borderRadius: 18, flexShrink: 0, border: 'none', background: 'transparent', color: '#9A908A', cursor: 'pointer',
+                     display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Ico.Trash />
+          </button>
+        </div>
+        {missing && <p style={{ fontSize: 12, color: '#8A2B1D', marginTop: 4 }}>Recording not found on this device.</p>}
+        {!compact && (
+          <textarea value={rec.desc || ''} onChange={e => onChange({ desc: e.target.value })}
+            placeholder="Description…" rows={2}
+            style={{ width: '100%', boxSizing: 'border-box', resize: 'none', marginTop: 10, borderRadius: 8,
+                     border: '1px solid #E5E1D8', padding: '8px 10px', fontFamily: "'Caveat', cursive", fontSize: 15,
+                     outline: 'none', background: '#F5F0E3', color: '#1A1A1A' }} />
+        )}
+        {children}
+      </div>
+    );
+  }
+
+  // Position + point-number row under a photo or voice note.
+  //   rec.geo   — phone position (device fix or photo EXIF), if any
+  //   rec.ptNum — optional point number; if it matches a Points-page point the
+  //               record is linked to that point and shows the point's coordinates
+  function MediaGeoRow({ rec, source, project, locating, onChange, onLocate, onLink }) {
+    const crsId = fbGeo.projectCrsId(project);
+    const pt = fbGeo.mediaPoint(rec, project, source);
+    const num = String(rec.ptNum ?? '').trim();
+    const dup = !!num && !(pt && pt.linkedRowId) && (fbGeo.pointNumberCounts(project)[num] || 0) > 1;
+    const uri = pt && pt.lat !== null ? fbGeo.geoUri(pt.lat, pt.lon, [pt.number, pt.desc].filter(Boolean).join(' ')) : null;
+
+    let line, tag = null;
+    if (pt && pt.linkedRowId) {
+      line = (pt.N !== null && pt.E !== null) ? `N ${pt.text.n}  E ${pt.text.e}` : 'Point has no coordinates yet';
+      tag = `Linked to Pt ${pt.number}${pt.linkedDesc ? ' — ' + pt.linkedDesc : ''}`;
+    } else if (pt) {
+      line = fbGeo.fmtPosition(pt.lat, pt.lon, crsId);
+      tag = pt.from === 'exif'
+        ? (pt.acc !== null ? `±${Math.round(pt.acc)} m · photo EXIF GPS` : 'photo EXIF GPS')
+        : fbGeo.fmtAcc(pt.acc);
+    } else {
+      line = locating ? 'Locating…' : 'No position';
+    }
+
+    const chip = { height: 36, padding: '0 12px', borderRadius: 10, fontSize: 12.5, fontWeight: 600, flexShrink: 0,
+                   border: '1px solid #CEC5B0', background: '#EBE5D5', color: '#3C5445', cursor: 'pointer',
+                   display: 'inline-flex', alignItems: 'center', textDecoration: 'none', whiteSpace: 'nowrap' };
+
+    return (
+      <div style={{ marginTop: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '2px 10px' }}>
+          <span className="font-data" style={{ fontSize: 13, color: pt ? '#1A1A1A' : '#9A908A' }}>📍 {line}</span>
+          {tag && <span style={{ fontSize: 11.5, fontWeight: 600, color: pt.linkedRowId ? '#3C5445' : '#9A5B00' }}>{tag}</span>}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, overflowX: 'auto' }}>
+          <input type="text" inputMode="numeric" value={rec.ptNum || ''} placeholder="Pt #"
+            onChange={e => onChange({ ptNum: e.target.value })}
+            className="font-data"
+            style={{ width: 76, height: 36, flexShrink: 0, borderRadius: 10, border: `1px solid ${dup ? '#D9A441' : '#CEC5B0'}`,
+                     background: '#FDFAF4', padding: '0 8px', fontSize: 15, outline: 'none', color: '#1A1A1A' }} />
+          {!num && pt && (
+            <button style={chip} onClick={() => onChange({ ptNum: String(fbGeo.nextGpsPtNum(project)) })}>
+              # {fbGeo.nextGpsPtNum(project)}
+            </button>
+          )}
+          <button style={chip} onClick={onLink}>Link…</button>
+          {!rec.geo && !(pt && pt.linkedRowId) && onLocate && (
+            <button style={chip} onClick={onLocate} disabled={locating}>{locating ? 'Locating…' : '📍 Locate'}</button>
+          )}
+          {uri && <a href={uri} style={chip}>🗺 Map</a>}
+        </div>
+        {dup && <p style={{ fontSize: 11.5, fontWeight: 600, color: '#9A5B00', marginTop: 4 }}>⚠ Point {num} is used more than once.</p>}
+      </div>
+    );
+  }
+
+  // Pick an existing Points-page point to link a photo / voice note to.
+  function PointPickerSheet({ project, onPick, onClose }) {
+    const [q, setQ] = useState('');
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const all = fbGeo.rowPoints(project).filter(p => p.number);
+    const needle = q.trim().toLowerCase();
+    const list = needle ? all.filter(p => p.number.toLowerCase().includes(needle) || p.desc.toLowerCase().includes(needle)) : all;
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 24 }}>
+          <div tabIndex={0} className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" style={{ outline: 'none' }} />
+          <h2 className="text-xl font-bold text-fb-text mb-3">Link to Point</h2>
+          <input type="text" value={q} onChange={e => setQ(e.target.value)} placeholder="Search number or description"
+            className="w-full px-3 py-3 rounded-xl text-base text-fb-text outline-none mb-3"
+            style={{ background: '#FDFAF4', border: '1px solid #CEC5B0' }} />
+          <div style={{ maxHeight: '45vh', overflowY: 'auto' }} className="space-y-1.5">
+            {list.length === 0 && (
+              <p className="text-sm text-fb-muted py-6 text-center rounded-xl" style={{ background: '#EBE5D5' }}>
+                {all.length === 0 ? 'No numbered points on this project\'s Points pages yet.' : 'No matching points.'}
+              </p>
+            )}
+            {list.map(p => (
+              <button key={p.id} onClick={() => onPick(p.number)}
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left active:opacity-80"
+                style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                <span style={{ fontSize: 15, width: 22, textAlign: 'center', flexShrink: 0 }}>{fbGeo.SOURCES[p.source]?.icon}</span>
+                <span className="font-data text-base text-fb-text" style={{ width: 64, flexShrink: 0 }}>{p.number}</span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-sm text-fb-text truncate">{p.desc || '—'}</span>
+                  <span className="block text-xs text-fb-muted font-data truncate">
+                    {p.N !== null && p.E !== null ? `N ${p.text.n}  E ${p.text.e}` : 'no coordinates'}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function PhotoPage({ page, projectId, onReload, onRegisterExports }) {
     const [photos, setPhotos] = useState(page.photos || []);
     const [urlMap, setUrlMap] = useState({}); // photoRef -> dataUrl, for rendering
@@ -6340,6 +6914,21 @@
     const fileRef = useRef(null);
     const camRef  = useRef(null);
     const toast   = useToast();
+    const project = DB.getProject(projectId);
+
+    // Standalone voice notes on this page (per-photo memos live on the photo)
+    const [voiceNotes, setVoiceNotes] = useState(page.voiceNotes || []);
+    const voiceRef = useRef(voiceNotes);
+    useEffect(() => { voiceRef.current = voiceNotes; }, [voiceNotes]);
+    useEffect(() => { const v = page.voiceNotes || []; voiceRef.current = v; setVoiceNotes(v); }, [page.id]);
+    // Geotag in-app photos and voice notes with the phone's position (on by default)
+    const [geotag, setGeotag] = useState(() => {
+      try { return localStorage.getItem('fb_photo_geotag') !== 'false'; } catch { return true; }
+    });
+    const [locating, setLocating]     = useState({});    // record id -> true while a fix is pending
+    const [recorder, setRecorder]     = useState(null);  // null | { photoId: string | null }
+    const [linkTarget, setLinkTarget] = useState(null);  // null | { kind: 'photo' | 'voice', id }
+    const noFixToastRef = useRef(false);
 
     // Ref mirrors the photos state so async handlers always see the latest
     // array after awaits, avoiding the stale-closure bug that caused the
@@ -6433,7 +7022,7 @@
       return null;
     }
 
-    async function handleFileInput(e) {
+    async function handleFileInput(e, fromCamera) {
       const files = Array.from(e.target.files || []);
       e.target.value = '';
       if (!files.length) return;
@@ -6447,17 +7036,27 @@
       // Save after each photo so a mid-batch crash still retains earlier ones.
       for (const f of files) {
         try {
+          // Position. An uploaded photo uses the GPS its camera wrote into the
+          // file — read from the ORIGINAL, because compression strips EXIF. A
+          // photo taken now uses the phone's own fix (EXIF as a fallback); it
+          // arrives after the photo is saved so the camera never waits on GPS.
+          const exifP = (fromCamera && !geotag) ? null : readExifGeo(f);
+          const fixP  = (fromCamera && geotag) ? getQuickFix() : null;
           const dataUrl = await compressImage(f);
           const ref = photoDB.newRef();
           await photoDB.put(ref, dataUrl);
+          const exifGeo = exifP ? await exifP : null;
+          const id = 'ph_' + Date.now() + '_' + Math.random().toString(36).slice(2);
           const next = [...photosRef.current, {
-            id: 'ph_' + Date.now() + '_' + Math.random().toString(36).slice(2),
+            id,
             photoRef: ref,
             note: '',
+            ...(exifGeo && !fixP ? { geo: exifGeo } : {}),
           }];
           if (savePhotos(next)) {
             setUrlMap(m => ({ ...m, [ref]: dataUrl }));
             savedCount++;
+            if (fixP) locatePhoto(id, fixP, exifGeo);
           } else {
             // localStorage quota hit — the page-level save failed, so the ref
             // would be orphaned. Clean up the IDB entry we just wrote.
@@ -6483,10 +7082,104 @@
       savePhotos(photosRef.current.map(p => p.id === id ? { ...p, note } : p));
     }
 
+    function patchPhoto(id, patch) {
+      if (!photosRef.current.some(p => p.id === id)) return;
+      savePhotos(photosRef.current.map(p => p.id === id ? { ...p, ...patch } : p));
+    }
+
+    function setLocatingFor(id, on) {
+      setLocating(l => { const n = { ...l }; if (on) n[id] = true; else delete n[id]; return n; });
+    }
+
+    // Attach the phone fix to a just-taken photo once it resolves.
+    function locatePhoto(id, fixP, fallbackGeo) {
+      setLocatingFor(id, true);
+      fixP.then(fix => {
+        setLocatingFor(id, false);
+        const geo = fix ? fbGeo.makeGeo(fix, 'photo') : fallbackGeo;
+        if (geo) { patchPhoto(id, { geo }); return; }
+        if (!noFixToastRef.current) {
+          noFixToastRef.current = true;
+          toast.error('No GPS position — photo saved without a location.');
+        }
+      });
+    }
+
+    // "Locate" on a card that has no position yet — tag it with where the phone is now.
+    function locateNow(kind, id) {
+      setLocatingFor(id, true);
+      getQuickFix().then(fix => {
+        setLocatingFor(id, false);
+        if (!fix) { toast.error('No GPS position available.'); return; }
+        if (kind === 'photo') patchPhoto(id, { geo: fbGeo.makeGeo(fix, 'photo') });
+        else patchVoice(id, { geo: fbGeo.makeGeo(fix, 'voice') });
+      });
+    }
+
+    function toggleGeotag() {
+      setGeotag(g => {
+        const next = !g;
+        try { localStorage.setItem('fb_photo_geotag', String(next)); } catch {}
+        return next;
+      });
+    }
+
+    // ── Voice notes ──
+    function saveVoiceNotes(next) {
+      try {
+        DB.updatePage(projectId, page.id, { voiceNotes: next });
+      } catch (err) {
+        toast.error('Voice note not saved — storage full.');
+        return false;
+      }
+      voiceRef.current = next;
+      setVoiceNotes(next);
+      return true;
+    }
+
+    // Recorder finished: the audio is already in audioDB, attach the record
+    // to the photo it was recorded for, or to the page.
+    function addVoice(rec) {
+      const target = recorder;
+      setRecorder(null);
+      const ok = (target && target.photoId)
+        ? savePhotos(photosRef.current.map(p => p.id === target.photoId ? { ...p, voice: [...(p.voice || []), rec] } : p))
+        : saveVoiceNotes([...voiceRef.current, rec]);
+      if (ok) toast.success('Voice note saved');
+      else audioDB.del(rec.audioRef).catch(() => {});
+    }
+
+    function patchVoice(id, patch) {
+      saveVoiceNotes(voiceRef.current.map(v => v.id === id ? { ...v, ...patch } : v));
+    }
+
+    function deleteVoice(id) {
+      const v = voiceRef.current.find(x => x.id === id);
+      if (!v || !window.confirm('Delete this voice note?')) return;
+      if (saveVoiceNotes(voiceRef.current.filter(x => x.id !== id))) dropAudioIfUnused(v.audioRef);
+    }
+
+    function patchMemo(photoId, memoId, patch) {
+      savePhotos(photosRef.current.map(p => p.id === photoId
+        ? { ...p, voice: (p.voice || []).map(v => v.id === memoId ? { ...v, ...patch } : v) } : p));
+    }
+
+    function deleteMemo(photoId, memoId) {
+      const ph = photosRef.current.find(p => p.id === photoId);
+      const v = ph && (ph.voice || []).find(x => x.id === memoId);
+      if (!v || !window.confirm('Delete this voice memo?')) return;
+      if (savePhotos(photosRef.current.map(p => p.id === photoId
+            ? { ...p, voice: (p.voice || []).filter(x => x.id !== memoId) } : p))) {
+        dropAudioIfUnused(v.audioRef);
+      }
+    }
+
     function deletePhoto(id) {
       const toRemove = photosRef.current.find(p => p.id === id);
       const next = photosRef.current.filter(p => p.id !== id);
       if (!savePhotos(next)) return;
+      // Voice memos recorded on this photo go with it
+      ((toRemove && toRemove.voice) || []).forEach(v => dropAudioIfUnused(v.audioRef));
       // Lazy IDB cleanup — pruneOrphans handles this safely at app-level, so
       // we don't need to worry about duplicate pages sharing a ref. Only
       // remove if we're confident no other page references it on this project.
@@ -6521,9 +7214,9 @@
                onChange={handleFileInput} />
         <input key={camKey} ref={camRef} type="file" accept="image/*" capture="environment"
                style={{ position: 'fixed', top: -9999, left: -9999, width: 1, height: 1, opacity: 0 }}
-               onChange={e => { handleFileInput(e); setCamKey(k => k + 1); }} />
+               onChange={e => { handleFileInput(e, true); setCamKey(k => k + 1); }} />
         {/* Add buttons */}
-        <div style={{ display: 'flex', gap: 12, padding: '12px 16px', borderBottom: '1px solid #E5E1D8' }}>
+        <div style={{ display: 'flex', gap: 8, padding: '12px 16px 8px' }}>
           <button onClick={() => !uploading && camRef.current?.click()}
             disabled={uploading}
             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
@@ -6540,14 +7233,41 @@
                      cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? 0.6 : 1 }}>
             <Ico.Download /> {uploading ? 'Importing…' : 'Upload'}
           </button>
+          <button onClick={() => setRecorder({ photoId: null })}
+            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                     padding: '12px 0', borderRadius: 14, background: 'transparent', color: '#3C5445',
+                     fontWeight: 600, fontSize: 14, border: '2px solid #3C5445', cursor: 'pointer' }}>
+            🎙 Voice
+          </button>
         </div>
+        {/* Geotag toggle — in-app photos and voice notes take the phone's position */}
+        <button onClick={toggleGeotag}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '6px 16px 10px',
+                   background: 'transparent', border: 'none', borderBottom: '1px solid #E5E1D8', cursor: 'pointer', textAlign: 'left' }}>
+          <span style={{ flex: 1, fontSize: 12.5, color: '#5A5248' }}>📍 Tag new photos &amp; voice notes with phone position</span>
+          <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
+                         background: geotag ? '#4E7864' : '#CEC5B0', color: geotag ? '#fff' : '#6B635C' }}>
+            {geotag ? 'ON' : 'OFF'}
+          </span>
+        </button>
         {/* Photo cards — minHeight:0 lets the flex child scroll instead of shrink */}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {photos.length === 0 && (
+          {photos.length === 0 && voiceNotes.length === 0 && (
             <div style={{ textAlign: 'center', padding: '60px 16px', color: '#A0948A', fontSize: 14 }}>
-              No photos yet — tap Camera or Upload to add one.
+              Nothing here yet — tap Camera, Upload or Voice to add one.
             </div>
           )}
+          {/* Standalone voice notes */}
+          {voiceNotes.map(v => (
+            <VoiceCard key={v.id} rec={v}
+              onChange={patch => patchVoice(v.id, patch)}
+              onDelete={() => deleteVoice(v.id)}>
+              <MediaGeoRow rec={v} source="voice" project={project} locating={!!locating[v.id]}
+                onChange={patch => patchVoice(v.id, patch)}
+                onLocate={() => locateNow('voice', v.id)}
+                onLink={() => setLinkTarget({ kind: 'voice', id: v.id })} />
+            </VoiceCard>
+          ))}
           {photos.map((ph, i) => (
             <div key={ph.id} style={{ flexShrink: 0, borderRadius: 16, overflow: 'hidden', border: '1px solid #E5E1D8',
                                       background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
@@ -6575,10 +7295,43 @@
                            fontFamily: "'Caveat', cursive", fontSize: 15, outline: 'none',
                            background: '#F5F0E3', color: '#1A1A1A' }}
                 />
+                <MediaGeoRow rec={ph} source="photo" project={project} locating={!!locating[ph.id]}
+                  onChange={patch => patchPhoto(ph.id, patch)}
+                  onLocate={() => locateNow('photo', ph.id)}
+                  onLink={() => setLinkTarget({ kind: 'photo', id: ph.id })} />
+                {(ph.voice || []).length > 0 && (
+                  <div style={{ marginTop: 10, borderTop: '1px solid #E5E1D8', paddingTop: 4 }}>
+                    {ph.voice.map(v => (
+                      <VoiceCard key={v.id} rec={v} compact
+                        onChange={patch => patchMemo(ph.id, v.id, patch)}
+                        onDelete={() => deleteMemo(ph.id, v.id)} />
+                    ))}
+                  </div>
+                )}
+                <button onClick={() => setRecorder({ photoId: ph.id })}
+                  style={{ marginTop: 8, height: 36, padding: '0 12px', borderRadius: 10, fontSize: 12.5, fontWeight: 600,
+                           border: '1px solid #CEC5B0', background: '#EBE5D5', color: '#3C5445', cursor: 'pointer' }}>
+                  🎙 Add voice memo
+                </button>
               </div>
             </div>
           ))}
         </div>
+        {recorder && (
+          <VoiceRecorderSheet projectId={projectId}
+            geotag={geotag && !recorder.photoId}
+            heading={recorder.photoId ? 'Voice Memo' : 'Voice Note'}
+            onClose={() => setRecorder(null)} onSave={addVoice} />
+        )}
+        {linkTarget && (
+          <PointPickerSheet project={project}
+            onClose={() => setLinkTarget(null)}
+            onPick={num => {
+              if (linkTarget.kind === 'photo') patchPhoto(linkTarget.id, { ptNum: num });
+              else patchVoice(linkTarget.id, { ptNum: num });
+              setLinkTarget(null);
+            }} />
+        )}
         {/* Lightbox — full image on tap */}
         {expandedId && (() => {
           const lbPhoto = photos.find(p => p.id === expandedId);
@@ -9642,6 +10395,10 @@
           const n = await photoDB.pruneOrphans(DB.getProjects());
           if (n > 0) console.log(`[photoDB] pruned ${n} orphan${n === 1 ? '' : 's'}`);
         } catch (err) { console.error('[photoDB] prune failed:', err); }
+        try {
+          const n = await audioDB.pruneOrphans(DB.getProjects());
+          if (n > 0) console.log(`[audioDB] pruned ${n} orphan${n === 1 ? '' : 's'}`);
+        } catch (err) { console.error('[audioDB] prune failed:', err); }
       })();
       const handler = e => { e.preventDefault(); setInstallPrompt(e); };
       window.addEventListener('beforeinstallprompt', handler);
