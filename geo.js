@@ -16,6 +16,10 @@
   //   epsg      EPSG code (null for local)
   //   proj4     proj4 definition string (null = no lat/lon possible)
   //   fileTag   filesystem-safe name used in export filenames
+  //   bounds    [latS, latN, lonW, lonE] — generous area of use. Grid values
+  //             that convert to somewhere outside it (assumed coordinates
+  //             typed into a real-grid project, say) get no lat/lon rather
+  //             than a nonsense position in a map app.
   //   datumText text written to the Title page "Datum & Projection" field
   //
   // Definitions are from the EPSG registry via https://epsg.io (retrieved
@@ -40,6 +44,7 @@
       epsg: 2961,
       proj4: '+proj=utm +zone=20 +ellps=GRS80 +units=m +no_defs',
       fileTag: 'NAD83CSRS-UTM20N',
+      bounds: [40, 84, -67, -59],
       datumText: 'NAD83(CSRS), UTM Zone 20N / CGVD2013',
     },
     {
@@ -49,6 +54,7 @@
       epsg: 8083,
       proj4: '+proj=tmerc +lat_0=0 +lon_0=-64.5 +k=0.9999 +x_0=25500000 +y_0=0 +ellps=GRS80 +units=m +no_defs',
       fileTag: 'NAD83CSRS-NSMTM5',
+      bounds: [43, 47.5, -67.5, -62],
       datumText: 'NAD83(CSRS), MTM Nova Scotia Zone 5 / CGVD2013',
     },
     {
@@ -93,7 +99,10 @@
     const c = conv(crsId);
     if (!c || !fin(n) || !fin(e)) return null;
     const out = c.inverse([e, n]);
-    return (fin(out[0]) && fin(out[1])) ? { lat: out[1], lon: out[0] } : null;
+    if (!fin(out[0]) || !fin(out[1])) return null;
+    const b = getCrs(crsId).bounds;
+    if (b && (out[1] < b[0] || out[1] > b[1] || out[0] < b[2] || out[0] > b[3])) return null;
+    return { lat: out[1], lon: out[0] };
   }
 
   // Lat/lon (decimal degrees) -> { n, e } in metres, or null.
@@ -156,6 +165,12 @@
   function fmtLatLon(lat, lon) {
     if (!fin(lat) || !fin(lon)) return '';
     return `${Math.abs(lat).toFixed(5)}°${lat >= 0 ? 'N' : 'S'} ${Math.abs(lon).toFixed(5)}°${lon >= 0 ? 'E' : 'W'}`;
+  }
+  // A phone position written in the PROJECT's coordinates ("N … E …"). Falls
+  // back to lat/lon only when the project is Local and has no grid.
+  function fmtPosition(lat, lon, crsId) {
+    const g = toGrid(lat, lon, crsId);
+    return g ? `N ${fmtGrid(g.n)}  E ${fmtGrid(g.e)}` : fmtLatLon(lat, lon);
   }
   // Android routes geo: links straight to the user's map app.
   function geoUri(lat, lon, label) {
@@ -222,6 +237,65 @@
     return isFinite(n) ? n : null;
   }
 
+  // One Points-page row as an index entry (without page fields), or null for
+  // a blank / unplaced row. Every row with usable N/E gets lat/lon through the
+  // CRS in exactly the same way whether it was typed, imported, placed on a
+  // sketch or captured by phone; a phone row falls back to its stored lat/lon
+  // only when it has no N/E (Local project).
+  function rowPoint(r, crsId) {
+    const c = r.cells || {};
+    const N = num(c.col_north), E = num(c.col_east), Z = num(c.col_elev);
+    const geo = (r.geo && fin(r.geo.lat) && fin(r.geo.lon)) ? r.geo : null;
+    if (!geo && N === null && E === null) return null;
+    let ll = (N !== null && E !== null) ? toLatLon(N, E, crsId) : null;
+    if (!ll && geo) ll = { lat: geo.lat, lon: geo.lon };
+    return {
+      id: r.id, number: String(c.col_ptnum ?? '').trim(), N, E, Z,
+      desc: String(c.col_desc ?? ''),
+      lat: ll ? ll.lat : null, lon: ll ? ll.lon : null,
+      source: geo ? (geo.source || 'gps') : 'instrument',
+      phone: !!geo, acc: geo ? (geo.acc ?? null) : null, ts: geo ? (geo.ts || null) : null,
+      refPageId: geo ? (geo.notePageId || null) : null,
+    };
+  }
+
+  // Text of a Notes-page GPS pin chip, in the project's coordinates.
+  function pinText(row, project) {
+    const c = row.cells || {}, g = row.geo || {};
+    const n = String(c.col_north ?? '').trim(), e = String(c.col_east ?? '').trim();
+    const pos = (n && e) ? `N ${n}  E ${e}` : fmtLatLon(g.lat, g.lon);
+    const desc = String(c.col_desc ?? '').trim();
+    return `📍 Pt ${String(c.col_ptnum ?? '').trim()}${desc ? ' ' + desc : ''} · ${pos} · ${fmtAcc(g.acc)}`;
+  }
+
+  // Rewrite every GPS pin chip in a note's HTML from its point row, so the
+  // chip follows a CRS change or an edited number/description. Chips whose
+  // point was deleted are left as written. Returns the (possibly same) HTML.
+  function refreshPins(html, project) {
+    if (!html || html.indexOf('fb-geo-pin') === -1) return html;
+    // Row ids are regenerated when a project is imported or duplicated, so a
+    // chip falls back to finding its point by number.
+    const byId = {}, byNum = {};
+    (project.pages || []).forEach(pg => {
+      if (pg.type !== 'points') return;
+      (pg.rows || []).forEach(r => {
+        byId[r.id] = r;
+        const n = String(r.cells?.col_ptnum ?? '').trim();
+        if (n && r.geo && !byNum[n]) byNum[n] = r;
+      });
+    });
+    const box = document.createElement('div');
+    box.innerHTML = html;
+    box.querySelectorAll('.fb-geo-pin').forEach(el => {
+      const row = byId[el.dataset.ptId] || byNum[el.dataset.ptNum];
+      if (!row) return;
+      el.dataset.ptId = row.id;
+      el.dataset.ptNum = String(row.cells?.col_ptnum ?? '').trim();
+      el.textContent = pinText(row, project);
+    });
+    return box.innerHTML;
+  }
+
   function getProjectPoints(project) {
     const out = [];
     if (!project) return out;
@@ -246,25 +320,8 @@
     pages.forEach(pg => {
       if (pg.type === 'points') {
         (pg.rows || []).forEach(r => {
-          const c = r.cells || {};
-          const number = String(c.col_ptnum ?? '').trim();
-          const N = num(c.col_north), E = num(c.col_east), Z = num(c.col_elev);
-          const geo = (r.geo && fin(r.geo.lat) && fin(r.geo.lon)) ? r.geo : null;
-          if (!geo && N === null && E === null) return;   // blank / unplaced row
-          let lat = null, lon = null;
-          if (geo) { lat = geo.lat; lon = geo.lon; }
-          else if (N !== null && E !== null) {
-            const ll = toLatLon(N, E, crsId);
-            if (ll) { lat = ll.lat; lon = ll.lon; }
-          }
-          out.push({
-            id: r.id, number, N, E, Z,
-            desc: String(c.col_desc ?? ''),
-            lat, lon,
-            source: geo ? (geo.source || 'gps') : 'instrument',
-            phone: !!geo, acc: geo ? (geo.acc ?? null) : null, ts: geo ? (geo.ts || null) : null,
-            pageId: pg.id, pageType: pg.type, pageTitle: pg.title || '',
-          });
+          const pt = rowPoint(r, crsId);
+          if (pt) out.push({ ...pt, pageId: pg.id, pageType: pg.type, pageTitle: pg.title || '' });
         });
       }
       if (pg.type === 'photo') {
@@ -408,19 +465,32 @@
   // ─── Self-test ─────────────────────────────────────────────────────────────
   // Run from the browser console:   fbGeo.geoSelfTest()
   //
-  // ┌──────────────────────────────────────────────────────────────────────┐
-  // │  PLACEHOLDER — NOVA SCOTIA CONTROL MONUMENT                          │
-  // │  Fill in the PUBLISHED values for one NSCRS monument (NAD83(CSRS)).  │
-  // │  Leave a system null if you don't have it. Until this is filled in,  │
-  // │  the monument check reports SKIPPED and the self-test is incomplete. │
-  // └──────────────────────────────────────────────────────────────────────┘
-  const CONTROL_MONUMENT = {
-    name: null,                 // e.g. 'NSHPN 12345'
-    lat: null, lon: null,       // decimal degrees, lon negative (west)
-    utm20n: { n: null, e: null },
-    nsmtm5: { n: null, e: null },
-    tolerance: 0.002,           // metres — published coords are usually to the mm
-  };
+  // CONTROL MONUMENTS — NSCC COGS (Lawrencetown, NS) campus control, from the
+  // published sheets "COGS Monuments_CSRS2010 — Survey March 2018 v2" (one in
+  // NAD83(CSRS) 2010 MTM zone 5, one in UTM zone 20). Each station is published
+  // in BOTH grids, so the test is: take the UTM value, convert to MTM, and
+  // compare with the published MTM value (and back). h = ellipsoidal height,
+  // H = CGVD2013 orthometric height, so h − H is the published geoid
+  // undulation and checks the bundled CGG2013a grid.
+  //   [ station, MTM5 N, MTM5 E, UTM20 N, UTM20 E, h, H(CGVD2013) ]
+  const CONTROL_MONUMENTS = [
+    ['27001', 4971794.083, 25447108.773, 4972374.050, 328663.543, 7.461, 28.104],
+    ['27002', 4971655.358, 25447259.098, 4972232.567, 328811.283, 4.235, 24.879],
+    ['27003', 4971840.496, 25447347.724, 4972416.040, 328903.317, 5.305, 25.945],
+    ['27004', 4971997.482, 25447180.107, 4972576.101, 328738.626, 6.593, 27.233],
+    ['27005', 4972126.296, 25447127.354, 4972705.871, 328688.261, 7.457, 28.095],
+    ['27006', 4972344.836, 25447028.326, 4972926.210, 328593.286, 6.478, 27.114],
+    ['27007', 4972135.955, 25446959.303, 4972718.635, 328520.413, 9.058, 29.698],
+    ['27008', 4972398.564, 25446843.627, 4972983.344, 328409.607, 7.223, 27.861],
+    ['27010', 4972901.340, 25446912.930, 4973484.767, 328488.193, 8.004, 28.632],
+    ['27011', 4972782.560, 25447167.451, 4973361.299, 328740.481, 9.422, 30.049],
+    ['27012', 4972588.465, 25447310.895, 4973164.581, 328880.317, 7.567, 28.196],
+    ['BL1',   4972015.730, 25447342.440, 4972591.346, 328901.273, 7.219, 27.857],
+    ['BL2',   4972418.970, 25447067.216, 4972999.614, 328633.541, 6.954, 27.589],
+    ['BL3',   4972772.209, 25446826.516, 4973357.251, 328399.404, 7.947, 28.579],
+  ];
+  const MONUMENT_TOL = 0.002;        // m — sheets are published to the millimetre
+  const MONUMENT_GEOID_TOL = 0.010;  // m — h and H are independent published values
 
   function geoSelfTest() {
     const rows = [];
@@ -445,6 +515,8 @@
     ];
     CRS_REGISTRY.filter(c => c.proj4).forEach(c => {
       samples.forEach(([name, lat, lon]) => {
+        const b = c.bounds;   // Sydney is outside MTM zone 5's area of use
+        if (b && (lat < b[0] || lat > b[1] || lon < b[2] || lon > b[3])) return;
         const g = toGrid(lat, lon, c.id);
         const ll = g && toLatLon(g.n, g.e, c.id);
         // degrees -> metres (approx) so the tolerance reads in mm
@@ -458,23 +530,17 @@
     check('UTM 20N false easting on CM 63°W',    Math.abs(toGrid(45, -63.0, 'utm20n').e - 500000),   0.001, 'm');
     check('NS MTM 5 false easting on CM 64°30′W', Math.abs(toGrid(45, -64.5, 'nsmtm5').e - 25500000), 0.001, 'm');
 
-    // 3. Control monument (published values).
-    const m = CONTROL_MONUMENT;
-    if (!fin(m.lat) || !fin(m.lon)) {
-      rows.push({ test: 'control monument', error: '—', tolerance: m.tolerance + ' m', result: 'SKIPPED — monument not supplied' });
-    } else {
-      ['utm20n', 'nsmtm5'].forEach(id => {
-        const pub = m[id];
-        if (!pub || !fin(pub.n) || !fin(pub.e)) return;
-        const g = toGrid(m.lat, m.lon, id);
-        check(`${m.name || 'monument'} lat/lon -> ${getCrs(id).short}`, Math.hypot(g.n - pub.n, g.e - pub.e), m.tolerance, 'm');
-      });
-      if (fin(m.utm20n.n) && fin(m.nsmtm5.n)) {
-        const ll = toLatLon(m.utm20n.n, m.utm20n.e, 'utm20n');
-        const g = toGrid(ll.lat, ll.lon, 'nsmtm5');
-        check(`${m.name || 'monument'} UTM 20N -> NS MTM 5`, Math.hypot(g.n - m.nsmtm5.n, g.e - m.nsmtm5.e), m.tolerance, 'm');
-      }
-    }
+    // 3. Control monuments (published values, both grids).
+    CONTROL_MONUMENTS.forEach(([name, mN, mE, uN, uE, h, H]) => {
+      const ll = toLatLon(uN, uE, 'utm20n');
+      const m = ll && toGrid(ll.lat, ll.lon, 'nsmtm5');
+      check(`${name} UTM 20N -> NS MTM 5`, m ? Math.hypot(m.n - mN, m.e - mE) : NaN, MONUMENT_TOL, 'm');
+      const ll2 = toLatLon(mN, mE, 'nsmtm5');
+      const u = ll2 && toGrid(ll2.lat, ll2.lon, 'utm20n');
+      check(`${name} NS MTM 5 -> UTM 20N`, u ? Math.hypot(u.n - uN, u.e - uE) : NaN, MONUMENT_TOL, 'm');
+      const N = ll ? geoidN(ll.lat, ll.lon) : null;
+      check(`${name} geoid N vs published h - H`, N === null ? NaN : Math.abs(N - (h - H)), MONUMENT_GEOID_TOL, 'm');
+    });
 
     // 4. Geoid grid loaded and plausible (NS undulations are about −9 to −24 m).
     const N = geoidN(44.6488, -63.5752);
@@ -488,11 +554,12 @@
   }
 
   window.fbGeo = {
-    CRS_REGISTRY, DEFAULT_CRS, SOURCES, CONTROL_MONUMENT,
+    CRS_REGISTRY, DEFAULT_CRS, SOURCES, CONTROL_MONUMENTS,
     getCrs, projectCrsId, projectCrs, isGrid,
     toLatLon, toGrid, geoidN, orthoHeight,
-    fmtGrid, fmtElev, fmtAcc, fmtLatLon, geoUri,
+    fmtGrid, fmtElev, fmtAcc, fmtLatLon, fmtPosition, geoUri,
     makeGeo, gpsCells,
+    rowPoint, pinText, refreshPins,
     getProjectPoints, usedPointNumbers, gpsPtStart, nextGpsPtNum,
     crsChangeSummary, applyCrsChange, datumMatchesCrs,
     parseRange, inRanges,

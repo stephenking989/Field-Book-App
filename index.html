@@ -614,7 +614,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.161';
+  const APP_VERSION = '1.162';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -2407,7 +2407,7 @@
             <p className="text-xs text-fb-muted mt-1">
               {phase === 'averaging'
                 ? `${remaining} s left · ${count} fix${count === 1 ? '' : 'es'}`
-                : fix ? fbGeo.fmtLatLon(fix.lat, fix.lon) : 'Waiting for GPS…'}
+                : fix ? fbGeo.fmtPosition(fix.lat, fix.lon, crs.id) : 'Waiting for GPS…'}
             </p>
             {phase === 'averaging' && (
               <div className="h-1.5 rounded-full mt-2 overflow-hidden" style={{ background: '#CEC5B0' }}>
@@ -2427,10 +2427,15 @@
                 <span className={lbl} style={{ marginBottom: 0 }}>Averaged · {result.fixes} fix{result.fixes === 1 ? '' : 'es'}</span>
                 <span className="text-xs font-semibold" style={{ color: '#9A5B00' }}>{fbGeo.fmtAcc(result.acc)}</span>
               </div>
-              <p className="font-data text-sm text-fb-text">{fbGeo.fmtLatLon(result.lat, result.lon)}</p>
               {grid
-                ? <p className="font-data text-sm text-fb-text">N {fbGeo.fmtGrid(grid.n)}  E {fbGeo.fmtGrid(grid.e)}</p>
-                : <p className="text-xs text-fb-muted">Local coordinates — lat/lon is stored, no grid N/E.</p>}
+                ? <>
+                    <p className="font-data text-base text-fb-text">N {fbGeo.fmtGrid(grid.n)}</p>
+                    <p className="font-data text-base text-fb-text">E {fbGeo.fmtGrid(grid.e)}</p>
+                  </>
+                : <>
+                    <p className="font-data text-base text-fb-text">{fbGeo.fmtLatLon(result.lat, result.lon)}</p>
+                    <p className="text-xs text-fb-muted">Local coordinates — lat/lon is stored, no grid N/E.</p>
+                  </>}
               <p className="text-xs text-fb-muted mt-1 leading-snug">
                 {ht.h === null
                   ? 'No height from this fix.'
@@ -2510,8 +2515,12 @@
       const from  = fbGeo.getCrs(crsId), to = fbGeo.getCrs(toId);
       // Keep an untouched Title-page datum in step; hand-edited text is left
       // alone and the Title page shows a mismatch warning instead.
-      const pages = fbGeo.applyCrsChange(fresh, toId, reproject).map(pg =>
+      let pages = fbGeo.applyCrsChange(fresh, toId, reproject).map(pg =>
         (pg.type === 'title' && (!pg.datum || pg.datum === from.datumText)) ? { ...pg, datum: to.datumText } : pg);
+      // GPS pin chips in notes quote project coordinates — re-write them too.
+      const moved = { ...fresh, crs: toId, pages };
+      pages = pages.map(pg => (pg.type === 'notes' && pg.notesHtml)
+        ? { ...pg, notesHtml: fbGeo.refreshPins(pg.notesHtml, moved) } : pg);
       DB.updateProject(projectId, { crs: toId, pages });
       setPending(null);
       onReload();
@@ -6151,7 +6160,11 @@
     // Restore saved HTML into the contenteditable on mount / page change
     useEffect(() => {
       if (editorRef.current && page.notesHtml !== undefined) {
-        editorRef.current.innerHTML = page.notesHtml || '';
+        // GPS pin chips are re-written from their point rows so they follow an
+        // edited point number / description.
+        const html = fbGeo.refreshPins(page.notesHtml || '', DB.getProject(projectId));
+        editorRef.current.innerHTML = html;
+        if (html !== (page.notesHtml || '')) DB.updatePage(projectId, page.id, { notesHtml: html });
       }
     }, [page.id]);
 
@@ -6194,7 +6207,8 @@
       chip.className = 'fb-geo-pin';
       chip.contentEditable = 'false';
       chip.dataset.ptId = row.id;
-      chip.textContent = `📍 Pt ${pt.number}${pt.desc ? ' ' + pt.desc : ''} · ${fbGeo.fmtLatLon(pt.geo.lat, pt.geo.lon)} · ${fbGeo.fmtAcc(pt.geo.acc)}`;
+      chip.dataset.ptNum = pt.number;
+      chip.textContent = fbGeo.pinText(row, DB.getProject(projectId));
       const range = pinRangeRef.current;
       if (range && ed.contains(range.startContainer)) {
         range.collapse(false);
@@ -7285,8 +7299,20 @@
       }
     }, [rows, page.id]);
 
-    // Phone-GPS metadata of the active row, if it is a GPS-sourced point
-    const activeGeo = (page.type === 'points' && activeCell && rows[activeCell.rowIdx]?.geo) || null;
+    // Points pages — View ▾ → Open in Map. Any row whose N/E converts to
+    // lat/lon through the project CRS qualifies, however it was entered.
+    const mapCrs   = page.type === 'points' ? fbGeo.projectCrs(DB.getProject(projectId)) : null;
+    const mapRow   = (mapCrs && activeCell) ? rows[activeCell.rowIdx] : null;
+    const mapPoint = mapRow ? fbGeo.rowPoint(mapRow, mapCrs.id) : null;
+    const mapUri   = (mapPoint && mapPoint.lat !== null)
+      ? fbGeo.geoUri(mapPoint.lat, mapPoint.lon, [mapPoint.number, mapPoint.desc].filter(Boolean).join(' '))
+      : null;
+    const mapHint  = !mapCrs ? ''
+      : !mapRow ? 'Select a point row first'
+      : mapUri ? (mapPoint.phone ? `Pt ${mapPoint.number} · ${fbGeo.fmtAcc(mapPoint.acc)}` : `Pt ${mapPoint.number} · ${mapCrs.short}`)
+      : !mapCrs.proj4 ? 'Local coordinates — no map position'
+      : (mapPoint && mapPoint.N !== null && mapPoint.E !== null) ? `N/E is outside ${mapCrs.short}`
+      : 'This row has no N/E';
 
     function persistRows(updated) {
       // Push current state to undo stack before applying (cap at 50 steps)
@@ -8588,6 +8614,16 @@
                   <span className={dmsKeyboard ? 'off' : 'on'}>OFF</span>
                 </span>
               </button>
+              {page.type === 'points' && (
+                <>
+                  <div className="dp-drop-sep" />
+                  <div className="dp-drop-section">Location</div>
+                  <button disabled={!mapUri} onClick={() => { setOpenTbMenu(null); window.location.href = mapUri; }}>
+                    🗺 Open in Map
+                  </button>
+                  <div style={{ fontSize: 10.5, color: '#9A908A', padding: '0 12px 6px' }}>{mapHint}</div>
+                </>
+              )}
             </div>
           )}
           {openTbMenu === 'edit' && (
@@ -8614,26 +8650,6 @@
           )}
 
         </div>
-
-        {/* ── Phone-GPS info for the active row (points pages) ── */}
-        {activeGeo && (
-          <div className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0"
-            style={{ background: '#FFF6E0', borderBottom: '1px solid #E0C070', overflowX: 'auto', whiteSpace: 'nowrap' }}>
-            <span style={{ fontSize: 13 }}>{fbGeo.SOURCES[activeGeo.source]?.icon || '📍'}</span>
-            <span className="text-xs font-semibold" style={{ color: '#9A5B00' }}>{fbGeo.fmtAcc(activeGeo.acc)}</span>
-            <span className="text-xs font-data text-fb-text">{fbGeo.fmtLatLon(activeGeo.lat, activeGeo.lon)}</span>
-            {typeof activeGeo.h === 'number' && (
-              <span className="text-xs text-fb-muted">
-                ellipsoid ht (phone) {fbGeo.fmtElev(activeGeo.h)} m{typeof activeGeo.H === 'number' ? ` · H ${fbGeo.fmtElev(activeGeo.H)} m` : ''}
-              </span>
-            )}
-            <a href={fbGeo.geoUri(activeGeo.lat, activeGeo.lon, rows[activeCell.rowIdx]?.cells?.col_ptnum)}
-              className="text-xs font-semibold px-2.5 py-1 rounded-lg text-white ml-auto flex-shrink-0"
-              style={{ background: '#4E7864', textDecoration: 'none' }}>
-              Open in map
-            </a>
-          </div>
-        )}
 
         {/* ── Formula bar ── */}
         <div className="dp-formula-bar">
