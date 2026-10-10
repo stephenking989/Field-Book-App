@@ -603,7 +603,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.159';
+  const APP_VERSION = '1.160';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -2789,6 +2789,10 @@
     const outH = Math.round(outW * vb.h / vb.w);
     // ps: viewBox units per output pixel — used to scale all overlay elements
     const ps = vb.w / outW;
+    // Text on paper needs a boost: 9.5 output px is only ~4 pt on a letter page.
+    // tps is used for font sizes only — geometry, symbols and strokes stay on ps.
+    const tps = ps * 1.7;
+    let _fm = 1;   // per-shape text size multiplier (s.fontSize), set by _dimsSVG
 
     const visLayers = new Set((layers || []).filter(l => l.visible !== false).map(l => l.id));
     const defaultLayerId = (layers && layers[0]) ? layers[0].id : null;
@@ -2798,7 +2802,7 @@
       const a = angle || 0;
       const rot = a ? ` transform="rotate(${a.toFixed(2)},${lx.toFixed(2)},${ly.toFixed(2)})"` : '';
       const esc = t => t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      return `<text x="${lx.toFixed(2)}" y="${ly.toFixed(2)}"${rot} font-size="${(12*ps).toFixed(2)}" font-family="Courier New,monospace" font-weight="bold" text-anchor="middle" dominant-baseline="middle" fill="#000000" stroke="#FFFFFF" stroke-width="${(3.5*ps).toFixed(2)}" style="pointer-events:none;user-select:none;paint-order:stroke fill;">${esc(text)}</text>`;
+      return `<text x="${lx.toFixed(2)}" y="${ly.toFixed(2)}"${rot} font-size="${(9.5*tps*_fm).toFixed(2)}" font-family="Courier New,monospace" font-weight="bold" text-anchor="middle" dominant-baseline="middle" fill="#000000" stroke="#FFFFFF" stroke-width="${(2.2*tps).toFixed(2)}" style="pointer-events:none;user-select:none;paint-order:stroke fill;">${esc(text)}</text>`;
     }
 
     // ── Rotate a point around a pivot ────────────────────────────────────────
@@ -2812,7 +2816,8 @@
     function _dimsSVG(s) {
       if (s._hideDims) return '';
       const rot = s._rot || 0;
-      const OFF = 13 * ps;
+      _fm = s.fontSize || 1.0;
+      const OFF = (15 + 6 * (_fm - 1)) * ps;
 
       // Pivot for rotation
       let piv;
@@ -2862,7 +2867,7 @@
           const olen = Math.hypot(px-mx, py-my) || 1;
           const ux=(px-mx)/olen, uy=(py-my)/olen;
           const lx1=mx+(cp.M+OFF)*ux,       ly1=my+(cp.M+OFF)*uy;
-          const lx2=mx+(cp.M+OFF+12*ps)*ux, ly2=my+(cp.M+OFF+12*ps)*uy;
+          const lx2=mx+(cp.M+OFF+10*tps*_fm)*ux, ly2=my+(cp.M+OFF+10*tps*_fm)*uy;
           const r0 = rot ? _rotPt(lx1, ly1, piv.x, piv.y, rot) : { x:lx1, y:ly1 };
           const r1 = rot ? _rotPt(lx2, ly2, piv.x, piv.y, rot) : { x:lx2, y:ly2 };
           return _dimSVG(r0.x, r0.y, 0, `L ${_fmt(cp.L, sd, un)}`)
@@ -3058,7 +3063,8 @@
           const rx = s.x - tw / 2;
           const ry = s.y - th / 2;
           const fsMult = s.fontSize || 1.0;
-          const tFontSize = 9.5 * ps * fsMult;
+          // Font uses tps; the box (and so the anchor + line breaks) stays on ps.
+          const tFontSize = 9.5 * tps * fsMult;
           const tLineH = tFontSize * 1.55;
           const charW = 9.5 * 0.601;
           const maxChars = Math.max(1, Math.floor((sw - 6) / charW));
@@ -3172,7 +3178,7 @@
         }
         case 'point': {
           // Point symbol — constant screen-size elements scaled by ps
-          const r = 10 * ps;
+          const r = 13 * ps;
           const sw = (s.strokeWidth || 1.5) * ps;
           const stroke = s.stroke || '#3C5445';
           const cx = s.x, cy = s.y;
@@ -3229,17 +3235,18 @@
 
           // Labels stacked below symbol
           const esc = t => String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-          const lfs = (10 * ps).toFixed(2);
-          const lStep = 11 * ps;
+          const pfm = s.fontSize || 1.0;   // text size multiplier — labels only, not the symbol
+          const lfs = (9.5 * tps * pfm).toFixed(2);
+          const lStep = 11 * tps * pfm;
           let labels = [];
           if (s.showNum     && s.ptNum)    labels.push(esc(s.ptNum));
           if (s.showNorthing && s.northing) labels.push('N ' + esc(s.northing));
           if (s.showEasting  && s.easting)  labels.push('E ' + esc(s.easting));
           if (s.showElev     && s.elev)     labels.push('Z ' + esc(s.elev));
           if (s.showDesc     && s.desc)     labels.push(esc(s.desc));
-          let startY = cy + r + 14 * ps;
+          let startY = cy + r + 5 * ps + 9 * tps * pfm;
           labels.forEach(txt => {
-            el += `<text x="${cx}" y="${startY.toFixed(2)}" font-size="${lfs}" font-family="Courier New,monospace" font-weight="bold" text-anchor="middle" dominant-baseline="middle" fill="#000000" stroke="#FFFFFF" stroke-width="${(3*ps).toFixed(2)}" paint-order="stroke fill" style="pointer-events:none;user-select:none;">${txt}</text>`;
+            el += `<text x="${cx}" y="${startY.toFixed(2)}" font-size="${lfs}" font-family="Courier New,monospace" font-weight="bold" text-anchor="middle" dominant-baseline="middle" fill="#000000" stroke="#FFFFFF" stroke-width="${(2.2*tps).toFixed(2)}" paint-order="stroke fill" style="pointer-events:none;user-select:none;">${txt}</text>`;
             startY += lStep;
           });
           // Points don't use _rot and are never added to dimsSVG

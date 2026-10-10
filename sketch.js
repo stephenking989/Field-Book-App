@@ -567,9 +567,9 @@ function fmtDim(v) {
 // A white rectangle sized to the text bounding box is drawn first so that
 // no drawing lines can cross through the label text.
 // NOT a React component (lowercase) — call as a factory that returns a React element.
-function dimTextEl(lx, ly, angle, text, ps) {
+function dimTextEl(lx, ly, angle, text, ps, fsMult = 1) {
   const a   = angle || 0;
-  const fs  = 9.5 * ps;
+  const fs  = 9.5 * ps * fsMult;   // fsMult = per-shape text size multiplier (Text ▾ slider)
   // Courier New is monospace: char width ≈ 0.6 em, line height ≈ 1.4 em.
   const rw  = (text ? text.length : 1) * fs * 0.6 + 4 * ps;
   const rh  = fs * 1.4;
@@ -2552,12 +2552,15 @@ function detectClosedRegionFromSegments(clickPt, shapes, snapTol) {
   });
 }
 
+// Point symbol radius in screen px (constant on screen; not affected by text size).
+const POINT_SYM_R = 13;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POINT SYMBOL RENDERER  (module-level, takes ps for constant screen size)
 // Returns an array of SVG elements for the symbol only (no labels).
 // ─────────────────────────────────────────────────────────────────────────────
 function renderPointSymbolSVG(s, ps) {
-  const r   = 10 * ps;
+  const r   = POINT_SYM_R * ps;
   const sw  = (s.strokeWidth || 1.5) * ps;
   const col = s.stroke || '#1C3829';
   const x   = s.x, y = s.y;
@@ -2613,14 +2616,15 @@ function renderPointSymbolSVG(s, ps) {
 // POINT LABELS RENDERER  (module-level, returns array of SVG elements)
 // ─────────────────────────────────────────────────────────────────────────────
 function renderPointLabelsSVG(s, ps) {
-  const r     = 10 * ps;
-  const lineH = 11 * ps;
-  let curY    = s.y + r + 14 * ps;
+  const fm    = s.fontSize || 1.0;          // text size multiplier — labels only, not the symbol
+  const r     = POINT_SYM_R * ps;
+  const lineH = 11 * ps * fm;
+  let curY    = s.y + r + (5 + 9 * fm) * ps;
   const elems = [];
   const addLabel = (keyId, text) => {
     if (!text) return;
     // cloneElement to inject the key React requires for array children
-    elems.push(React.cloneElement(dimTextEl(s.x, curY, 0, String(text), ps), { key: keyId }));
+    elems.push(React.cloneElement(dimTextEl(s.x, curY, 0, String(text), ps, fm), { key: keyId }));
     curY += lineH;
   };
   if (s.showNum)       addLabel('pt',   s.ptNum);
@@ -3717,6 +3721,11 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   }
 
   function commitShapes(next) {
+    // Newly created shapes inherit the current Text ▾ size so their labels match the rest.
+    if (defaultFontSize !== 1.0) {
+      const prevIds = new Set(shapesRef.current.map(s => s.id));
+      next = next.map(s => (!prevIds.has(s.id) && s.fontSize === undefined) ? { ...s, fontSize: defaultFontSize } : s);
+    }
     const newHist = { past: [...shapesHistoryRef.current.past.slice(-49), shapesRef.current], future: [] };
     shapesHistoryRef.current = newHist;
     shapesRef.current = next;
@@ -7317,7 +7326,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     if (s._hideDims) return null;
 
     const ps  = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-    const OFF = 13 * ps;   // offset from shape edge → constant screen px at any zoom
+    const fm  = s.fontSize || 1.0;          // per-shape text size multiplier (Text ▾ slider)
+    const OFF = (13 + 6 * (fm - 1)) * ps;   // offset from shape edge → constant screen px at any zoom
 
     // NTS override — show custom label at shape centre instead of computed dims.
     // Dim shapes are excluded here because their own case handlers already
@@ -7332,7 +7342,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         case 'path':   { const _piv = getShapePivot(s); nx = _piv.x; ny = _piv.y; break; }
         default: return null;
       }
-      return dimTextEl(nx, ny, 0, s.ntsLabel, ps);
+      return dimTextEl(nx, ny, 0, s.ntsLabel, ps, fm);
     }
 
     const rot = s._rot || 0;
@@ -7346,7 +7356,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       const { x: lx, y: ly } = rot
         ? rotatePoint(rawX, rawY, piv.x, piv.y, rot)
         : { x: rawX, y: rawY };
-      return dimTextEl(lx, ly, normAng(ang + rot), txt, ps);
+      return dimTextEl(lx, ly, normAng(ang + rot), txt, ps, fm);
     }
 
     switch (s.type) {
@@ -7379,12 +7389,12 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const olen = Math.hypot(rpx-mx, rpy-my) || 1;
         const ux = (rpx-mx)/olen, uy = (rpy-my)/olen;
         const lx1 = mx + (cp.M + OFF)          * ux, ly1 = my + (cp.M + OFF)          * uy;
-        const lx2 = mx + (cp.M + OFF + 12*ps)  * ux, ly2 = my + (cp.M + OFF + 12*ps)  * uy;
+        const lx2 = mx + (cp.M + OFF + 12*ps*fm)  * ux, ly2 = my + (cp.M + OFF + 12*ps*fm)  * uy;
         const r0 = rot ? rotatePoint(lx1, ly1, piv.x, piv.y, rot) : { x: lx1, y: ly1 };
         const r1 = rot ? rotatePoint(lx2, ly2, piv.x, piv.y, rot) : { x: lx2, y: ly2 };
         return <>
-          {dimTextEl(r0.x, r0.y, 0, `L ${fmtPxAsReal(cp.L, scaleDenom, units)}`, ps)}
-          {dimTextEl(r1.x, r1.y, 0, `R ${fmtPxAsReal(cp.R, scaleDenom, units)}`, ps)}
+          {dimTextEl(r0.x, r0.y, 0, `L ${fmtPxAsReal(cp.L, scaleDenom, units)}`, ps, fm)}
+          {dimTextEl(r1.x, r1.y, 0, `R ${fmtPxAsReal(cp.R, scaleDenom, units)}`, ps, fm)}
         </>;
       }
       case 'circle': {
@@ -7411,7 +7421,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const my = (p1.y+p2.y)/2 + perpY*off;
         const ang = Math.atan2(p2.y-p1.y, p2.x-p1.x) * 180/Math.PI;
         const txt = s.ntsLabel ? s.ntsLabel : fmtPxAsReal(len, scaleDenom, units);
-        return dimTextEl(mx, my, normAng(ang), txt, ps);
+        return dimTextEl(mx, my, normAng(ang), txt, ps, fm);
       }
       case 'dim-angle': {
         const al1 = shapes.find(sh => sh.id === s.line1Id && sh.type === 'line');
@@ -7432,7 +7442,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const ly = aInter.y + Math.sin(midAng) * (arcRA + 30*ps);
         const atxt = s.ntsLabel ? s.ntsLabel : toDMS(angleDeg);
         const labelRotDeg = normAng(midAng * 180 / Math.PI);
-        return dimTextEl(lx, ly, labelRotDeg, atxt, ps);
+        return dimTextEl(lx, ly, labelRotDeg, atxt, ps, fm);
       }
       case 'dim-bearing': {
         if (!s.p1 || !s.p2) return null;
@@ -7445,7 +7455,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const adjustedAz = (rawAz - northAzimuth + 360) % 360;
         const lineAngDeg = Math.atan2(bp2.y-bp1.y, bp2.x-bp1.x) * 180/Math.PI;
         const btxt = s.ntsLabel ? s.ntsLabel : toDMS(adjustedAz);
-        return dimTextEl(bmx, bmy, normAng(lineAngDeg), btxt, ps);
+        return dimTextEl(bmx, bmy, normAng(lineAngDeg), btxt, ps, fm);
       }
       case 'dim-radius': {
         const rref = shapes.find(sh => sh.id === s.shapeId);
@@ -7464,7 +7474,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const rroff = s.offset || { x: 50*ps, y: -50*ps };
         const rrex = rrcx + rroff.x + 14*ps, rrey = rrcy + rroff.y;
         const rrtxt = s.ntsLabel ? s.ntsLabel : `R ${fmtPxAsReal(rrR, scaleDenom, units)}`;
-        return dimTextEl(rrex, rrey, 0, rrtxt, ps);
+        return dimTextEl(rrex, rrey, 0, rrtxt, ps, fm);
       }
       default: return null;
     }
@@ -8322,23 +8332,21 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             ? shapes.filter(s => selectedIds.includes(s.id) && s.type === 'text')
             : [];
           const hasSelection = textShapes.length > 0;
-          const currentFs = hasSelection ? (textShapes[0].fontSize || 1.0) : defaultFontSize;
+          // Font size applies to ALL text on the sketch — text boxes, point labels, dim labels —
+          // so it works off the whole selection, not just text shapes.
+          const selShapes = shapes.filter(s => selectedIds.includes(s.id));
+          const hasFsSel  = selShapes.length > 0;
+          const currentFs = hasFsSel ? (selShapes[0].fontSize || 1.0) : defaultFontSize;
           const currentHA = hasSelection ? (textShapes[0].textAlign  || 'left')   : defaultTextAlign;
           const currentVA = hasSelection ? (textShapes[0].textVAlign || 'top')    : defaultTextVAlign;
 
           const applyFs = v => {
             const fv = Math.max(0.5, Math.min(3.0, parseFloat(v) || 1.0));
             setDefaultFontSize(fv);
-            if (hasSelection) {
-              commitShapes(shapes.map(s =>
-                selectedIds.includes(s.id) && s.type === 'text'
-                  ? { ...s, fontSize: fv !== 1.0 ? fv : undefined } : s
-              ));
-            } else {
-              commitShapes(shapes.map(s =>
-                s.type === 'text' ? { ...s, fontSize: fv !== 1.0 ? fv : undefined } : s
-              ));
-            }
+            const fsVal = fv !== 1.0 ? fv : undefined;
+            commitShapes(shapes.map(s =>
+              (!hasFsSel || selectedIds.includes(s.id)) ? { ...s, fontSize: fsVal } : s
+            ));
           };
           const applyHA = v => {
             setDefaultTextAlign(v);
@@ -8376,7 +8384,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               {/* Header */}
               <div style={{ fontSize: 10, fontWeight: 700, color: PT.muted,
                 textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-                {hasSelection ? `Text — ${textShapes.length} shape${textShapes.length>1?'s':''}` : 'Text — default'}
+                {hasFsSel ? `Text — ${selShapes.length} shape${selShapes.length>1?'s':''}` : 'Text — all shapes'}
               </div>
 
               {/* Font size */}
