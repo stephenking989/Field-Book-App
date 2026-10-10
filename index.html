@@ -69,6 +69,10 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/paper.js/0.12.17/paper-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.22.0/proj4.js"></script>
+  <!-- Coordinate engine (CRS registry, grid/lat-lon, geoid, point index) -->
+  <script src="./geoid-ns.js"></script>
+  <script src="./geo.js"></script>
 
   <style>
     *, *::before, *::after { box-sizing: border-box; }
@@ -402,6 +406,13 @@
     .dp-col-header[draggable="true"]:active { cursor: grabbing; }
     .dp-row-num[draggable="true"] { cursor: grab; }
     .dp-row-num[draggable="true"]:active { cursor: grabbing; }
+    /* ── GPS pin chip inside a Notes page ───────────────────────── */
+    .fb-geo-pin {
+      display: inline-block; padding: 1px 8px; margin: 0 2px; border-radius: 8px;
+      background: #FFF6E0; border: 1px solid #E0C070; color: #3C5445;
+      font-family: 'Share Tech Mono', monospace; font-size: 13px; line-height: 1.5;
+      user-select: all;
+    }
     /* ── Animations ─────────────────────────────────────────────── */
     .screen-enter { animation: slideUp 0.18s ease-out; }
     @keyframes slideUp {
@@ -603,7 +614,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.160';
+  const APP_VERSION = '1.161';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -2241,6 +2252,386 @@
   // PROJECT SETTINGS MODAL  — Transfer tab + Project Settings placeholder tab
   // ─────────────────────────────────────────────────────────────────────────────
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // GEO — coordinate system, phone-GPS capture (engine lives in geo.js → fbGeo)
+  // ─────────────────────────────────────────────────────────────────────────────
+  const fbGeo = window.fbGeo;
+
+  // Fixed PNEZD columns — IDs must match PNEZD_COLS constants
+  function pnezdColumns() {
+    return [
+      { id: 'col_ptnum', label: 'Pt #',        colType: 'text', width: 70 },
+      { id: 'col_north', label: 'Northing',    colType: 'num',  width: 100 },
+      { id: 'col_east',  label: 'Easting',     colType: 'num',  width: 100 },
+      { id: 'col_elev',  label: 'Elevation',   colType: 'num',  width: 100 },
+      { id: 'col_desc',  label: 'Description', colType: 'text', width: 130 },
+    ];
+  }
+
+  // Build a Points-page row for a phone-GPS point. `geo` (from fbGeo.makeGeo)
+  // rides on the row beside the PNEZD cells; lat/lon is the source of truth and
+  // N/E are derived from it in the project's CRS.
+  function makeGpsRow(project, { number, desc, geo }) {
+    return {
+      id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      cells: { col_ptnum: String(number || ''), ...fbGeo.gpsCells(geo, project), col_desc: desc || '' },
+      geo,
+    };
+  }
+
+  // Add a phone-GPS point to the project's Points page, creating that page if
+  // the project doesn't have one yet. Returns the new row.
+  function addGpsPointRow(projectId, point) {
+    const project = DB.getProject(projectId);
+    if (!project) return null;
+    if (!project.pages.some(p => p.type === 'points')) {
+      DB.addPage(projectId, { type: 'points', title: 'Points', columns: pnezdColumns(), rows: [] });
+    }
+    const row = makeGpsRow(project, point);
+    addPointRow(projectId, row);
+    return row;
+  }
+
+  // Bottom sheet that records an averaged phone-GPS fix. Pure UI: it hands
+  // { number, desc, geo } to onSave and the caller decides where it is stored.
+  const GPS_AVG_CHOICES = [5, 10, 30, 60];
+  function GpsCaptureSheet({ projectId, source = 'gps', heading = 'GPS Point', onSave, onClose }) {
+    const project = DB.getProject(projectId);
+    const crs = fbGeo.projectCrs(project);
+    const [fix, setFix]         = useState(null);   // latest live fix
+    const [err, setErr]         = useState(null);
+    const [secs, setSecs]       = useState(10);
+    const [phase, setPhaseState] = useState('idle'); // 'idle' | 'averaging' | 'done'
+    const [remaining, setRemaining] = useState(0);
+    const [count, setCount]     = useState(0);
+    const [result, setResult]   = useState(null);   // averaged fix
+    const [number, setNumber]   = useState(() => String(fbGeo.nextGpsPtNum(project)));
+    const [desc, setDesc]       = useState('');
+    const samplesRef = useRef([]);
+    const phaseRef   = useRef('idle');
+    const fixRef     = useRef(null);
+    const trapRef    = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+
+    function setPhase(p) { phaseRef.current = p; setPhaseState(p); }
+
+    // Watch position for as long as the sheet is open so the receiver is warm
+    // and the accuracy readout is live before the user starts averaging.
+    useEffect(() => {
+      if (!navigator.geolocation) { setErr('This browser has no location service.'); return; }
+      const id = navigator.geolocation.watchPosition(
+        pos => {
+          const c = pos.coords;
+          const f = { lat: c.latitude, lon: c.longitude, h: c.altitude, acc: c.accuracy };
+          fixRef.current = f;
+          setErr(null);
+          setFix(f);
+          if (phaseRef.current === 'averaging') {
+            samplesRef.current.push(f);
+            setCount(samplesRef.current.length);
+          }
+        },
+        e => setErr(
+          e.code === 1 ? 'Location permission denied. Allow location for this site in your browser settings, then reopen this sheet.'
+          : e.code === 3 ? 'Still waiting for a GPS fix — move to open sky.'
+          : 'Position unavailable — check that location is switched on.'),
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+      );
+      return () => navigator.geolocation.clearWatch(id);
+    }, []);
+
+    // Averaging countdown
+    useEffect(() => {
+      if (phase !== 'averaging') return;
+      const end = Date.now() + secs * 1000;
+      setRemaining(secs);
+      const t = setInterval(() => {
+        const left = Math.max(0, Math.ceil((end - Date.now()) / 1000));
+        setRemaining(left);
+        if (left <= 0) { clearInterval(t); finish(); }
+      }, 250);
+      return () => clearInterval(t);
+    }, [phase]);
+
+    function start() {
+      samplesRef.current = [];
+      setCount(0);
+      setResult(null);
+      setPhase('averaging');
+    }
+
+    function finish() {
+      // No fix arrived inside the window (receiver updates slowly when the
+      // phone is still) — fall back to the last live fix rather than nothing.
+      const s = samplesRef.current.length ? samplesRef.current : (fixRef.current ? [fixRef.current] : []);
+      if (!s.length) { setPhase('idle'); setErr('No GPS fix received — try again under open sky.'); return; }
+      const mean = k => s.reduce((a, f) => a + f[k], 0) / s.length;
+      const hs = s.filter(f => typeof f.h === 'number' && isFinite(f.h));
+      setResult({
+        lat: mean('lat'), lon: mean('lon'), acc: mean('acc'),
+        h: hs.length ? hs.reduce((a, f) => a + f.h, 0) / hs.length : null,
+        fixes: s.length,
+      });
+      setPhase('done');
+    }
+
+    const numTrim = number.trim();
+    const duplicate = !!numTrim && fbGeo.usedPointNumbers(project).has(numTrim);
+
+    function save() {
+      if (!result) return;
+      onSave({ number: numTrim, desc: desc.trim(), geo: fbGeo.makeGeo({ ...result, ts: new Date().toISOString() }, source) });
+    }
+
+    const grid = result && fbGeo.toGrid(result.lat, result.lon, crs.id);
+    const ht   = result && fbGeo.orthoHeight(result.h, result.lat, result.lon);
+    const fieldCls = 'w-full px-3 py-3 rounded-xl text-base text-fb-text outline-none font-data';
+    const fieldSty = { background: '#FDFAF4', border: '1px solid #CEC5B0' };
+    const lbl = 'text-[10px] font-bold text-fb-muted uppercase tracking-widest mb-1';
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 32 }}>
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-xl font-bold text-fb-text">📍 {heading}</h2>
+            <span className="text-xs font-semibold text-fb-muted">{crs.short}</span>
+          </div>
+
+          {/* Live receiver readout */}
+          <div className="rounded-xl px-4 py-3 mb-3 text-center" style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+            <p className={lbl}>{phase === 'averaging' ? 'Averaging' : 'Live accuracy'}</p>
+            <p className="font-data text-fb-text" style={{ fontSize: 30, lineHeight: 1.1 }}>
+              {fix ? `±${fix.acc < 10 ? fix.acc.toFixed(1) : Math.round(fix.acc)} m` : '— —'}
+            </p>
+            <p className="text-xs text-fb-muted mt-1">
+              {phase === 'averaging'
+                ? `${remaining} s left · ${count} fix${count === 1 ? '' : 'es'}`
+                : fix ? fbGeo.fmtLatLon(fix.lat, fix.lon) : 'Waiting for GPS…'}
+            </p>
+            {phase === 'averaging' && (
+              <div className="h-1.5 rounded-full mt-2 overflow-hidden" style={{ background: '#CEC5B0' }}>
+                <div style={{ height: '100%', width: `${100 * (1 - remaining / secs)}%`, background: '#4E7864', transition: 'width 0.25s linear' }} />
+              </div>
+            )}
+          </div>
+
+          {err && (
+            <p className="text-sm rounded-xl px-3 py-2.5 mb-3" style={{ background: '#FBE9E7', border: '1px solid #E6B8AF', color: '#8A2B1D' }}>{err}</p>
+          )}
+
+          {/* Averaged result */}
+          {result && (
+            <div className="rounded-xl px-3 py-2.5 mb-3" style={{ background: '#FDFAF4', border: '1px solid #CEC5B0' }}>
+              <div className="flex items-center justify-between mb-1">
+                <span className={lbl} style={{ marginBottom: 0 }}>Averaged · {result.fixes} fix{result.fixes === 1 ? '' : 'es'}</span>
+                <span className="text-xs font-semibold" style={{ color: '#9A5B00' }}>{fbGeo.fmtAcc(result.acc)}</span>
+              </div>
+              <p className="font-data text-sm text-fb-text">{fbGeo.fmtLatLon(result.lat, result.lon)}</p>
+              {grid
+                ? <p className="font-data text-sm text-fb-text">N {fbGeo.fmtGrid(grid.n)}  E {fbGeo.fmtGrid(grid.e)}</p>
+                : <p className="text-xs text-fb-muted">Local coordinates — lat/lon is stored, no grid N/E.</p>}
+              <p className="text-xs text-fb-muted mt-1 leading-snug">
+                {ht.h === null
+                  ? 'No height from this fix.'
+                  : <>Ellipsoid ht (phone) {fbGeo.fmtElev(ht.h)} m
+                      {ht.H !== null && <> · geoid N {ht.N.toFixed(1)} m · H {fbGeo.fmtElev(ht.H)} m (CGG2013a)</>}
+                      {' · '}{project?.gpsUseZ && ht.H !== null ? 'Z = H' : 'Z left blank'}</>}
+              </p>
+            </div>
+          )}
+
+          <div className="flex gap-2 mb-3">
+            <div style={{ width: 110 }}>
+              <p className={lbl}>Pt #</p>
+              <input type="text" inputMode="numeric" value={number} onChange={e => setNumber(e.target.value)}
+                className={fieldCls} style={fieldSty} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className={lbl}>Description</p>
+              <input type="text" value={desc} onChange={e => setDesc(e.target.value)} placeholder="IP fd, culvert, gate…"
+                className={fieldCls} style={{ ...fieldSty, fontFamily: 'inherit' }} />
+            </div>
+          </div>
+          {duplicate && (
+            <p className="text-xs font-semibold mb-3" style={{ color: '#9A5B00' }}>⚠ Point {numTrim} already exists in this project.</p>
+          )}
+
+          {phase !== 'averaging' && (
+            <div className="flex items-center gap-1.5 mb-3">
+              <span className="text-xs text-fb-muted mr-1">Average for</span>
+              {GPS_AVG_CHOICES.map(n => (
+                <button key={n} onClick={() => setSecs(n)}
+                  className="flex-1 py-2 rounded-lg text-sm font-semibold"
+                  style={{ background: secs === n ? '#3C5445' : '#EBE5D5', color: secs === n ? '#fff' : '#3C5445', border: '1px solid #CEC5B0' }}>
+                  {n} s
+                </button>
+              ))}
+            </div>
+          )}
+
+          {phase === 'done' ? (
+            <div className="flex gap-2">
+              <button onClick={start}
+                className="py-3.5 px-5 rounded-xl font-semibold text-sm text-fb-text active:opacity-80"
+                style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                Redo
+              </button>
+              <button onClick={save}
+                className="flex-1 py-3.5 rounded-xl font-semibold text-base text-white active:opacity-80"
+                style={{ background: '#4E7864' }}>
+                {duplicate ? 'Save anyway' : 'Save point'}
+              </button>
+            </div>
+          ) : (
+            <button onClick={start} disabled={phase === 'averaging' || !navigator.geolocation}
+              className="w-full py-3.5 rounded-xl font-semibold text-base text-white active:opacity-80"
+              style={{ background: '#4E7864', opacity: phase === 'averaging' ? 0.6 : 1 }}>
+              {phase === 'averaging' ? 'Hold still…' : `Record ${secs} s average`}
+            </button>
+          )}
+          <p className="text-[11px] text-fb-muted text-center mt-3 leading-snug">
+            Recon grade only — phone GPS, treated as NAD83(CSRS). Not for survey control.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Coordinate-system block of the ⚙ Settings tab in ProjectSettingsModal.
+  function ProjectGeoSettings({ project, projectId, onReload }) {
+    const toast = useToast();
+    const crsId = fbGeo.projectCrsId(project);
+    const [pending, setPending] = useState(null);   // crsChangeSummary awaiting a decision
+    const [startNum, setStartNum] = useState(String(fbGeo.gpsPtStart(project)));
+
+    function applyCrs(toId, reproject) {
+      const fresh = DB.getProject(projectId);
+      const from  = fbGeo.getCrs(crsId), to = fbGeo.getCrs(toId);
+      // Keep an untouched Title-page datum in step; hand-edited text is left
+      // alone and the Title page shows a mismatch warning instead.
+      const pages = fbGeo.applyCrsChange(fresh, toId, reproject).map(pg =>
+        (pg.type === 'title' && (!pg.datum || pg.datum === from.datumText)) ? { ...pg, datum: to.datumText } : pg);
+      DB.updateProject(projectId, { crs: toId, pages });
+      setPending(null);
+      onReload();
+      toast.success(reproject ? `Points reprojected to ${to.short}` : `Coordinate system set to ${to.short}`);
+    }
+
+    function pickCrs(toId) {
+      if (toId === crsId) return;
+      const sum = fbGeo.crsChangeSummary(DB.getProject(projectId), toId);
+      if (sum.gps + sum.instrument === 0) applyCrs(toId, false);
+      else setPending(sum);
+    }
+
+    function saveStartNum(v) {
+      const n = parseInt(v);
+      if (!isFinite(n) || n < 1) { setStartNum(String(fbGeo.gpsPtStart(project))); return; }
+      setStartNum(String(n));
+      DB.updateProject(projectId, { gpsPtStart: n });
+      onReload();
+    }
+
+    // Opt-in: Z = H (orthometric, CGG2013a) for phone points. Existing GPS rows
+    // follow the switch; a Z the user typed over is never cleared.
+    function toggleUseZ() {
+      const on = !project.gpsUseZ;
+      const fresh = DB.getProject(projectId);
+      const pages = fresh.pages.map(pg => {
+        if (pg.type !== 'points' || !pg.rows) return pg;
+        return { ...pg, rows: pg.rows.map(r => {
+          if (!r.geo || typeof r.geo.H !== 'number') return r;
+          const derived = fbGeo.fmtElev(r.geo.H);
+          const cur = String(r.cells?.col_elev ?? '').trim();
+          if (on && !cur)             return { ...r, cells: { ...r.cells, col_elev: derived } };
+          if (!on && cur === derived) return { ...r, cells: { ...r.cells, col_elev: '' } };
+          return r;
+        }) };
+      });
+      DB.updateProject(projectId, { gpsUseZ: on, pages });
+      onReload();
+    }
+
+    const lbl = 'text-xs font-bold text-fb-muted uppercase tracking-widest mb-2';
+    const to = pending && fbGeo.getCrs(pending.toId);
+
+    return (
+      <div className="mb-6">
+        <p className={lbl}>Coordinate System</p>
+        <div className="space-y-1.5">
+          {fbGeo.CRS_REGISTRY.map(c => (
+            <button key={c.id} onClick={() => pickCrs(c.id)}
+              className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left active:opacity-80"
+              style={{ background: c.id === crsId ? '#D2E8DA' : '#EBE5D5', border: `1px solid ${c.id === crsId ? '#4E7864' : '#CEC5B0'}` }}>
+              <span style={{ width: 18, height: 18, borderRadius: 9, flexShrink: 0, border: '2px solid #4E7864', background: c.id === crsId ? '#4E7864' : 'transparent' }} />
+              <span className="flex-1 min-w-0">
+                <span className="block text-sm font-semibold text-fb-text">{c.label}</span>
+                <span className="block text-xs text-fb-muted font-data">{c.epsg ? `EPSG:${c.epsg}` : 'No lat/lon — KML/GPX export disabled'}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+        {crsId === 'local' && (
+          <p className="text-xs text-fb-muted mt-2 leading-snug">
+            Local coordinates can't be converted to lat/lon, so points can't be sent to a map app.
+            Phone-GPS points still store their lat/lon but get no N/E.
+          </p>
+        )}
+
+        {pending && (
+          <div className="rounded-xl px-3 py-3 mt-3" style={{ background: '#FFF6E0', border: '1px solid #E0C070' }}>
+            <p className="text-sm font-semibold text-fb-text mb-1">Change to {to.short}?</p>
+            <p className="text-xs text-fb-text leading-snug mb-3">
+              This project has {pending.instrument} entered point{pending.instrument === 1 ? '' : 's'} and {pending.gps} phone-GPS point{pending.gps === 1 ? '' : 's'}.
+              {pending.gps > 0 && <> GPS points always recalculate from their stored lat/lon.</>}
+              {pending.instrument > 0 && (pending.canReproject
+                ? <> Entered points can keep their numbers as typed (<b>Relabel</b> — use this if the old setting was simply wrong) or be converted to the new grid (<b>Reproject</b>). Reprojecting rewrites N/E — export a backup first if unsure.</>
+                : <> Entered points keep their numbers exactly as typed — a local system can't be converted.</>)}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => setPending(null)}
+                className="py-3 px-4 rounded-xl text-sm font-semibold text-fb-text" style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                Cancel
+              </button>
+              <button onClick={() => applyCrs(pending.toId, false)}
+                className="flex-1 py-3 px-4 rounded-xl text-sm font-semibold text-white" style={{ background: '#4E7864' }}>
+                {pending.canReproject && pending.instrument > 0 ? 'Relabel only' : 'Change'}
+              </button>
+              {pending.canReproject && pending.instrument > 0 && (
+                <button onClick={() => applyCrs(pending.toId, true)}
+                  className="flex-1 py-3 px-4 rounded-xl text-sm font-semibold text-white" style={{ background: '#3C5445' }}>
+                  Reproject {pending.instrument}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        <p className={lbl + ' mt-5'}>Phone GPS Points</p>
+        <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1.5" style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+          <span className="flex-1 text-sm text-fb-text">Number GPS points from</span>
+          <input type="text" inputMode="numeric" value={startNum}
+            onChange={e => setStartNum(e.target.value)} onBlur={e => saveStartNum(e.target.value)}
+            className="font-data text-base text-fb-text text-right outline-none rounded-lg px-2 py-1.5"
+            style={{ width: 90, background: '#FDFAF4', border: '1px solid #CEC5B0' }} />
+        </div>
+        <button onClick={toggleUseZ}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left active:opacity-80"
+          style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+          <span className="flex-1 min-w-0">
+            <span className="block text-sm text-fb-text">Fill Z from phone height</span>
+            <span className="block text-xs text-fb-muted leading-snug">Z = H = h − N (CGG2013a geoid, CGVD2013). Phone height is only ±5–15 m.</span>
+          </span>
+          <span className="text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0"
+            style={{ background: project.gpsUseZ ? '#4E7864' : '#CEC5B0', color: project.gpsUseZ ? '#fff' : '#6B635C' }}>
+            {project.gpsUseZ ? 'ON' : 'OFF'}
+          </span>
+        </button>
+      </div>
+    );
+  }
+
   function ProjectSettingsModal({ project, projectId, onClose, onReload }) {
     const [tab,        setTab]        = useState('transfer');
     const [showExport, setShowExport] = useState(false);
@@ -2325,6 +2716,7 @@
 
           {tab === 'settings' && (
             <>
+              <ProjectGeoSettings project={project} projectId={projectId} onReload={onReload} />
               <button
                 onClick={() => {
                   const archiving = !project.archived;
@@ -2342,14 +2734,6 @@
                   ? 'Moves this project back to the top of the working list.'
                   : 'Moves this project out of the working list. Nothing is deleted.'}
               </p>
-            <div className="py-8 text-center">
-              <p className="text-4xl mb-3">⚙️</p>
-              <p className="text-fb-text font-semibold mb-2">Project Settings</p>
-              <p className="text-sm text-fb-muted leading-relaxed">
-                Coming soon — default units, angle format, coordinate system, and other
-                project-wide settings will appear here.
-              </p>
-            </div>
             </>
           )}
         </div>
@@ -4268,6 +4652,7 @@
     const [coverForm, setCoverForm] = useState({});
     const [exporting, setExporting] = useState(false);
     const [showSettings,    setShowSettings]    = useState(false);
+    const [showGps,         setShowGps]         = useState(false);
     const [pageActionTarget, setPageActionTarget] = useState(null); // page object
     const [pageExportTarget, setPageExportTarget] = useState(null); // page object
     const [pageCopyToTarget, setPageCopyToTarget] = useState(null); // page object
@@ -4368,6 +4753,9 @@
             codeList:    prevTitle.codeList    || '', // carry over — codes are project-wide
             // fileNames intentionally blank — different every session
           };
+        } else {
+          // First title page — datum text follows the project's coordinate system
+          pageData = { type: 'title', datum: fbGeo.projectCrs(project).datumText };
         }
       }
       if (type === 'notes') {
@@ -4377,14 +4765,7 @@
         pageData = { type: 'photo', photos: [] };
       }
       if (type === 'points') {
-        // Fixed PNEZD columns — IDs must match PNEZD_COLS constants
-        const cols = [
-          { id: 'col_ptnum', label: 'Pt #',        colType: 'text', width: 70 },
-          { id: 'col_north', label: 'Northing',    colType: 'num',  width: 100 },
-          { id: 'col_east',  label: 'Easting',     colType: 'num',  width: 100 },
-          { id: 'col_elev',  label: 'Elevation',   colType: 'num',  width: 100 },
-          { id: 'col_desc',  label: 'Description', colType: 'text', width: 130 },
-        ];
+        const cols = pnezdColumns();
         // Rows start empty — they are added automatically when points are placed
         // on the sketch canvas (one row per placed point).
         pageData = { type: 'points', columns: cols, rows: [] };
@@ -4450,6 +4831,14 @@
                   ? <span style={{ fontSize: 14 }}>⏳</span>
                   : <Ico.Download />
                 }
+              </button>
+              <button
+                onClick={() => setShowGps(true)}
+                title="Record a GPS point"
+                className="p-2 rounded-xl active:bg-white/10 transition-colors"
+                style={{ fontSize: 17, lineHeight: 1 }}
+              >
+                📍
               </button>
               <button
                 onClick={() => setShowSettings(true)}
@@ -4668,6 +5057,17 @@
             reader.readAsText(file);
             e.target.value = '';
           }} />
+
+        {showGps && (
+          <GpsCaptureSheet projectId={projectId}
+            onClose={() => setShowGps(false)}
+            onSave={pt => {
+              addGpsPointRow(projectId, pt);
+              setShowGps(false);
+              reload();
+              toast.success(`GPS point ${pt.number} saved to Points`);
+            }} />
+        )}
 
         {pageActionTarget && (
           <PageActionsSheet
@@ -5745,6 +6145,8 @@
     const editorRef  = useRef(null);
     const saveTimer  = useRef(null);
     const toast      = useToast();
+    const [pinOpen, setPinOpen] = useState(false);
+    const pinRangeRef = useRef(null);   // caret position saved before the GPS sheet takes focus
 
     // Restore saved HTML into the contenteditable on mount / page change
     useEffect(() => {
@@ -5771,6 +6173,39 @@
     function execCmd(cmd, val) {
       editorRef.current?.focus();
       document.execCommand(cmd, false, val ?? null);
+    }
+
+    // ── GPS pin — a geotagged point reference dropped into the note ──
+    // The point itself is a Points-page row (source 'notes-pin'); the note
+    // holds a non-editable chip that names it.
+    function openPin() {
+      const sel = window.getSelection();
+      const inEditor = sel && sel.rangeCount && editorRef.current?.contains(sel.anchorNode);
+      pinRangeRef.current = inEditor ? sel.getRangeAt(0).cloneRange() : null;
+      setPinOpen(true);
+    }
+
+    function insertPin(pt) {
+      const row = addGpsPointRow(projectId, { ...pt, geo: { ...pt.geo, notePageId: page.id } });
+      setPinOpen(false);
+      const ed = editorRef.current;
+      if (!row || !ed) return;
+      const chip = document.createElement('span');
+      chip.className = 'fb-geo-pin';
+      chip.contentEditable = 'false';
+      chip.dataset.ptId = row.id;
+      chip.textContent = `📍 Pt ${pt.number}${pt.desc ? ' ' + pt.desc : ''} · ${fbGeo.fmtLatLon(pt.geo.lat, pt.geo.lon)} · ${fbGeo.fmtAcc(pt.geo.acc)}`;
+      const range = pinRangeRef.current;
+      if (range && ed.contains(range.startContainer)) {
+        range.collapse(false);
+        range.insertNode(document.createTextNode(' '));
+        range.insertNode(chip);
+      } else {
+        ed.appendChild(chip);
+        ed.appendChild(document.createTextNode(' '));
+      }
+      scheduleSave();
+      toast.success(`GPS pin ${pt.number} added`);
     }
 
     // Toolbar button definitions
@@ -5807,7 +6242,21 @@
               {btn.label}
             </button>
           ))}
+          <button onPointerDown={e => { e.preventDefault(); openPin(); }}
+            title="Drop a GPS pin at your position"
+            style={{
+              height: 32, padding: '0 10px', borderRadius: 7, marginLeft: 4,
+              border: '1px solid #4E7864', background: '#D2E8DA', cursor: 'pointer',
+              fontSize: 13, fontWeight: 600, color: '#3C5445', flexShrink: 0, whiteSpace: 'nowrap',
+              fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+            }}>
+            📍 Drop GPS pin
+          </button>
         </div>
+        {pinOpen && (
+          <GpsCaptureSheet projectId={projectId} source="notes-pin" heading="Drop GPS Pin"
+            onClose={() => setPinOpen(false)} onSave={insertPin} />
+        )}
         {/* Editor */}
         <div
           ref={editorRef}
@@ -6712,6 +7161,7 @@
     const [customTemplates, setCustomTemplates] = useState(() => DB.getCustomTemplates());
     const [openTbMenu, setOpenTbMenu]   = useState(null); // 'insert' | 'formulas' | 'view' | null
     const [csvImportModal, setCsvImportModal] = useState(null); // null | { parsed, useHeader }
+    const [gpsOpen, setGpsOpen]         = useState(false);  // GPS capture sheet (points pages)
     const [menuPos, setMenuPos]         = useState({ top: 0, left: 0 }); // fixed-position for open dropdown
     // DMS keyboard — global setting persisted in localStorage, OFF by default
     const [dmsKeyboard, setDmsKeyboard] = useState(() => {
@@ -6834,6 +7284,9 @@
         toast.error('Formula engine error — check cell values');
       }
     }, [rows, page.id]);
+
+    // Phone-GPS metadata of the active row, if it is a GPS-sourced point
+    const activeGeo = (page.type === 'points' && activeCell && rows[activeCell.rowIdx]?.geo) || null;
 
     function persistRows(updated) {
       // Push current state to undo stack before applying (cap at 50 steps)
@@ -8071,6 +8524,9 @@
                   <div className="dp-drop-sep" />
                   <div className="dp-drop-section">Import</div>
                   <button onClick={() => { importPointsCSV(); setOpenTbMenu(null); }}>⬆ Import CSV…</button>
+                  <div className="dp-drop-sep" />
+                  <div className="dp-drop-section">Phone GPS</div>
+                  <button onClick={() => { setGpsOpen(true); setOpenTbMenu(null); }}>📍 GPS point…</button>
                 </>
               )}
               {page.type !== 'points' && (
@@ -8158,6 +8614,26 @@
           )}
 
         </div>
+
+        {/* ── Phone-GPS info for the active row (points pages) ── */}
+        {activeGeo && (
+          <div className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0"
+            style={{ background: '#FFF6E0', borderBottom: '1px solid #E0C070', overflowX: 'auto', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: 13 }}>{fbGeo.SOURCES[activeGeo.source]?.icon || '📍'}</span>
+            <span className="text-xs font-semibold" style={{ color: '#9A5B00' }}>{fbGeo.fmtAcc(activeGeo.acc)}</span>
+            <span className="text-xs font-data text-fb-text">{fbGeo.fmtLatLon(activeGeo.lat, activeGeo.lon)}</span>
+            {typeof activeGeo.h === 'number' && (
+              <span className="text-xs text-fb-muted">
+                ellipsoid ht (phone) {fbGeo.fmtElev(activeGeo.h)} m{typeof activeGeo.H === 'number' ? ` · H ${fbGeo.fmtElev(activeGeo.H)} m` : ''}
+              </span>
+            )}
+            <a href={fbGeo.geoUri(activeGeo.lat, activeGeo.lon, rows[activeCell.rowIdx]?.cells?.col_ptnum)}
+              className="text-xs font-semibold px-2.5 py-1 rounded-lg text-white ml-auto flex-shrink-0"
+              style={{ background: '#4E7864', textDecoration: 'none' }}>
+              Open in map
+            </a>
+          </div>
+        )}
 
         {/* ── Formula bar ── */}
         <div className="dp-formula-bar">
@@ -8342,8 +8818,9 @@
                     onDrop={e => handleRowDrop(e, ri)}
                     onDragEnd={handleRowDragEnd}
                     onDragLeave={() => { if (dragOverRow === ri) setDragOverRow(null); }}
-                    title="Drag to reorder row">
-                    {ri + 1}
+                    title={row.geo ? `${fbGeo.SOURCES[row.geo.source]?.label || 'GPS point'} · ${fbGeo.fmtAcc(row.geo.acc)}` : 'Drag to reorder row'}
+                    style={row.geo ? { background: '#FFF6E0', fontSize: 11 } : undefined}>
+                    {row.geo ? (fbGeo.SOURCES[row.geo.source]?.icon || '📍') : ri + 1}
                   </td>
                   {columns.map((col, ci) => {
                     const isActive = activeCell && activeCell.rowIdx === ri && activeCell.colIdx === ci;
@@ -8700,6 +9177,17 @@
           </div>
         )}
 
+        {/* ── GPS capture (points pages) — the row lands on THIS page ── */}
+        {gpsOpen && (
+          <GpsCaptureSheet projectId={projectId}
+            onClose={() => setGpsOpen(false)}
+            onSave={pt => {
+              persistRows([...rows, makeGpsRow(DB.getProject(projectId), pt)]);
+              setGpsOpen(false);
+              toast.success(`GPS point ${pt.number} saved`);
+            }} />
+        )}
+
         {/* ── CSV Import modal ── */}
         {csvImportModal && (
           <div className="modal-backdrop" onClick={() => setCsvImportModal(null)}>
@@ -8883,6 +9371,7 @@
     });
     const [dirty, setDirty] = useState(false);
     const timerRef = useRef(null);
+    const projCrs = fbGeo.projectCrs(DB.getProject(projectId));
 
     // Auto-grow all textareas on page load / page change
     useEffect(() => {
@@ -9042,6 +9531,15 @@
               onFocus={focusScroll}
               placeholder="NAD83(CSRS), UTM Zone 20N / CGVD2013"
               className={inClass} />
+            {!fbGeo.datumMatchesCrs(form.datum, projCrs.id) && (
+              <div className="flex items-center gap-2 mt-1.5 px-2.5 py-2 rounded-lg" style={{ background: '#FFF6E0', border: '1px solid #E0C070' }}>
+                <span className="flex-1 text-xs text-fb-text leading-snug">⚠ Project coordinate system is <b>{projCrs.short}</b> — this text doesn't match.</span>
+                <button onClick={() => handleChange('datum', projCrs.datumText)}
+                  className="text-xs font-semibold px-3 py-2 rounded-lg text-white flex-shrink-0" style={{ background: '#4E7864' }}>
+                  Update
+                </button>
+              </div>
+            )}
           </div>
           {/* Instrument Settings — 2-column grid */}
           <div className={secClass}>
@@ -9317,7 +9815,7 @@
   // Expose shared globals for sketch.js to consume via window._fb
   window._fb = { DB, PageHeaderStrip, HCell, compressImage, PNEZD_COLS,
                  deletePointPermanently, getNextManualPtNum, addPointRow, updatePointRow, isPtNumTaken,
-                 photoDB, parseDMSInput, formatDMS };
+                 photoDB, parseDMSInput, formatDMS, fbGeo: window.fbGeo };
 
   // Mount the app only after sketch.js has loaded and resolved _sketchPromise
   Promise.all([_sketchPromise, _dataReady.catch(() => {})]).then(() => {
