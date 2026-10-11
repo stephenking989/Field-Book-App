@@ -578,7 +578,7 @@ function dimTextEl(lx, ly, angle, text, ps, fsMult = 1) {
           fill="rgba(255,255,255,0.97)" />
     <text x={lx} y={ly}
           fontSize={fs}
-          fontFamily="Courier New, monospace"
+          fontFamily={FBF.sketch}
           textAnchor="middle"
           dominantBaseline="middle"
           fill={STROKE}
@@ -873,17 +873,7 @@ function parseQBearing(str) {
 // ── Panel / toolbar colour theme ─────────────────────────────────────────────
 // All panel, toolbar, and dropdown colours reference PT so retheming is a
 // single-point change. Canvas drawing colours are unaffected.
-const PT = {
-  bg:      '#F5F0E3',   // warm cream — panel/toolbar background
-  bgAlt:   '#EDE8D8',   // slightly darker — section headers, stripe rows
-  bgHov:   '#E4DDD0',   // hover / active row background
-  border:  '#8B7355',   // warm brown — dividers and borders
-  accent:  '#4A3728',   // dark brown — active layer bar, highlights
-  text:    '#2C1F0E',   // near-black brown — primary text
-  muted:   '#7A6550',   // mid-brown — secondary labels
-  faint:   '#B8A898',   // light brown — inactive icons
-  inputBg: '#FFF9F0',   // near-white warm — input backgrounds
-};
+const PT = window.FB_BRAND.SKETCH_PANEL;   // edit these in brand.js → SKETCH_PANEL
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MULTI-SELECT CARD  —  shown when 2+ shapes are selected.
@@ -937,11 +927,11 @@ function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate, inline = 
   const iStyle = inline ? {
     background: PT.inputBg, border: `1px solid ${PT.border}`,
     borderRadius: 3, color: PT.text,
-    fontFamily: 'Courier New, monospace', fontSize: 10, padding: '2px 5px', outline: 'none',
+    fontFamily: FBF.sketch, fontSize: 10, padding: '2px 5px', outline: 'none',
   } : {
     background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)',
     borderRadius: 3, color: 'rgba(255,255,255,0.9)',
-    fontFamily: 'Courier New, monospace', fontSize: 10, padding: '2px 5px', outline: 'none',
+    fontFamily: FBF.sketch, fontSize: 10, padding: '2px 5px', outline: 'none',
   };
   const lStyle = inline
     ? { color: PT.muted, width: 58, flexShrink: 0, fontSize: 10 }
@@ -956,13 +946,13 @@ function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate, inline = 
 
   return (
     <div style={inline ? {
-      padding: '6px 8px', fontFamily: 'Courier New, monospace',
+      padding: '6px 8px', fontFamily: FBF.sketch,
       fontSize: 10, color: PT.text, lineHeight: 1.8,
     } : {
       position: 'absolute', bottom: 10, left: 10, pointerEvents: 'all',
       background: 'rgba(10,15,35,0.90)', border: '1px solid rgba(99,102,241,0.45)',
       borderRadius: 6, padding: '7px 11px',
-      fontFamily: 'Courier New, monospace', fontSize: 10.5,
+      fontFamily: FBF.sketch, fontSize: 10.5,
       color: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(5px)', zIndex: 15,
       lineHeight: 1.7, minWidth: 200,
     }}>
@@ -1093,12 +1083,12 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
   const iStyle = inline ? {
     width: 82, background: PT.inputBg,
     border: `1px solid ${PT.border}`, borderRadius: 3,
-    color: PT.text, fontFamily: 'Courier New, monospace',
+    color: PT.text, fontFamily: FBF.sketch,
     fontSize: 10, padding: '2px 5px', outline: 'none',
   } : {
     width: 82, background: 'rgba(255,255,255,0.08)',
     border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3,
-    color: 'rgba(255,255,255,0.9)', fontFamily: 'Courier New, monospace',
+    color: 'rgba(255,255,255,0.9)', fontFamily: FBF.sketch,
     fontSize: 10, padding: '2px 5px', outline: 'none',
   };
   const lStyle = inline
@@ -1342,7 +1332,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         <span style={lStyle}>Mode</span>
         <button onClick={()=>onUpdate(sh=>({...sh,arrowOnly:!sh.arrowOnly}))} style={{
           height:20,padding:'0 8px',borderRadius:3,cursor:'pointer',outline:'none',
-          fontFamily:'Courier New,monospace',fontSize:9,letterSpacing:'0.03em',
+          fontFamily:FBF.sketch,fontSize:9,letterSpacing:'0.03em',
           background:s.arrowOnly?'rgba(251,191,36,0.15)':'rgba(99,179,237,0.18)',
           border:`1px solid ${s.arrowOnly?'rgba(251,191,36,0.45)':'rgba(99,179,237,0.55)'}`,
           color:s.arrowOnly?'#FCD34D':'#90CDF4',
@@ -1379,7 +1369,7 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
         onClick={() => onUpdate(sh => ({ ...sh, _hideDims: sh._hideDims ? undefined : true }))}
         style={{
           height: 20, padding: '0 9px', borderRadius: 3, cursor: 'pointer',
-          fontFamily: 'Courier New, monospace', fontSize: 9, outline: 'none',
+          fontFamily: FBF.sketch, fontSize: 9, outline: 'none',
           background: s._hideDims ? 'rgba(255,255,255,0.06)' : 'rgba(99,179,237,0.18)',
           border: `1px solid ${s._hideDims ? 'rgba(255,255,255,0.18)' : 'rgba(99,179,237,0.55)'}`,
           color:  s._hideDims ? 'rgba(255,255,255,0.35)' : '#90CDF4',
@@ -1410,13 +1400,13 @@ function ShapeValueCard({ shape: s, onUpdate, scaleDenom, units, northAzimuth: n
 
   return (
     <div style={inline ? {
-      padding: '6px 8px', fontFamily: 'Courier New, monospace',
+      padding: '6px 8px', fontFamily: FBF.sketch,
       fontSize: 10, color: PT.text, lineHeight: 1.7,
     } : {
       position: 'absolute', bottom: 10, left: 10, pointerEvents: 'all',
       background: 'rgba(10,15,35,0.90)', border: '1px solid rgba(59,130,246,0.35)',
       borderRadius: 6, padding: '7px 11px',
-      fontFamily: 'Courier New, monospace', fontSize: 10.5,
+      fontFamily: FBF.sketch, fontSize: 10.5,
       color: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(5px)', zIndex: 15,
       lineHeight: 1.7, minWidth: 180, maxWidth: 230,
     }}>
@@ -1467,7 +1457,7 @@ function LayerCard({ layer, onRename }) {
   const iStyle = {
     width: 100, background: 'rgba(255,255,255,0.08)',
     border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3,
-    color: 'rgba(255,255,255,0.9)', fontFamily: 'Courier New, monospace',
+    color: 'rgba(255,255,255,0.9)', fontFamily: FBF.sketch,
     fontSize: 10, padding: '2px 5px', outline: 'none',
   };
   const [name, setName] = useState(layer.name);
@@ -1479,7 +1469,7 @@ function LayerCard({ layer, onRename }) {
       position: 'absolute', bottom: 10, left: 10, pointerEvents: 'all',
       background: 'rgba(10,15,35,0.90)', border: '1px solid rgba(99,102,241,0.45)',
       borderRadius: 6, padding: '7px 11px',
-      fontFamily: 'Courier New, monospace', fontSize: 10.5,
+      fontFamily: FBF.sketch, fontSize: 10.5,
       color: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(5px)', zIndex: 15,
       lineHeight: 1.7, minWidth: 180,
     }}>
@@ -1538,7 +1528,7 @@ function CogoPanel({ line, occEnd, onSwap, onActive, onConfirm, scaleDenom, unit
   const fieldStyle = (ok = true) => ({
     width: '100%', background: enabled ? PT.inputBg : PT.bgAlt,
     border: `1px solid ${ok ? PT.border : '#C0392B'}`, borderRadius: 3,
-    color: PT.text, fontFamily: 'Courier New, monospace', fontSize: 11,
+    color: PT.text, fontFamily: FBF.sketch, fontSize: 11,
     padding: '3px 5px', outline: 'none', boxSizing: 'border-box',
   });
   const lbl = { fontSize: 9, color: PT.muted, display: 'block', marginBottom: 2, letterSpacing: '0.03em' };
@@ -1596,7 +1586,7 @@ function CogoPanel({ line, occEnd, onSwap, onActive, onConfirm, scaleDenom, unit
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 3 }}>
             <span style={{ color: PT.muted }}>Occ: <b style={{ color: PT.accent }}>{readout.occLabel}</b></span>
             <button onClick={onSwap} title="Swap occupied end" style={{
-              fontSize: 9, fontFamily: 'Courier New, monospace', cursor: 'pointer',
+              fontSize: 9, fontFamily: FBF.sketch, cursor: 'pointer',
               background: PT.bg, border: `1px solid ${PT.border}`, borderRadius: 3,
               color: PT.text, padding: '1px 6px',
             }}>⇄ Swap</button>
@@ -1611,7 +1601,7 @@ function CogoPanel({ line, occEnd, onSwap, onActive, onConfirm, scaleDenom, unit
           <div style={{ display: 'flex', flexShrink: 0 }}>
             {['L', 'R'].map(t => (
               <button key={t} disabled={!enabled} onClick={() => setTurn(t)} style={{
-                fontSize: 10, fontFamily: 'Courier New, monospace', cursor: enabled ? 'pointer' : 'default',
+                fontSize: 10, fontFamily: FBF.sketch, cursor: enabled ? 'pointer' : 'default',
                 width: 24, padding: '3px 0',
                 background: turn === t ? PT.accent : PT.bg,
                 color: turn === t ? '#FFF' : PT.muted,
@@ -1653,7 +1643,7 @@ function CogoPanel({ line, occEnd, onSwap, onActive, onConfirm, scaleDenom, unit
       {err && <div style={{ fontSize: 9.5, color: '#C0392B' }}>{err}</div>}
 
       <button onClick={handleConfirm} disabled={!enabled} style={{
-        marginTop: 1, padding: '5px 0', fontSize: 11, fontFamily: 'Courier New, monospace',
+        marginTop: 1, padding: '5px 0', fontSize: 11, fontFamily: FBF.sketch,
         cursor: enabled ? 'pointer' : 'default',
         background: enabled ? PT.accent : PT.bgAlt, color: enabled ? '#FFF' : PT.faint,
         border: `1px solid ${PT.border}`, borderRadius: 4, fontWeight: 700,
@@ -1933,12 +1923,12 @@ function ColorPanel({ colorTarget, onTargetChange, activeColor, activeOpacity, r
 
   const btnBase = {
     height: 24, borderRadius: 4, fontSize: 10, fontWeight: 700,
-    cursor: 'pointer', fontFamily: 'Courier New, monospace', outline: 'none',
+    cursor: 'pointer', fontFamily: FBF.sketch, outline: 'none',
     textTransform: 'uppercase', letterSpacing: '0.06em',
   };
 
   return (
-    <div style={{ padding: '8px 8px 6px', fontFamily: 'Courier New, monospace' }}>
+    <div style={{ padding: '8px 8px 6px', fontFamily: FBF.sketch }}>
       {/* Stroke / Fill / None toggle */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
         {['stroke', 'fill'].map(t => (
@@ -1993,7 +1983,7 @@ function ColorPanel({ colorTarget, onTargetChange, activeColor, activeOpacity, r
           style={{
             flex: 1, height: 22, borderRadius: 3, fontSize: 10, padding: '0 6px',
             background: PT.inputBg, border: `1px solid ${PT.border}`,
-            color: PT.text, fontFamily: 'Courier New, monospace', outline: 'none',
+            color: PT.text, fontFamily: FBF.sketch, outline: 'none',
           }}
         />
       </div>
@@ -2005,7 +1995,7 @@ function ColorPanel({ colorTarget, onTargetChange, activeColor, activeOpacity, r
             <span style={{ fontSize: 8, color: PT.faint, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
               Opacity
             </span>
-            <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace' }}>
+            <span style={{ fontSize: 9, color: PT.muted, fontFamily: FBF.sketch }}>
               {opacityPct}%
             </span>
           </div>
@@ -2710,15 +2700,15 @@ function PointInfoCard({ shape: s, onUpdate, projectId, onPtNumChange, inline = 
   const inpSt = inline ? {
     flex: 1, padding: '3px 6px', borderRadius: 4, minWidth: 0,
     background: PT.inputBg, border: `1px solid ${PT.border}`,
-    color: PT.text, fontSize: 10, fontFamily: 'Courier New, monospace', outline: 'none',
+    color: PT.text, fontSize: 10, fontFamily: FBF.sketch, outline: 'none',
   } : {
     flex: 1, padding: '4px 6px', borderRadius: 4, minWidth: 0,
     background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.13)',
-    color: '#FDFAF4', fontSize: 10.5, fontFamily: 'Courier New, monospace', outline: 'none',
+    color: '#FDFAF4', fontSize: 10.5, fontFamily: FBF.sketch, outline: 'none',
   };
 
   const cardStyle = inline ? {
-    padding: '6px 8px', fontSize: 10, fontFamily: 'Courier New, monospace',
+    padding: '6px 8px', fontSize: 10, fontFamily: FBF.sketch,
   } : {
     position: 'absolute', bottom: 60, left: 8, width: 210,
     background: 'rgba(12,24,16,0.96)', borderRadius: 10,
@@ -2741,7 +2731,7 @@ function PointInfoCard({ shape: s, onUpdate, projectId, onPtNumChange, inline = 
             background: inline ? PT.inputBg : '#1A3D28',
             border: inline ? `1px solid ${PT.border}` : '1px solid rgba(255,255,255,0.2)',
             color: inline ? PT.text : '#FDFAF4',
-            fontFamily: 'Courier New, monospace', outline: 'none', cursor: 'pointer',
+            fontFamily: FBF.sketch, outline: 'none', cursor: 'pointer',
           }}
         >
           {SYMBOL_OPTS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
@@ -2885,7 +2875,7 @@ function PointSelectModal({ projectId, onSelect, onClose }) {
               placeholder="Filter by Pt # or description…"
               style={{
                 width: '100%', padding: '8px 12px', borderRadius: 8, border: '1.5px solid #DDD6C8',
-                fontSize: 13, fontFamily: 'Courier New, monospace', background: 'white',
+                fontSize: 13, fontFamily: FBF.sketch, background: 'white',
                 marginBottom: 8, boxSizing: 'border-box', outline: 'none',
               }}
               autoFocus
@@ -2902,10 +2892,10 @@ function PointSelectModal({ projectId, onSelect, onClose }) {
                     display: 'flex', alignItems: 'center', gap: 10,
                   }}>
                   <span style={{
-                    fontFamily: 'Courier New, monospace', fontSize: 13, fontWeight: 700,
+                    fontFamily: FBF.sketch, fontSize: 13, fontWeight: 700,
                     color: '#1C3829', width: 36, flexShrink: 0,
                   }}>{pt.ptNum || '—'}</span>
-                  <span style={{ flex: 1, fontSize: 11, color: '#4B5563', fontFamily: 'Courier New, monospace' }}>
+                  <span style={{ flex: 1, fontSize: 11, color: '#4B5563', fontFamily: FBF.sketch }}>
                     {pt.desc && <span style={{ fontWeight: 600 }}>{pt.desc} · </span>}
                     {pt.northing && <span>N:{pt.northing} </span>}
                     {pt.easting  && <span>E:{pt.easting}</span>}
@@ -7057,7 +7047,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 x={tX}
                 y={tY0 + i * tLineH}
                 fontSize={tFontSize}
-                fontFamily="Courier New, monospace"
+                fontFamily={FBF.sketch}
                 textAnchor={anchor}
                 fill={s.stroke || STROKE}
                 stroke="rgba(255,255,248,0.7)" strokeWidth={1.6 * _tps}
@@ -7546,7 +7536,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 {/* "PI" label */}
                 <text x={np.x} y={np.y - sz - 4*ps}
                   textAnchor="middle" dominantBaseline="auto"
-                  fontSize={7.5 * ps} fontFamily="Courier New, monospace"
+                  fontSize={7.5 * ps} fontFamily={FBF.sketch}
                   fill="#22C55E" stroke="rgba(10,15,35,0.7)" strokeWidth={1.8*ps}
                   paintOrder="stroke fill"
                   style={{ pointerEvents: 'none', userSelect: 'none' }}>PI</text>
@@ -7735,7 +7725,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               strokeWidth={1.5*ps} opacity={0.95} style={{ pointerEvents: 'none' }} />
             <text x={ppx} y={ppy - sz - 4*ps}
               textAnchor="middle" dominantBaseline="auto"
-              fontSize={7.5*ps} fontFamily="Courier New, monospace"
+              fontSize={7.5*ps} fontFamily={FBF.sketch}
               fill="#22C55E" stroke="rgba(10,15,35,0.7)" strokeWidth={1.8*ps}
               paintOrder="stroke fill"
               style={{ pointerEvents: 'none', userSelect: 'none' }}>PI</text>
@@ -7915,7 +7905,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               onClick={() => setHeaderOpen(o => !o)}
               style={{ flex: 1, height: 20, background: 'none', border: 'none', cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, minWidth: 0 }}>
-              <span style={{ fontSize: 9.5, fontFamily: 'Courier New, monospace',
+              <span style={{ fontSize: 9.5, fontFamily: FBF.sketch,
                 color: 'rgba(60,50,30,0.65)', letterSpacing: '0.03em',
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {page.pageNumber ? `Pg ${page.pageNumber}` : ''}
@@ -7953,7 +7943,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             style={{ flex: 1, height: 20, display: 'flex', alignItems: 'center',
               justifyContent: 'space-between', padding: '0 10px',
               background: 'none', border: 'none', cursor: 'pointer', outline: 'none' }}>
-            <span style={{ fontSize: 9.5, fontFamily: 'Courier New, monospace',
+            <span style={{ fontSize: 9.5, fontFamily: FBF.sketch,
               color: 'rgba(60,50,30,0.65)', letterSpacing: '0.03em',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {page.pageNumber ? `Pg ${page.pageNumber}` : ''}
@@ -7981,7 +7971,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             border: `1px solid ${PT.border}`, borderRadius: 6,
             boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             minWidth: 165, padding: '4px 0',
-            fontFamily: 'Courier New, monospace',
+            fontFamily: FBF.sketch,
           }}>
             {/* Point */}
             <button
@@ -8006,7 +7996,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                   <line x1="2" y1="10" x2="4.5" y2="10" strokeWidth="1.2"/><line x1="15.5" y1="10" x2="18" y2="10" strokeWidth="1.2"/>
                 </svg>
               </span>
-              <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>Point…</span>
+              <span style={{ flex: 1, fontFamily: FBF.sketch }}>Point…</span>
             </button>
             {/* Image */}
             <button
@@ -8026,7 +8016,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                   <polyline points="1 10 4 7 6.5 9.5 9 7 13 11" strokeWidth="1.2"/>
                 </svg>
               </span>
-              <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>Image…</span>
+              <span style={{ flex: 1, fontFamily: FBF.sketch }}>Image…</span>
             </button>
             {/* Camera — same file picker as Image but labelled to prompt users to use camera on mobile */}
             <button
@@ -8046,7 +8036,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                   <circle cx="7" cy="7.5" r="2.2"/>
                 </svg>
               </span>
-              <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>Camera…</span>
+              <span style={{ flex: 1, fontFamily: FBF.sketch }}>Camera…</span>
             </button>
           </div>
         )}
@@ -8059,7 +8049,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             border: `1px solid ${PT.border}`, borderRadius: 6,
             boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             minWidth: 185, padding: '4px 0',
-            fontFamily: 'Courier New, monospace',
+            fontFamily: FBF.sketch,
           }}>
             {[
               { label: 'Grid',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3"><line x1="0" y1="4.7" x2="14" y2="4.7"/><line x1="0" y1="9.3" x2="14" y2="9.3"/><line x1="4.7" y1="0" x2="4.7" y2="14"/><line x1="9.3" y1="0" x2="9.3" y2="14"/></svg>, state: showGrid,      set: () => setShowGrid(v => !v),      activeCol: '#2D8A5C', activeBg: 'rgba(45,138,92,0.12)' },
@@ -8083,7 +8073,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 }}
               >
                 <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, flexShrink: 0 }}>{icon}</span>
-                <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>{label}</span>
+                <span style={{ flex: 1, fontFamily: FBF.sketch }}>{label}</span>
                 <span style={{ fontSize: 10, color: state ? activeCol : PT.faint, marginLeft: 8 }}>
                   {state ? 'on' : 'off'}
                 </span>
@@ -8102,7 +8092,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             border: `1px solid ${PT.border}`, borderRadius: 6,
             boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             width: 232, padding: '8px 0',
-            fontFamily: 'Courier New, monospace',
+            fontFamily: FBF.sketch,
           }}>
 
             {/* Zoom controls row */}
@@ -8157,7 +8147,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                   background: PT.bgAlt, border: `1px solid ${PT.border}`,
                   color: PT.text, cursor: 'pointer',
                   fontSize: 11, fontWeight: 600,
-                  fontFamily: 'Courier New, monospace', outline: 'none',
+                  fontFamily: FBF.sketch, outline: 'none',
                 }}
               >{units}</button>
             </div>
@@ -8184,7 +8174,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 style={{
                   flex: 1, height: 26, minWidth: 0, background: PT.inputBg,
                   border: `1px solid ${PT.border}`, borderRadius: 4,
-                  color: PT.text, fontFamily: 'Courier New, monospace',
+                  color: PT.text, fontFamily: FBF.sketch,
                   fontSize: 11, padding: '0 10px', outline: 'none', textAlign: 'left',
                   boxSizing: 'border-box',
                 }}
@@ -8237,7 +8227,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               {/* Thickness row */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div style={{ fontSize: 10, color: PT.muted,
-                  fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
+                  fontFamily: FBF.sketch, letterSpacing: '0.06em' }}>
                   THICKNESS
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -8253,11 +8243,11 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                       width: 44, padding: '2px 4px', borderRadius: 4, textAlign: 'center',
                       background: PT.inputBg, border: `1px solid ${PT.border}`,
                       color: PT.text, fontSize: 11,
-                      fontFamily: 'Courier New, monospace', outline: 'none',
+                      fontFamily: FBF.sketch, outline: 'none',
                     }}
                   />
                   <span style={{ fontSize: 10, color: PT.faint,
-                    fontFamily: 'Courier New, monospace' }}>px</span>
+                    fontFamily: FBF.sketch }}>px</span>
                 </div>
                 {/* Live preview line */}
                 <svg width="100%" height={Math.max(currentW * 2 + 6, 14)} style={{ display: 'block' }}>
@@ -8293,7 +8283,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <div style={{ fontSize: 10, color: PT.muted,
-                      fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
+                      fontFamily: FBF.sketch, letterSpacing: '0.06em' }}>
                       LINE TYPE
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -8306,7 +8296,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                             background: active ? 'rgba(37,99,168,0.14)' : PT.bgAlt,
                             border: `1px solid ${active ? 'rgba(37,99,168,0.6)' : PT.border}`,
                             color: active ? '#2563A8' : PT.muted,
-                            fontFamily: 'Courier New, monospace', fontSize: 10,
+                            fontFamily: FBF.sketch, fontSize: 10,
                           }}>
                             <svg width="56" height="16" viewBox="0 0 56 16" style={{ flexShrink: 0 }}>
                               <line x1="4" y1="8" x2="52" y2="8"
@@ -8368,7 +8358,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           };
           const btnSt = (active) => ({
             flex: 1, height: 28, borderRadius: 4, cursor: 'pointer', fontSize: 11,
-            fontFamily: 'Courier New, monospace',
+            fontFamily: FBF.sketch,
             background: active ? 'rgba(37,99,168,0.14)' : PT.bgAlt,
             border: `1px solid ${active ? 'rgba(37,99,168,0.6)' : PT.border}`,
             color: active ? '#2563A8' : PT.muted,
@@ -8389,7 +8379,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
               {/* Font size */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ fontSize: 10, color: PT.muted, fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
+                <div style={{ fontSize: 10, color: PT.muted, fontFamily: FBF.sketch, letterSpacing: '0.06em' }}>
                   FONT SIZE
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -8404,20 +8394,20 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     style={{
                       width: 44, padding: '2px 4px', borderRadius: 4, textAlign: 'center',
                       background: PT.inputBg, border: `1px solid ${PT.border}`,
-                      color: PT.text, fontSize: 11, fontFamily: 'Courier New, monospace', outline: 'none',
+                      color: PT.text, fontSize: 11, fontFamily: FBF.sketch, outline: 'none',
                     }}
                   />
                   <button onClick={() => applyFs(1.0)} style={{
                     padding: '2px 7px', borderRadius: 4, cursor: 'pointer', fontSize: 10,
                     background: PT.bgAlt, border: `1px solid ${PT.border}`, color: PT.muted,
-                    fontFamily: 'Courier New, monospace',
+                    fontFamily: FBF.sketch,
                   }}>reset</button>
                 </div>
               </div>
 
               {/* Horizontal alignment */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <div style={{ fontSize: 10, color: PT.muted, fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
+                <div style={{ fontSize: 10, color: PT.muted, fontFamily: FBF.sketch, letterSpacing: '0.06em' }}>
                   HORIZONTAL
                 </div>
                 <div style={{ display: 'flex', gap: 5 }}>
@@ -8429,7 +8419,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
               {/* Vertical alignment */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <div style={{ fontSize: 10, color: PT.muted, fontFamily: 'Courier New, monospace', letterSpacing: '0.06em' }}>
+                <div style={{ fontSize: 10, color: PT.muted, fontFamily: FBF.sketch, letterSpacing: '0.06em' }}>
                   VERTICAL
                 </div>
                 <div style={{ display: 'flex', gap: 5 }}>
@@ -8450,7 +8440,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             border: `1px solid ${PT.border}`, borderRadius: 6,
             boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             minWidth: 200, padding: '4px 0',
-            fontFamily: 'Courier New, monospace',
+            fontFamily: FBF.sketch,
           }}>
             {[
               { key: 'endpoint',     label: 'Endpoint',      icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="7" cy="7" r="5"/><circle cx="7" cy="7" r="2" fill="currentColor"/></svg>, col: '#2D8A5C', bg: 'rgba(45,138,92,0.12)',   desc: 'Line & curve endpoints' },
@@ -8474,7 +8464,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                   }}
                 >
                   <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, flexShrink: 0 }}>{icon}</span>
-                  <span style={{ flex: 1, fontFamily: 'Courier New, monospace' }}>{label}</span>
+                  <span style={{ flex: 1, fontFamily: FBF.sketch }}>{label}</span>
                   <span style={{ fontSize: 9, color: on ? col : PT.faint, opacity: 0.85 }}>{desc}</span>
                   <span style={{ fontSize: 10, color: on ? col : PT.faint, marginLeft: 8, minWidth: 18, textAlign: 'right' }}>
                     {on ? 'on' : 'off'}
@@ -8493,7 +8483,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             border: `1px solid ${PT.border}`, borderRadius: 6,
             boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             minWidth: 170, padding: '4px 0',
-            fontFamily: 'Courier New, monospace',
+            fontFamily: FBF.sketch,
           }}>
             {[
               { op: 'add',       label: 'Add',       icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4"/></svg>, desc: 'Union of all shapes',         col: '#2D8A5C', bg: 'rgba(45,138,92,0.12)'    },
@@ -8555,7 +8545,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               border: `1px solid ${anySnapActive ? '#2D8A5C' : PT.border}`,
               color: anySnapActive ? '#2D8A5C' : PT.muted,
               cursor: 'pointer', fontSize: 11,
-              fontFamily: 'Courier New, monospace', outline: 'none', transition: 'all 0.15s',
+              fontFamily: FBF.sketch, outline: 'none', transition: 'all 0.15s',
             }}
           >
             <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="7" cy="7" r="5"/><circle cx="7" cy="7" r="2" fill="currentColor" fillOpacity="0.7"/><line x1="7" y1="1" x2="7" y2="3" strokeWidth="1.2"/><line x1="7" y1="11" x2="7" y2="13" strokeWidth="1.2"/><line x1="1" y1="7" x2="3" y2="7" strokeWidth="1.2"/><line x1="11" y1="7" x2="13" y2="7" strokeWidth="1.2"/></svg>
@@ -8582,7 +8572,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 border: `1px solid ${openMenu === 'join' ? '#6B3EA8' : PT.border}`,
                 color: openMenu === 'join' ? '#6B3EA8' : PT.muted,
                 cursor: 'pointer', fontSize: 11,
-                fontFamily: 'Courier New, monospace', outline: 'none',
+                fontFamily: FBF.sketch, outline: 'none',
               }}
             >
               <svg width="13" height="13" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="7.5" r="4"/><circle cx="10" cy="7.5" r="4"/></svg>
@@ -8603,7 +8593,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     title={m.title}
                     style={{
                       height: 22, padding: '0 8px', borderRadius: 3, fontSize: 10,
-                      fontFamily: 'Courier New, monospace',
+                      fontFamily: FBF.sketch,
                       background: stabilizerMode === m.id ? 'rgba(99,102,241,0.18)' : PT.bgAlt,
                       border: `1px solid ${stabilizerMode === m.id ? 'rgba(99,102,241,0.7)' : PT.border}`,
                       color: stabilizerMode === m.id ? '#5B4EA8' : PT.muted,
@@ -8614,7 +8604,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               </div>
               {/* Rope length / Window size control */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace' }}>
+                <span style={{ fontSize: 9, color: PT.muted, fontFamily: FBF.sketch }}>
                   {stabilizerMode === 'rope' ? 'Lag' : 'Win'}
                 </span>
                 <input type="range" min={1} max={stabilizerMode === 'rope' ? 80 : 20} step={1}
@@ -8624,19 +8614,19 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     : setWindowSize(Number(e.target.value))}
                   style={{ width: 60, cursor: 'pointer', accentColor: PT.accent }}
                 />
-                <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', minWidth: 18 }}>
+                <span style={{ fontSize: 9, color: PT.muted, fontFamily: FBF.sketch, minWidth: 18 }}>
                   {stabilizerMode === 'rope' ? ropeLength : windowSize}
                 </span>
               </div>
               {/* Smoothness control */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace' }}>Smooth</span>
+                <span style={{ fontSize: 9, color: PT.muted, fontFamily: FBF.sketch }}>Smooth</span>
                 <input type="range" min={0} max={100} step={5}
                   value={Math.round(pencilSmoothness * 100)}
                   onChange={e => setPencilSmoothness(Number(e.target.value) / 100)}
                   style={{ width: 60, cursor: 'pointer', accentColor: PT.accent }}
                 />
-                <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', minWidth: 22 }}>
+                <span style={{ fontSize: 9, color: PT.muted, fontFamily: FBF.sketch, minWidth: 22 }}>
                   {Math.round(pencilSmoothness * 100)}%
                 </span>
               </div>
@@ -8654,7 +8644,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                   title={m.title}
                   style={{
                     height: 22, padding: '0 8px', borderRadius: 3, fontSize: 10,
-                    fontFamily: 'Courier New, monospace',
+                    fontFamily: FBF.sketch,
                     background: penMode === m.id ? 'rgba(37,99,168,0.18)' : PT.bgAlt,
                     border: `1px solid ${penMode === m.id ? 'rgba(37,99,168,0.7)' : PT.border}`,
                     color: penMode === m.id ? '#2563A8' : PT.muted,
@@ -8665,7 +8655,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               {penNodes.length > 0 && (
                 <>
                   <div style={{ width: 1, height: 18, background: PT.border, margin: '0 2px', flexShrink: 0 }} />
-                  <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+                  <span style={{ fontSize: 9, color: PT.muted, fontFamily: FBF.sketch, flexShrink: 0 }}>
                     {penNodes.length} node{penNodes.length !== 1 ? 's' : ''}
                   </span>
                   <button
@@ -8673,7 +8663,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     title="Commit open path (Enter)"
                     style={{
                       height: 22, padding: '0 9px', borderRadius: 3, fontSize: 10,
-                      fontFamily: 'Courier New, monospace',
+                      fontFamily: FBF.sketch,
                       background: 'rgba(34,197,94,0.25)',
                       border: '1px solid rgba(34,197,94,0.55)',
                       color: '#86EFAC', cursor: 'pointer', outline: 'none', flexShrink: 0,
@@ -8684,7 +8674,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     title="Cancel path (Escape)"
                     style={{
                       height: 22, padding: '0 8px', borderRadius: 3, fontSize: 10,
-                      fontFamily: 'Courier New, monospace',
+                      fontFamily: FBF.sketch,
                       background: 'rgba(239,68,68,0.18)',
                       border: '1px solid rgba(239,68,68,0.45)',
                       color: '#FCA5A5', cursor: 'pointer', outline: 'none', flexShrink: 0,
@@ -8703,7 +8693,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             return (
               <>
                 <div style={{ width: 1, height: 18, background: PT.border, margin: '0 2px', flexShrink: 0 }} />
-                <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>Node:</span>
+                <span style={{ fontSize: 9, color: PT.muted, fontFamily: FBF.sketch, flexShrink: 0 }}>Node:</span>
                 {[{ id: 'sharp', label: 'Sharp', title: 'Sharp corner node — handles are independent' },
                   { id: 'smooth', label: 'Smooth', title: 'Smooth node — handles mirror each other' },
                   { id: 'cusp', label: 'Cusp', title: 'Cusp node — handles are independent but shown' }].map(t => (
@@ -8723,7 +8713,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     title={t.title}
                     style={{
                       height: 22, padding: '0 7px', borderRadius: 3, fontSize: 10,
-                      fontFamily: 'Courier New, monospace',
+                      fontFamily: FBF.sketch,
                       background: node.type === t.id ? 'rgba(99,102,241,0.18)' : PT.bgAlt,
                       border: `1px solid ${node.type === t.id ? 'rgba(99,102,241,0.7)' : PT.border}`,
                       color: node.type === t.id ? '#5B4EA8' : PT.muted,
@@ -8748,7 +8738,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                   title="Delete selected node"
                   style={{
                     height: 22, padding: '0 7px', borderRadius: 3, fontSize: 10,
-                    fontFamily: 'Courier New, monospace',
+                    fontFamily: FBF.sketch,
                     background: 'rgba(239,68,68,0.15)',
                     border: '1px solid rgba(239,68,68,0.4)',
                     color: '#FCA5A5', cursor: 'pointer', outline: 'none', flexShrink: 0,
@@ -8762,27 +8752,27 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           {['dim-linear', 'dim-angle', 'dim-bearing', 'dim-radius'].includes(tool) && (<>
             <div style={{ width: 1, height: 18, background: PT.border, margin: '0 2px', flexShrink: 0 }} />
             {tool === 'dim-linear' && (
-              <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+              <span style={{ fontSize: 9, color: PT.muted, fontFamily: FBF.sketch, flexShrink: 0 }}>
                 {drawState ? 'click P2' : 'click P1'}
               </span>
             )}
             {tool === 'dim-angle' && (
-              <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+              <span style={{ fontSize: 9, color: PT.muted, fontFamily: FBF.sketch, flexShrink: 0 }}>
                 {!drawState ? 'click a line' : drawState.phase === 1 ? 'click 2nd line' : 'click to confirm side'}
               </span>
             )}
             {tool === 'dim-bearing' && (
-              <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>
+              <span style={{ fontSize: 9, color: PT.muted, fontFamily: FBF.sketch, flexShrink: 0 }}>
                 {drawState ? 'click P2' : 'click P1'}
               </span>
             )}
             {tool === 'dim-radius' && (
-              <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>click circle or arc</span>
+              <span style={{ fontSize: 9, color: PT.muted, fontFamily: FBF.sketch, flexShrink: 0 }}>click circle or arc</span>
             )}
             {/* North azimuth: relevant to bearing dims */}
             {tool === 'dim-bearing' && (<>
               <div style={{ width: 1, height: 18, background: PT.border, margin: '0 4px', flexShrink: 0 }} />
-              <span style={{ fontSize: 9, color: PT.muted, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>N:</span>
+              <span style={{ fontSize: 9, color: PT.muted, fontFamily: FBF.sketch, flexShrink: 0 }}>N:</span>
               <input
                 type="number" min={0} max={359} step={1}
                 value={northAzimuth}
@@ -8794,13 +8784,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 title="True North azimuth — clockwise degrees from screen-up"
                 style={{
                   width: 44, height: 22, borderRadius: 3, fontSize: 10, textAlign: 'center',
-                  fontFamily: 'Courier New, monospace', outline: 'none',
+                  fontFamily: FBF.sketch, outline: 'none',
                   background: PT.inputBg,
                   border: `1px solid ${PT.border}`,
                   color: PT.text,
                 }}
               />
-              <span style={{ fontSize: 8, color: PT.faint, fontFamily: 'Courier New, monospace', flexShrink: 0 }}>°</span>
+              <span style={{ fontSize: 8, color: PT.faint, fontFamily: FBF.sketch, flexShrink: 0 }}>°</span>
             </>)}
           </>)}
 
@@ -8825,7 +8815,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               border: `1px solid ${canUndo ? PT.border : 'rgba(139,115,85,0.25)'}`,
               color: canUndo ? PT.text : PT.faint,
               cursor: canUndo ? 'pointer' : 'default', fontSize: 15,
-              fontFamily: 'Courier New, monospace', outline: 'none',
+              fontFamily: FBF.sketch, outline: 'none',
             }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -8853,7 +8843,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               border: `1px solid ${canRedo ? PT.border : 'rgba(139,115,85,0.25)'}`,
               color: canRedo ? PT.text : PT.faint,
               cursor: canRedo ? 'pointer' : 'default', fontSize: 15,
-              fontFamily: 'Courier New, monospace', outline: 'none',
+              fontFamily: FBF.sketch, outline: 'none',
             }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -8878,7 +8868,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               border: `1px solid ${openMenu === 'insert' ? PT.accent : PT.border}`,
               color: openMenu === 'insert' ? PT.text : PT.muted,
               cursor: 'pointer', fontSize: 11,
-              fontFamily: 'Courier New, monospace', outline: 'none',
+              fontFamily: FBF.sketch, outline: 'none',
             }}
           >
             <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
@@ -8903,7 +8893,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               border: `1px solid ${openMenu === 'view' ? PT.accent : PT.border}`,
               color: openMenu === 'view' ? PT.text : PT.muted,
               cursor: 'pointer', fontSize: 11,
-              fontFamily: 'Courier New, monospace', outline: 'none',
+              fontFamily: FBF.sketch, outline: 'none',
             }}
           >
             <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><rect x="1" y="1" width="12" height="12" rx="1.5"/><line x1="1" y1="5" x2="13" y2="5" strokeWidth="1.2"/><line x1="5" y1="5" x2="5" y2="13" strokeWidth="1.2"/></svg>
@@ -8927,7 +8917,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               border: `1px solid ${openMenu === 'scale' ? PT.accent : PT.border}`,
               color: openMenu === 'scale' ? PT.text : PT.muted,
               cursor: 'pointer', fontSize: 11,
-              fontFamily: 'Courier New, monospace', outline: 'none',
+              fontFamily: FBF.sketch, outline: 'none',
             }}
           >
             <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><rect x="1" y="4" width="12" height="6" rx="1"/><line x1="4" y1="4" x2="4" y2="10" strokeWidth="1"/><line x1="7" y1="4" x2="7" y2="10" strokeWidth="1"/><line x1="10" y1="4" x2="10" y2="10" strokeWidth="1"/></svg>
@@ -8951,7 +8941,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               border: `1px solid ${openMenu === 'stroke' ? PT.accent : PT.border}`,
               color: openMenu === 'stroke' ? PT.text : PT.muted,
               cursor: 'pointer', fontSize: 11,
-              fontFamily: 'Courier New, monospace', outline: 'none',
+              fontFamily: FBF.sketch, outline: 'none',
             }}
           >
             <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><line x1="2" y1="4" x2="12" y2="4" strokeWidth="2.5"/><line x1="2" y1="7" x2="12" y2="7" strokeWidth="1.5"/><line x1="2" y1="10" x2="12" y2="10" strokeWidth="0.8"/></svg>
@@ -8975,7 +8965,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               border: `1px solid ${openMenu === 'text' ? PT.accent : PT.border}`,
               color: openMenu === 'text' ? PT.text : PT.muted,
               cursor: 'pointer', fontSize: 11,
-              fontFamily: 'Courier New, monospace', outline: 'none',
+              fontFamily: FBF.sketch, outline: 'none',
             }}
           >
             <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
@@ -8987,7 +8977,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
           {/* Zoom % readout */}
           <span style={{
-            fontSize: 10, fontFamily: 'Courier New, monospace', letterSpacing: '0.03em',
+            fontSize: 10, fontFamily: FBF.sketch, letterSpacing: '0.03em',
             color: PT.muted, minWidth: 34, textAlign: 'right',
             userSelect: 'none', flexShrink: 0,
           }}>
@@ -8997,7 +8987,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           {/* Pan hint */}
           {isPanActive && (
             <span style={{
-              fontSize: 10, fontFamily: 'Courier New, monospace',
+              fontSize: 10, fontFamily: FBF.sketch,
               color: PT.muted, marginLeft: 4, flexShrink: 0,
             }}>panning…</span>
           )}
@@ -9224,7 +9214,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           {showNorthArrow && (
           <div style={{ position: 'absolute', top: 10, right: 14, opacity: 0.28, display: 'flex',
             flexDirection: 'column', alignItems: 'center', color: '#3B5BDB',
-            fontFamily: 'Courier New, monospace', fontSize: 11, pointerEvents: 'none', zIndex: 2 }}>
+            fontFamily: FBF.sketch, fontSize: 11, pointerEvents: 'none', zIndex: 2 }}>
             <span style={{ fontSize: 20, lineHeight: 1 }}>↑</span>
             <span style={{ fontWeight: 700, lineHeight: 1 }}>N</span>
           </div>
@@ -9235,7 +9225,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             <div style={{ position: 'absolute', top: '50%', left: '50%',
               transform: 'translate(-50%,-50%)', textAlign: 'center',
               opacity: 0.2, pointerEvents: 'none' }}>
-              <p style={{ fontSize: 13, color: '#3B5BDB', fontFamily: 'Courier New, monospace' }}>
+              <p style={{ fontSize: 13, color: '#3B5BDB', fontFamily: FBF.sketch }}>
                 Select a tool and sketch
               </p>
             </div>
@@ -9343,7 +9333,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     stroke="#2D6A8A" strokeWidth={1.6 * _ps} />
                   <circle cx={ox} cy={oy} r={1.6 * _ps} fill="#2D6A8A" />
                   <text x={ox + r + 3 * _ps} y={oy - r} fontSize={11 * _ps} fill="#2D6A8A"
-                    fontFamily="Courier New, monospace" fontWeight="700"
+                    fontFamily={FBF.sketch} fontWeight="700"
                     paintOrder="stroke" stroke="#F5F0E3" strokeWidth={3 * _ps}>OCC</text>
                 </g>
               );
@@ -9579,7 +9569,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 </svg>
                 {/* Distance label */}
                 <span style={{
-                  fontSize: 8.5, fontFamily: 'Courier New, monospace',
+                  fontSize: 8.5, fontFamily: FBF.sketch,
                   color: 'rgba(20,50,140,0.70)', textAlign: 'center', letterSpacing: '0.03em',
                   width: '100%', textAlign: 'center',
                 }}>{niceStr}{niceVal >= 1000 ? '' : unitLabel}</span>
@@ -9600,7 +9590,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 position: 'absolute', bottom: 10, left: 10, pointerEvents: 'none',
                 background: 'rgba(245,240,227,0.97)', border: `1px solid ${PT.border}`,
                 borderRadius: 6, padding: '7px 11px',
-                fontFamily: 'Courier New, monospace', fontSize: 10.5,
+                fontFamily: FBF.sketch, fontSize: 10.5,
                 color: PT.text, zIndex: 15,
                 lineHeight: 1.7, minWidth: 160, maxWidth: 210,
               }}>
@@ -9654,7 +9644,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                   background: 'rgba(255,255,248,0.97)',
                   border: '1.5px dashed #3B82F6',
                   outline: 'none', resize: 'none',
-                  fontFamily: 'Courier New, monospace', fontSize: 11,
+                  fontFamily: FBF.sketch, fontSize: 11,
                   padding: '3px 5px', lineHeight: 1.55, color: STROKE,
                   boxSizing: 'border-box',
                 }}
@@ -10130,7 +10120,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     if (!_layer) return null;
                     const _shapeCount = shapes.filter(s => (s.layerId || layers[0]?.id) === _layer.id).length;
                     return (
-                      <div style={{ padding: '6px 8px', fontSize: 10, fontFamily: 'Courier New, monospace' }}>
+                      <div style={{ padding: '6px 8px', fontSize: 10, fontFamily: FBF.sketch }}>
                         <div style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
                           textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Name</div>
                         <input
@@ -10155,7 +10145,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                             width: '100%', boxSizing: 'border-box',
                             padding: '3px 6px', borderRadius: 4, fontSize: 10,
                             background: PT.inputBg, border: `1px solid ${PT.border}`,
-                            color: PT.text, fontFamily: 'Courier New, monospace',
+                            color: PT.text, fontFamily: FBF.sketch,
                             outline: 'none', marginBottom: 5,
                           }}
                         />
@@ -10175,7 +10165,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                             style={{ width: 28, height: 22, padding: 0, border: `1px solid ${PT.border}`,
                               borderRadius: 3, cursor: 'pointer', background: 'none' }}
                           />
-                          <span style={{ color: PT.muted, fontFamily: 'Courier New, monospace', fontSize: 10 }}>
+                          <span style={{ color: PT.muted, fontFamily: FBF.sketch, fontSize: 10 }}>
                             {_layer.color || STROKE}
                           </span>
                         </div>
@@ -10205,7 +10195,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           }}
         >
           <span style={{
-            fontSize: 9.5, fontFamily: 'Courier New, monospace',
+            fontSize: 9.5, fontFamily: FBF.sketch,
             color: 'rgba(40,60,120,0.55)', letterSpacing: '0.04em',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>

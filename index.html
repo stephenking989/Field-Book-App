@@ -13,52 +13,16 @@
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="./icon.svg" />
 
-  <!-- Field Book Design System Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Oswald:wght@400;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <!-- BRAND — every colour and font lives in brand.js (it also loads the Google Fonts).
+       Change them there; index.html and sketch.js only reference them. -->
+  <script src="./brand.js"></script>
 
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            fb: {
-              // ── Design system tokens ────────────────────────────
-              page:           '#F5F0E3',
-              'page-alt':     '#EBE5D5',
-              'page-deep':    '#E0D9C8',
-              'grid-blue':    '#9BBCD0',
-              border:         '#CEC5B0',
-              ink:            '#1A1A1A',
-              'ink-muted':    '#5A5248',
-              'ink-faint':    '#9A908A',
-              cover:          '#3C5445',
-              heading:        '#3C5445',
-              accent:         '#4E7864',
-              'accent-light': '#7AAE94',
-              'accent-pale':  '#D2E8DA',
-              error:          '#B83C3C',
-              // ── Legacy aliases (keep until all classes migrated) ─
-              dark:    '#3C5445',
-              mid:     '#4E7864',
-              light:   '#7AAE94',
-              pale:    '#D2E8DA',
-              cream:   '#F5F0E3',
-              cream2:  '#EBE5D5',
-              text:    '#1A1A1A',
-              muted:   '#5A5248',
-            }
-          },
-          fontFamily: {
-            data:        ['"Share Tech Mono"', '"Courier New"', 'monospace'],
-            heading:     ['Oswald', '"Segoe UI"', 'sans-serif'],
-            handwritten: ['Caveat', '"Patrick Hand"', 'cursive'],
-          }
-        }
-      }
-    }
+    // Colours and fonts come from brand.js — edit them there, not here.
+    tailwind.config = FB_BRAND.tailwindConfig();
   </script>
 
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
@@ -79,19 +43,19 @@
     *, *::before, *::after { box-sizing: border-box; }
     html, body, #root { height: 100%; margin: 0; padding: 0; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #3C5445;
+      font-family: var(--fb-font-ui);
+      background: var(--fb-cover);
       -webkit-tap-highlight-color: transparent;
       overscroll-behavior: none;
     }
 
     /* ── Ruled notebook paper ──────────────────────────────────── */
     .page-ruled {
-      background-color: #F5F0E3;
+      background-color: var(--fb-page);
       background-image: linear-gradient(
         transparent calc(32px - 1px),
-        rgba(184,168,138,0.50) calc(32px - 1px),
-        rgba(184,168,138,0.50) 32px,
+        rgb(var(--fb-rule-tan-rgb) / 0.50) calc(32px - 1px),
+        rgb(var(--fb-rule-tan-rgb) / 0.50) 32px,
         transparent 32px
       );
       background-size: 100% 32px;
@@ -99,12 +63,12 @@
 
     /* ── Fine blue engineering grid ────────────────────────────── */
     .page-grid-blue {
-      background-color: #F5F0E3;
+      background-color: var(--fb-page);
       background-image:
-        linear-gradient(rgba(155,188,208,0.40) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(155,188,208,0.40) 1px, transparent 1px),
-        linear-gradient(rgba(155,188,208,0.20) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(155,188,208,0.20) 1px, transparent 1px);
+        linear-gradient(rgb(var(--fb-grid-blue-rgb) / 0.40) 1px, transparent 1px),
+        linear-gradient(90deg, rgb(var(--fb-grid-blue-rgb) / 0.40) 1px, transparent 1px),
+        linear-gradient(rgb(var(--fb-grid-blue-rgb) / 0.20) 1px, transparent 1px),
+        linear-gradient(90deg, rgb(var(--fb-grid-blue-rgb) / 0.20) 1px, transparent 1px);
       background-size: 25mm 25mm, 25mm 25mm, 5mm 5mm, 5mm 5mm;
     }
 
@@ -112,20 +76,20 @@
     .fb-table {
       width: 100%;
       border-collapse: collapse;
-      font-family: 'Share Tech Mono', 'Courier New', Courier, monospace;
+      font-family: var(--fb-font-mono);
       font-size: 13px;
     }
     .fb-table th {
-      background: rgba(245,240,227,0.97);
-      border-bottom: 2px solid #4E7864;
+      background: rgb(var(--fb-page-rgb) / 0.97);
+      border-bottom: 2px solid var(--fb-accent);
       border-right: 1px solid rgba(178,162,138,0.50);
       padding: 7px 5px 5px;
       text-align: center;
-      font-family: 'Oswald', 'Segoe UI', sans-serif;
+      font-family: var(--fb-font-print);
       font-weight: 600;
       font-size: 10px;
       text-transform: uppercase;
-      color: #3C5445;
+      color: var(--fb-cover);
       letter-spacing: 0.09em;
       white-space: nowrap;
       overflow: hidden;
@@ -140,13 +104,13 @@
       border-right: 1px solid rgba(178,162,138,0.38);
       border-bottom: 1px solid rgba(178,162,138,0.55);
       text-align: center;
-      color: #1A1A1A;
+      color: var(--fb-ink);
       vertical-align: middle;
       height: 32px;
     }
     .fb-table td:last-child { border-right: none; }
     .fb-table td.td-action { width: 32px; }
-    .fb-table tr:nth-child(even) td { background: rgba(206,197,176,0.14); }
+    .fb-table tr:nth-child(even) td { background: rgb(var(--fb-border-rgb) / 0.14); }
     .fb-table td > input {
       display: block;
       width: 100%;
@@ -155,13 +119,13 @@
       background: transparent;
       border: none;
       outline: none;
-      font-family: 'Caveat', cursive;
+      font-family: var(--fb-font-hand);
       font-size: 16px;
       text-align: center;
-      color: #1A1A1A;
+      color: var(--fb-ink);
       -webkit-appearance: none;
     }
-    .fb-table td > input:focus { background: rgba(78,120,100,0.08); }
+    .fb-table td > input:focus { background: rgb(var(--fb-accent-rgb) / 0.08); }
     .fb-table td > span {
       display: block;
       height: 32px;
@@ -174,19 +138,19 @@
 
     /* ── Red left-margin line (fieldbook look) ──────────────────── */
     .page-margin-rule {
-      border-left: 3px solid rgba(200,72,72,0.22);
+      border-left: 3px solid rgb(var(--fb-margin-red-rgb) / 0.22);
       margin-left: 32px;
     }
 
     /* ── Scrollbar ──────────────────────────────────────────────── */
     ::-webkit-scrollbar { width: 3px; height: 3px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #CEC5B0; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb { background: var(--fb-border); border-radius: 3px; }
 
     /* ── Enhanced Data Page ──────────────────────────────────────── */
     .dp-formula-bar {
-      background: #EBE5D5;
-      border-bottom: 1.5px solid #CEC5B0;
+      background: var(--fb-page-alt);
+      border-bottom: 1.5px solid var(--fb-border);
       display: flex;
       align-items: center;
       padding: 0 8px;
@@ -195,20 +159,20 @@
       flex-shrink: 0;
     }
     .dp-formula-bar .cell-ref {
-      font-family: 'Share Tech Mono', 'Courier New', monospace;
+      font-family: var(--fb-font-mono);
       font-size: 11px;
       font-weight: 700;
-      color: #3C5445;
+      color: var(--fb-cover);
       min-width: 36px;
       text-align: center;
-      background: rgba(60,84,69,0.08);
+      background: rgb(var(--fb-cover-rgb) / 0.08);
       border-radius: 4px;
       padding: 2px 5px;
       flex-shrink: 0;
     }
     .dp-formula-bar .fx-label {
       font-size: 12px;
-      color: #9A908A;
+      color: var(--fb-ink-faint);
       font-style: italic;
       flex-shrink: 0;
     }
@@ -217,13 +181,13 @@
       background: transparent;
       border: none;
       outline: none;
-      font-family: 'Share Tech Mono', 'Courier New', monospace;
+      font-family: var(--fb-font-mono);
       font-size: 13px;
-      color: #1A1A1A;
+      color: var(--fb-ink);
       min-width: 0;
     }
     .dp-cell-active {
-      background: rgba(78,120,100,0.13) !important;
+      background: rgb(var(--fb-accent-rgb) / 0.13) !important;
       outline: 2.5px solid #2a5c41;
       outline-offset: -1px;
       box-shadow: inset 0 0 0 1px rgba(42,92,65,0.25);
@@ -231,7 +195,7 @@
       position: relative;
     }
     .dp-cell-formula {
-      color: #3C5445 !important;
+      color: var(--fb-cover) !important;
       font-style: italic;
     }
     .dp-cell-dms {
@@ -245,26 +209,26 @@
       cursor: pointer;
       user-select: none;
     }
-    .dp-col-header:hover { background: rgba(78,120,100,0.08) !important; }
-    .dp-col-header.active-col { background: rgba(78,120,100,0.15) !important; color: #2A3D32 !important; }
+    .dp-col-header:hover { background: rgb(var(--fb-accent-rgb) / 0.08) !important; }
+    .dp-col-header.active-col { background: rgb(var(--fb-accent-rgb) / 0.15) !important; color: #2A3D32 !important; }
     .dp-row-num {
       width: 28px;
       min-width: 28px;
       max-width: 28px;
       text-align: center;
       font-size: 10px;
-      color: #9A908A;
-      font-family: 'Share Tech Mono', 'Courier New', monospace;
-      background: #EBE5D5;
-      border-right: 1.5px solid #CEC5B0 !important;
+      color: var(--fb-ink-faint);
+      font-family: var(--fb-font-mono);
+      background: var(--fb-page-alt);
+      border-right: 1.5px solid var(--fb-border) !important;
       padding: 0 2px;
       cursor: default;
       user-select: none;
     }
-    .dp-row-num.active-row { background: rgba(78,120,100,0.12); color: #3C5445; font-weight: 700; }
+    .dp-row-num.active-row { background: rgb(var(--fb-accent-rgb) / 0.12); color: var(--fb-cover); font-weight: 700; }
     .dp-toolbar {
-      background: #EBE5D5;
-      border-bottom: 1.5px solid #CEC5B0;
+      background: var(--fb-page-alt);
+      border-bottom: 1.5px solid var(--fb-border);
       display: flex;
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
@@ -280,67 +244,67 @@
       font-size: 11px;
       padding: 3px 10px;
       border-radius: 5px;
-      border: 1px solid #CEC5B0;
-      background: #F5F0E3;
-      color: #1A1A1A;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      border: 1px solid var(--fb-border);
+      background: var(--fb-page);
+      color: var(--fb-ink);
+      font-family: var(--fb-font-ui);
       cursor: pointer;
       white-space: nowrap;
       line-height: 1.4;
       flex-shrink: 0;
     }
-    .dp-toolbar button:active { background: #D2E8DA; border-color: #4E7864; }
+    .dp-toolbar button:active { background: var(--fb-accent-pale); border-color: var(--fb-accent); }
     .dp-toolbar .dp-drop-btn {
       display: flex; align-items: center; gap: 4px;
-      background: #F5F0E3; border: 1px solid #CEC5B0; border-radius: 6px;
+      background: var(--fb-page); border: 1px solid var(--fb-border); border-radius: 6px;
       padding: 4px 10px; font-size: 11px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      color: #1A1A1A; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+      font-family: var(--fb-font-ui);
+      color: var(--fb-ink); cursor: pointer; white-space: nowrap; flex-shrink: 0;
     }
-    .dp-toolbar .dp-drop-btn.active { background: #D2E8DA; border-color: #4E7864; color: #3C5445; }
-    .dp-toolbar .dp-drop-btn:active { background: #D2E8DA; border-color: #4E7864; }
-    .dp-toolbar .dp-tb-sep { width: 1px; height: 18px; background: #CEC5B0; margin: 0 2px; flex-shrink: 0; }
+    .dp-toolbar .dp-drop-btn.active { background: var(--fb-accent-pale); border-color: var(--fb-accent); color: var(--fb-cover); }
+    .dp-toolbar .dp-drop-btn:active { background: var(--fb-accent-pale); border-color: var(--fb-accent); }
+    .dp-toolbar .dp-tb-sep { width: 1px; height: 18px; background: var(--fb-border); margin: 0 2px; flex-shrink: 0; }
     /* Dropdown panel */
     .dp-drop-panel {
       position: fixed; z-index: 500;
-      background: #F5F0E3; border-radius: 10px; min-width: 170px;
+      background: var(--fb-page); border-radius: 10px; min-width: 170px;
       box-shadow: 0 4px 24px rgba(0,0,0,0.16); padding: 5px;
-      border: 1px solid #CEC5B0;
+      border: 1px solid var(--fb-border);
     }
     .dp-drop-panel button {
       display: flex; align-items: center; gap: 8px; width: 100%;
       padding: 8px 12px; border-radius: 7px; text-align: left;
-      font-size: 12.5px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: none; border: none; color: #1A1A1A; cursor: pointer;
+      font-size: 12.5px; font-family: var(--fb-font-ui);
+      background: none; border: none; color: var(--fb-ink); cursor: pointer;
       white-space: nowrap;
     }
-    .dp-drop-panel button:active { background: #D2E8DA; }
+    .dp-drop-panel button:active { background: var(--fb-accent-pale); }
     .dp-drop-panel button:disabled { opacity: 0.35; pointer-events: none; }
     .dp-drop-panel .dp-drop-sep {
-      height: 1px; background: #CEC5B0; margin: 4px 6px;
+      height: 1px; background: var(--fb-border); margin: 4px 6px;
     }
     .dp-drop-panel .dp-drop-section {
-      font-size: 9px; color: #9A908A; font-weight: 700; letter-spacing: 0.08em;
+      font-size: 9px; color: var(--fb-ink-faint); font-weight: 700; letter-spacing: 0.08em;
       text-transform: uppercase; padding: 6px 12px 2px;
     }
     .dp-drop-toggle {
       display: flex; align-items: center; justify-content: space-between;
       width: 100%; padding: 8px 12px; border-radius: 7px;
-      font-size: 12.5px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: none; border: none; color: #1A1A1A; cursor: pointer;
+      font-size: 12.5px; font-family: var(--fb-font-ui);
+      background: none; border: none; color: var(--fb-ink); cursor: pointer;
       gap: 12px;
     }
-    .dp-drop-toggle:active { background: #D2E8DA; }
+    .dp-drop-toggle:active { background: var(--fb-accent-pale); }
     .dp-drop-toggle-pill {
       display: inline-flex; align-items: center; gap: 0;
-      border-radius: 20px; overflow: hidden; border: 1.5px solid #CEC5B0;
+      border-radius: 20px; overflow: hidden; border: 1.5px solid var(--fb-border);
       flex-shrink: 0; font-size: 9.5px; font-weight: 700;
     }
     .dp-drop-toggle-pill span {
       padding: 2px 8px; transition: background 0.15s, color 0.15s;
     }
-    .dp-drop-toggle-pill span.on  { background: #4E7864; color: white; }
-    .dp-drop-toggle-pill span.off { background: #F5F0E3; color: #9A908A; }
+    .dp-drop-toggle-pill span.on  { background: var(--fb-accent); color: white; }
+    .dp-drop-toggle-pill span.off { background: var(--fb-page); color: var(--fb-ink-faint); }
     .dp-col-type-badge {
       display: inline-block;
       font-size: 8px;
@@ -355,14 +319,14 @@
     .dp-col-type-num  { background: #d1fae5; color: #065f46; }
     .dp-col-type-text { background: #f3f4f6; color: #6b7280; }
     .dp-sum-row td {
-      background: #EBE5D5 !important;
+      background: var(--fb-page-alt) !important;
       font-weight: 700;
-      border-top: 2px solid #4E7864 !important;
+      border-top: 2px solid var(--fb-accent) !important;
       font-size: 12px;
     }
     /* ── Multi-cell selection ─────────────────────────────────── */
     .dp-cell-selected {
-      background: rgba(78,120,100,0.15) !important;
+      background: rgb(var(--fb-accent-rgb) / 0.15) !important;
     }
     .dp-sel-top    { border-top:    2px solid #2a5c41 !important; }
     .dp-sel-bottom { border-bottom: 2px solid #2a5c41 !important; }
@@ -370,17 +334,17 @@
     .dp-sel-right  { border-right:  2px solid #2a5c41 !important; }
     /* ── Formula ref selection — dashed range box ─────────────── */
     .dp-fref-sel {
-      background: rgba(29,111,160,0.09) !important;
+      background: rgb(var(--fb-info-rgb) / 0.09) !important;
     }
-    .dp-fref-top    { border-top:    2px dashed #1d6fa0 !important; }
-    .dp-fref-bottom { border-bottom: 2px dashed #1d6fa0 !important; }
-    .dp-fref-left   { border-left:   2px dashed #1d6fa0 !important; }
-    .dp-fref-right  { border-right:  2px dashed #1d6fa0 !important; }
+    .dp-fref-top    { border-top:    2px dashed var(--fb-info) !important; }
+    .dp-fref-bottom { border-bottom: 2px dashed var(--fb-info) !important; }
+    .dp-fref-left   { border-left:   2px dashed var(--fb-info) !important; }
+    .dp-fref-right  { border-right:  2px dashed var(--fb-info) !important; }
     /* Corner handles — blue squares, 20px, positioned outside the cell */
     .dp-fref-handle {
       position: absolute;
       width: 20px; height: 20px;
-      background: #1d6fa0;
+      background: var(--fb-info);
       border: 2.5px solid #fff;
       border-radius: 4px;
       z-index: 20;
@@ -395,13 +359,13 @@
     .dp-fref-handle-bl { bottom: -10px; left: -10px; }
     /* ── Drag-and-drop visual feedback ───────────────────────── */
     th.dp-drag-over-col {
-      border-left: 2px solid #4E7864 !important;
-      background: rgba(78,120,100,0.12) !important;
+      border-left: 2px solid var(--fb-accent) !important;
+      background: rgb(var(--fb-accent-rgb) / 0.12) !important;
     }
     .dp-row-num.dp-drag-over-row {
-      border-top: 2px solid #4E7864 !important;
-      background: rgba(78,120,100,0.10) !important;
-      color: #3C5445 !important;
+      border-top: 2px solid var(--fb-accent) !important;
+      background: rgb(var(--fb-accent-rgb) / 0.10) !important;
+      color: var(--fb-cover) !important;
     }
     .dp-col-header[draggable="true"] { cursor: grab; }
     .dp-col-header[draggable="true"]:active { cursor: grabbing; }
@@ -410,8 +374,8 @@
     /* ── GPS pin chip inside a Notes page ───────────────────────── */
     .fb-geo-pin {
       display: inline-block; padding: 1px 8px; margin: 0 2px; border-radius: 8px;
-      background: #FFF6E0; border: 1px solid #E0C070; color: #3C5445;
-      font-family: 'Share Tech Mono', monospace; font-size: 13px; line-height: 1.5;
+      background: var(--fb-warn-pale); border: 1px solid var(--fb-warn-line); color: var(--fb-cover);
+      font-family: var(--fb-font-mono); font-size: 13px; line-height: 1.5;
       user-select: all;
     }
     /* ── Animations ─────────────────────────────────────────────── */
@@ -430,7 +394,7 @@
       display: flex; align-items: flex-end; justify-content: center;
     }
     .modal-sheet {
-      background: #F5F0E3;
+      background: var(--fb-page);
       width: 100%; max-width: 600px;
       border-radius: 20px 20px 0 0;
       padding: 20px 20px 40px;
@@ -457,23 +421,23 @@
       height: 100%;
       overflow-y: auto;
       scroll-snap-align: start;
-      border-right: 2px solid #CEC5B0;
+      border-right: 2px solid var(--fb-border);
     }
     .spread-panel:last-child { border-right: none; }
 
     /* ── Header strip ───────────────────────────────────────────── */
     .page-header-strip {
-      background: #EBE5D5;
-      border-bottom: 2px solid #4E7864;
+      background: var(--fb-page-alt);
+      border-bottom: 2px solid var(--fb-accent);
     }
     .page-header-strip input {
       background: transparent;
       border: none;
       border-bottom: 1px solid rgba(178,162,138,0.5);
       outline: none;
-      font-family: 'Caveat', cursive;
+      font-family: var(--fb-font-hand);
       font-size: 15px;
-      color: #1A1A1A;
+      color: var(--fb-ink);
       width: 100%;
       padding: 1px 0;
     }
@@ -482,16 +446,16 @@
     .dp-numpad {
       position: fixed;
       bottom: 0; left: 0; right: 0;
-      background: #3C5445;
-      border-top: 2px solid #4E7864;
+      background: var(--fb-cover);
+      border-top: 2px solid var(--fb-accent);
       padding: 8px 8px max(20px, env(safe-area-inset-bottom));
       z-index: 9980;
       box-shadow: 0 -4px 20px rgba(0,0,0,0.42);
     }
     .dp-numpad-preview {
-      font-family: 'Share Tech Mono', 'Courier New', monospace;
+      font-family: var(--fb-font-mono);
       font-size: 18px;
-      color: #D2E8DA;
+      color: var(--fb-accent-pale);
       text-align: right;
       padding: 3px 12px;
       margin-bottom: 6px;
@@ -504,7 +468,7 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .dp-numpad-preview.empty { color: rgba(210,232,218,0.30); }
+    .dp-numpad-preview.empty { color: rgb(var(--fb-accent-pale-rgb) / 0.30); }
     .dp-numpad-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -515,7 +479,7 @@
       height: 54px;
       border: none;
       border-radius: 10px;
-      font-family: 'Share Tech Mono', 'Courier New', monospace;
+      font-family: var(--fb-font-mono);
       font-weight: 700;
       color: white;
       cursor: pointer;
@@ -528,17 +492,17 @@
     }
     .dp-numpad-btn:active { opacity: 0.65; }
     .dp-numpad-btn.digit   { background: rgba(255,255,255,0.10); font-size: 20px; }
-    .dp-numpad-btn.sym     { background: #4E7864; font-size: 17px; }
+    .dp-numpad-btn.sym     { background: var(--fb-accent); font-size: 17px; }
     .dp-numpad-btn.special { background: rgba(255,255,255,0.06); font-size: 15px; }
-    .dp-numpad-btn.del     { background: rgba(127,29,29,0.7); font-size: 18px; }
-    .dp-numpad-btn.confirm { background: #7AAE94; font-size: 17px; }
+    .dp-numpad-btn.del     { background: rgb(var(--fb-error-deep-rgb) / 0.7); font-size: 18px; }
+    .dp-numpad-btn.confirm { background: var(--fb-accent-light); font-size: 17px; }
     .dp-numpad-space {
       width: 100%; height: 46px;
       border: none; border-radius: 10px;
       background: rgba(255,255,255,0.07);
       color: rgba(255,255,255,0.55);
       font-size: 13px; letter-spacing: 0.12em;
-      cursor: pointer; font-family: 'Share Tech Mono', 'Courier New', monospace;
+      cursor: pointer; font-family: var(--fb-font-mono);
       -webkit-tap-highlight-color: transparent;
       touch-action: manipulation; user-select: none;
       display: flex; align-items: center; justify-content: center;
@@ -556,7 +520,7 @@
       position: absolute;
       bottom: -1px; right: -1px;
       width: 8px; height: 8px;
-      background: #4E7864;
+      background: var(--fb-accent);
       border: 1.5px solid white;
       border-radius: 1px;
       cursor: crosshair;
@@ -566,8 +530,8 @@
     }
     /* Preview highlight for cells that will be filled during a handle drag */
     .dp-cell-fill-preview {
-      background: rgba(122,174,148,0.13) !important;
-      outline: 1px dashed #7AAE94 !important;
+      background: rgb(var(--fb-accent-light-rgb) / 0.13) !important;
+      outline: 1px dashed var(--fb-accent-light) !important;
       outline-offset: -1px !important;
     }
 
@@ -575,8 +539,8 @@
     .dp-ref-chips {
       display: flex; flex-wrap: wrap; gap: 4px;
       padding: 3px 8px 3px;
-      background: #EBE5D5;
-      border-bottom: 1px solid #CEC5B0;
+      background: var(--fb-page-alt);
+      border-bottom: 1px solid var(--fb-border);
       flex-shrink: 0;
       min-height: 24px; align-items: center;
     }
@@ -615,7 +579,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.165';
+  const APP_VERSION = '1.166';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1670,8 +1634,8 @@
           pointerEvents:'none', width:'calc(100% - 32px)', maxWidth:360 }}>
           {toasts.map(t => (
             <div key={t.id} style={{
-              background: t.type === 'error' ? '#7F1D1D' : '#3C5445',
-              color: t.type === 'error' ? '#FECACA' : '#F5F0E3',
+              background: t.type === 'error' ? FBC.errorDeep : FBC.cover,
+              color: t.type === 'error' ? '#FECACA' : FBC.page,
               padding:'10px 18px', borderRadius:10, fontSize:14, fontWeight:500,
               boxShadow:'0 4px 16px rgba(0,0,0,0.35)', pointerEvents:'auto',
               width:'100%', textAlign:'center'
@@ -1711,7 +1675,7 @@
     return (
       <div ref={ref} style={{
         position:'fixed', top:pos.y, left:pos.x, zIndex:9998,
-        background:'#253B2E', border:'1px solid rgba(245,240,227,0.13)',
+        background:'#253B2E', border:`1px solid ${fbAlpha('page', 0.13)}`,
         borderRadius:10, boxShadow:'0 8px 28px rgba(0,0,0,0.45)',
         minWidth:168, overflow:'hidden'
       }}>
@@ -1720,9 +1684,9 @@
             onClick={() => { item.action(); onClose(); }}
             style={{ width:'100%', padding:'11px 16px', textAlign:'left',
               background:'transparent', border:'none',
-              color: item.danger ? '#FCA5A5' : '#F5F0E3',
+              color: item.danger ? '#FCA5A5' : FBC.page,
               fontSize:14, cursor:'pointer', display:'flex', alignItems:'center', gap:10 }}
-            onPointerOver={e => e.currentTarget.style.background='rgba(253,250,244,0.08)'}
+            onPointerOver={e => e.currentTarget.style.background=`${fbAlpha('field', 0.08)}`}
             onPointerOut={e => e.currentTarget.style.background='transparent'}
           >{item.icon && <span style={{ display:'flex', alignItems:'center', opacity: item.danger ? 1 : 0.75 }}>{item.icon}</span>}{item.label}</button>
         ))}
@@ -1868,7 +1832,7 @@
     const btnStyle = {
       width: '100%', display: 'flex', alignItems: 'center', gap: 12,
       padding: '12px 14px', borderRadius: 12,
-      border: '2px solid #CEC5B0', background: '#F5F0E3',
+      border: `2px solid ${FBC.border}`, background: FBC.page,
       cursor: 'pointer', textAlign: 'left',
     };
 
@@ -1880,33 +1844,33 @@
           <p className="text-fb-muted text-sm mb-4">Back up or restore all projects, photos included. Everything is stored on this device.</p>
 
           {/* Storage gauge */}
-          <div style={{ borderRadius: 12, border: '1px solid #CEC5B0', background: '#EBE5D5', padding: 12, marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: '#1A1A1A', marginBottom: 8 }}>Storage</div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#5A5248', marginBottom: 4 }}>
+          <div style={{ borderRadius: 12, border: `1px solid ${FBC.border}`, background: FBC.pageAlt, padding: 12, marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: FBC.ink, marginBottom: 8 }}>Storage</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: FBC.inkMuted, marginBottom: 4 }}>
               <span>Projects &amp; data</span>
-              <span style={{ fontFamily: "'Share Tech Mono', 'Courier New', monospace", color: '#1A1A1A' }}>{fmtMB(usage.ls)}</span>
+              <span style={{ fontFamily: FBF.mono, color: FBC.ink }}>{fmtMB(usage.ls)}</span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#5A5248', marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: FBC.inkMuted, marginBottom: 8 }}>
               <span>Photos &amp; images</span>
-              <span style={{ fontFamily: "'Share Tech Mono', 'Courier New', monospace", color: '#1A1A1A' }}>{fmtMB(usage.idb)}</span>
+              <span style={{ fontFamily: FBF.mono, color: FBC.ink }}>{fmtMB(usage.idb)}</span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#5A5248', marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: FBC.inkMuted, marginBottom: 8 }}>
               <span>Voice notes</span>
-              <span style={{ fontFamily: "'Share Tech Mono', 'Courier New', monospace", color: '#1A1A1A' }}>{fmtMB(usage.audio)}</span>
+              <span style={{ fontFamily: FBF.mono, color: FBC.ink }}>{fmtMB(usage.audio)}</span>
             </div>
             <div style={{ height: 6, borderRadius: 4, background: '#D2C9B7', overflow: 'hidden', marginBottom: 4 }}>
-              <div style={{ height: '100%', width: `${usage.quota && usage.used != null ? Math.min(100, usage.used / usage.quota * 100) : 0}%`, background: '#4E7864' }} />
+              <div style={{ height: '100%', width: `${usage.quota && usage.used != null ? Math.min(100, usage.used / usage.quota * 100) : 0}%`, background: FBC.accent }} />
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#5A5248' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: FBC.inkMuted }}>
               <span>{usage.persisted === true ? 'Protected from auto-cleanup' : usage.persisted === false ? 'Not protected — keep backups' : ''}</span>
-              <span style={{ fontFamily: "'Share Tech Mono', 'Courier New', monospace" }}>
+              <span style={{ fontFamily: FBF.mono }}>
                 {usage.quota && usage.used != null ? `${fmtMB(usage.used)} of ${fmtMB(usage.quota)}` : ''}
               </span>
             </div>
             <button onClick={doPrune}
               style={{ marginTop: 10, width: '100%', padding: '8px 0', borderRadius: 8,
-                       border: '1px solid #CEC5B0', background: '#F5F0E3', fontSize: 12,
-                       fontWeight: 600, color: '#1A1A1A', cursor: 'pointer' }}>
+                       border: `1px solid ${FBC.border}`, background: FBC.page, fontSize: 12,
+                       fontWeight: 600, color: FBC.ink, cursor: 'pointer' }}>
               Clean up unused photos
             </button>
           </div>
@@ -1916,23 +1880,23 @@
               <button onClick={onImportProject} style={btnStyle}>
                 <span style={{ fontSize: 22 }}>📂</span>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: '#1A1A1A' }}>Import Project</div>
-                  <div style={{ fontSize: 12, color: '#5A5248', marginTop: 1 }}>Add one project from a .fieldbook file — nothing is overwritten</div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: FBC.ink }}>Import Project</div>
+                  <div style={{ fontSize: 12, color: FBC.inkMuted, marginTop: 1 }}>Add one project from a .fieldbook file — nothing is overwritten</div>
                 </div>
               </button>
             )}
             <button onClick={exportBackup} style={btnStyle}>
               <span style={{ fontSize: 22 }}>⬇</span>
               <div>
-                <div style={{ fontWeight: 600, fontSize: 14, color: '#1A1A1A' }}>Export Backup</div>
-                <div style={{ fontSize: 12, color: '#5A5248', marginTop: 1 }}>Download all projects as a .json file</div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: FBC.ink }}>Export Backup</div>
+                <div style={{ fontSize: 12, color: FBC.inkMuted, marginTop: 1 }}>Download all projects as a .json file</div>
               </div>
             </button>
             <button onClick={() => fileInputRef.current?.click()} style={btnStyle}>
               <span style={{ fontSize: 22 }}>⬆</span>
               <div>
-                <div style={{ fontWeight: 600, fontSize: 14, color: '#1A1A1A' }}>Import Backup</div>
-                <div style={{ fontSize: 12, color: '#5A5248', marginTop: 1 }}>Restore from a .json backup (overwrites all data)</div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: FBC.ink }}>Import Backup</div>
+                <div style={{ fontSize: 12, color: FBC.inkMuted, marginTop: 1 }}>Restore from a .json backup (overwrites all data)</div>
               </div>
             </button>
             <input ref={fileInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={importBackup} />
@@ -2333,7 +2297,7 @@
             </button>
             <button onClick={doExport}
               className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80"
-              style={{ background: '#4E7864' }}>
+              style={{ background: FBC.accent }}>
               ↓ Download File
             </button>
           </div>
@@ -2368,7 +2332,7 @@
           <h2 className="text-xl font-bold text-fb-text mb-4">Import Project</h2>
 
           {/* Project preview card */}
-          <div className="rounded-xl px-4 py-3 mb-4" style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+          <div className="rounded-xl px-4 py-3 mb-4" style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
             <p className="font-bold text-fb-text text-base">{src.name || 'Untitled'}</p>
             {src.jobNumber && <p className="text-xs text-fb-muted mt-0.5">Job #{src.jobNumber}</p>}
             <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-2 text-xs text-fb-muted">
@@ -2380,15 +2344,15 @@
 
           {/* Chain history — collapsible */}
           {chain.length > 0 && (
-            <details className="mb-4 rounded-xl overflow-hidden" style={{ border: '1px solid #CEC5B0' }}>
+            <details className="mb-4 rounded-xl overflow-hidden" style={{ border: `1px solid ${FBC.border}` }}>
               <summary className="px-3 py-2 text-xs font-bold text-fb-muted uppercase tracking-widest cursor-pointer select-none"
-                style={{ background: '#EBE5D5', listStyle: 'none' }}>
+                style={{ background: FBC.pageAlt, listStyle: 'none' }}>
                 Transfer history · {chain.length} event{chain.length !== 1 ? 's' : ''}
               </summary>
-              <div className="divide-y" style={{ borderColor: '#CEC5B0' }}>
+              <div className="divide-y" style={{ borderColor: FBC.border }}>
                 {[...chain].reverse().map((rec, i) => (
-                  <div key={i} className="px-3 py-2 text-xs" style={{ background: '#F5F0E3' }}>
-                    <span className="font-semibold" style={{ color: rec.action === 'export' ? '#4E7864' : '#1d4ed8' }}>
+                  <div key={i} className="px-3 py-2 text-xs" style={{ background: FBC.page }}>
+                    <span className="font-semibold" style={{ color: rec.action === 'export' ? FBC.accent : '#1d4ed8' }}>
                       {rec.action === 'export' ? '↑ Export' : '↓ Import'} #{rec.seq}
                     </span>
                     <span className="text-fb-muted ml-2">{rec.by || 'Unknown'}</span>
@@ -2415,7 +2379,7 @@
             </button>
             <button onClick={doImport}
               className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80"
-              style={{ background: '#4E7864' }}>
+              style={{ background: FBC.accent }}>
               ↓ Import Project
             </button>
           </div>
@@ -2645,7 +2609,7 @@
     const grid = result && fbGeo.toGrid(result.lat, result.lon, crs.id);
     const ht   = result && fbGeo.orthoHeight(result.h, result.lat, result.lon);
     const fieldCls = 'w-full px-3 py-3 rounded-xl text-base text-fb-text outline-none font-data';
-    const fieldSty = { background: '#FDFAF4', border: '1px solid #CEC5B0' };
+    const fieldSty = { background: FBC.field, border: `1px solid ${FBC.border}` };
     const lbl = 'text-[10px] font-bold text-fb-muted uppercase tracking-widest mb-1';
 
     return (
@@ -2658,7 +2622,7 @@
           </div>
 
           {/* Live receiver readout */}
-          <div className="rounded-xl px-4 py-3 mb-3 text-center" style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+          <div className="rounded-xl px-4 py-3 mb-3 text-center" style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
             <p className={lbl}>{phase === 'averaging' ? 'Averaging' : 'Live accuracy'}</p>
             <p className="font-data text-fb-text" style={{ fontSize: 30, lineHeight: 1.1 }}>
               {fix ? `±${fix.acc < 10 ? fix.acc.toFixed(1) : Math.round(fix.acc)} m` : '— —'}
@@ -2669,22 +2633,22 @@
                 : fix ? fbGeo.fmtPosition(fix.lat, fix.lon, crs.id) : 'Waiting for GPS…'}
             </p>
             {phase === 'averaging' && (
-              <div className="h-1.5 rounded-full mt-2 overflow-hidden" style={{ background: '#CEC5B0' }}>
-                <div style={{ height: '100%', width: `${100 * (1 - remaining / secs)}%`, background: '#4E7864', transition: 'width 0.25s linear' }} />
+              <div className="h-1.5 rounded-full mt-2 overflow-hidden" style={{ background: FBC.border }}>
+                <div style={{ height: '100%', width: `${100 * (1 - remaining / secs)}%`, background: FBC.accent, transition: 'width 0.25s linear' }} />
               </div>
             )}
           </div>
 
           {err && (
-            <p className="text-sm rounded-xl px-3 py-2.5 mb-3" style={{ background: '#FBE9E7', border: '1px solid #E6B8AF', color: '#8A2B1D' }}>{err}</p>
+            <p className="text-sm rounded-xl px-3 py-2.5 mb-3" style={{ background: '#FBE9E7', border: `1px solid ${FBC.errorLine}`, color: '#8A2B1D' }}>{err}</p>
           )}
 
           {/* Averaged result */}
           {result && (
-            <div className="rounded-xl px-3 py-2.5 mb-3" style={{ background: '#FDFAF4', border: '1px solid #CEC5B0' }}>
+            <div className="rounded-xl px-3 py-2.5 mb-3" style={{ background: FBC.field, border: `1px solid ${FBC.border}` }}>
               <div className="flex items-center justify-between mb-1">
                 <span className={lbl} style={{ marginBottom: 0 }}>Averaged · {result.fixes} fix{result.fixes === 1 ? '' : 'es'}</span>
-                <span className="text-xs font-semibold" style={{ color: '#9A5B00' }}>{fbGeo.fmtAcc(result.acc)}</span>
+                <span className="text-xs font-semibold" style={{ color: FBC.warn }}>{fbGeo.fmtAcc(result.acc)}</span>
               </div>
               {grid
                 ? <>
@@ -2718,7 +2682,7 @@
             </div>
           </div>
           {duplicate && (
-            <p className="text-xs font-semibold mb-3" style={{ color: '#9A5B00' }}>⚠ Point {numTrim} already exists in this project.</p>
+            <p className="text-xs font-semibold mb-3" style={{ color: FBC.warn }}>⚠ Point {numTrim} already exists in this project.</p>
           )}
 
           {phase !== 'averaging' && (
@@ -2727,7 +2691,7 @@
               {GPS_AVG_CHOICES.map(n => (
                 <button key={n} onClick={() => setSecs(n)}
                   className="flex-1 py-2 rounded-lg text-sm font-semibold"
-                  style={{ background: secs === n ? '#3C5445' : '#EBE5D5', color: secs === n ? '#fff' : '#3C5445', border: '1px solid #CEC5B0' }}>
+                  style={{ background: secs === n ? FBC.cover : FBC.pageAlt, color: secs === n ? '#fff' : FBC.heading, border: `1px solid ${FBC.border}` }}>
                   {n} s
                 </button>
               ))}
@@ -2738,19 +2702,19 @@
             <div className="flex gap-2">
               <button onClick={start}
                 className="py-3.5 px-5 rounded-xl font-semibold text-sm text-fb-text active:opacity-80"
-                style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
                 Redo
               </button>
               <button onClick={save}
                 className="flex-1 py-3.5 rounded-xl font-semibold text-base text-white active:opacity-80"
-                style={{ background: '#4E7864' }}>
+                style={{ background: FBC.accent }}>
                 {duplicate ? 'Save anyway' : 'Save point'}
               </button>
             </div>
           ) : (
             <button onClick={start} disabled={phase === 'averaging' || !navigator.geolocation}
               className="w-full py-3.5 rounded-xl font-semibold text-base text-white active:opacity-80"
-              style={{ background: '#4E7864', opacity: phase === 'averaging' ? 0.6 : 1 }}>
+              style={{ background: FBC.accent, opacity: phase === 'averaging' ? 0.6 : 1 }}>
               {phase === 'averaging' ? 'Hold still…' : `Record ${secs} s average`}
             </button>
           )}
@@ -2831,8 +2795,8 @@
           {fbGeo.CRS_REGISTRY.map(c => (
             <button key={c.id} onClick={() => pickCrs(c.id)}
               className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left active:opacity-80"
-              style={{ background: c.id === crsId ? '#D2E8DA' : '#EBE5D5', border: `1px solid ${c.id === crsId ? '#4E7864' : '#CEC5B0'}` }}>
-              <span style={{ width: 18, height: 18, borderRadius: 9, flexShrink: 0, border: '2px solid #4E7864', background: c.id === crsId ? '#4E7864' : 'transparent' }} />
+              style={{ background: c.id === crsId ? FBC.accentPale : FBC.pageAlt, border: `1px solid ${c.id === crsId ? FBC.accent : FBC.border}` }}>
+              <span style={{ width: 18, height: 18, borderRadius: 9, flexShrink: 0, border: `2px solid ${FBC.accent}`, background: c.id === crsId ? FBC.accent : 'transparent' }} />
               <span className="flex-1 min-w-0">
                 <span className="block text-sm font-semibold text-fb-text">{c.label}</span>
                 <span className="block text-xs text-fb-muted font-data">{c.epsg ? `EPSG:${c.epsg}` : 'No lat/lon — KML/GPX export disabled'}</span>
@@ -2848,7 +2812,7 @@
         )}
 
         {pending && (
-          <div className="rounded-xl px-3 py-3 mt-3" style={{ background: '#FFF6E0', border: '1px solid #E0C070' }}>
+          <div className="rounded-xl px-3 py-3 mt-3" style={{ background: FBC.warnPale, border: `1px solid ${FBC.warnLine}` }}>
             <p className="text-sm font-semibold text-fb-text mb-1">Change to {to.short}?</p>
             <p className="text-xs text-fb-text leading-snug mb-3">
               This project has {pending.instrument} entered point{pending.instrument === 1 ? '' : 's'} and {pending.gps} phone-GPS point{pending.gps === 1 ? '' : 's'}.
@@ -2859,16 +2823,16 @@
             </p>
             <div className="flex flex-wrap gap-2">
               <button onClick={() => setPending(null)}
-                className="py-3 px-4 rounded-xl text-sm font-semibold text-fb-text" style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                className="py-3 px-4 rounded-xl text-sm font-semibold text-fb-text" style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
                 Cancel
               </button>
               <button onClick={() => applyCrs(pending.toId, false)}
-                className="flex-1 py-3 px-4 rounded-xl text-sm font-semibold text-white" style={{ background: '#4E7864' }}>
+                className="flex-1 py-3 px-4 rounded-xl text-sm font-semibold text-white" style={{ background: FBC.accent }}>
                 {pending.canReproject && pending.instrument > 0 ? 'Relabel only' : 'Change'}
               </button>
               {pending.canReproject && pending.instrument > 0 && (
                 <button onClick={() => applyCrs(pending.toId, true)}
-                  className="flex-1 py-3 px-4 rounded-xl text-sm font-semibold text-white" style={{ background: '#3C5445' }}>
+                  className="flex-1 py-3 px-4 rounded-xl text-sm font-semibold text-white" style={{ background: FBC.cover }}>
                   Reproject {pending.instrument}
                 </button>
               )}
@@ -2877,22 +2841,22 @@
         )}
 
         <p className={lbl + ' mt-5'}>Phone GPS Points</p>
-        <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1.5" style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+        <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1.5" style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
           <span className="flex-1 text-sm text-fb-text">Number GPS points from</span>
           <input type="text" inputMode="numeric" value={startNum}
             onChange={e => setStartNum(e.target.value)} onBlur={e => saveStartNum(e.target.value)}
             className="font-data text-base text-fb-text text-right outline-none rounded-lg px-2 py-1.5"
-            style={{ width: 90, background: '#FDFAF4', border: '1px solid #CEC5B0' }} />
+            style={{ width: 90, background: FBC.field, border: `1px solid ${FBC.border}` }} />
         </div>
         <button onClick={toggleUseZ}
           className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left active:opacity-80"
-          style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+          style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
           <span className="flex-1 min-w-0">
             <span className="block text-sm text-fb-text">Fill Z from phone height</span>
             <span className="block text-xs text-fb-muted leading-snug">Z = H = h − N (CGG2013a geoid, CGVD2013). Phone height is only ±5–15 m.</span>
           </span>
           <span className="text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0"
-            style={{ background: fbGeo.useZ(project) ? '#4E7864' : '#CEC5B0', color: fbGeo.useZ(project) ? '#fff' : '#6B635C' }}>
+            style={{ background: fbGeo.useZ(project) ? FBC.accent : FBC.border, color: fbGeo.useZ(project) ? '#fff' : '#6B635C' }}>
             {fbGeo.useZ(project) ? 'ON' : 'OFF'}
           </span>
         </button>
@@ -3014,7 +2978,7 @@
     const lbl = 'text-[10px] font-bold text-fb-muted uppercase tracking-widest mb-1.5';
     const pill = on => ({
       padding: '9px 13px', borderRadius: 999, fontSize: 13, fontWeight: 600, flexShrink: 0, cursor: 'pointer',
-      border: `1px solid ${on ? '#3C5445' : '#CEC5B0'}`, background: on ? '#3C5445' : '#EBE5D5', color: on ? '#fff' : '#3C5445',
+      border: `1px solid ${on ? FBC.cover : FBC.border}`, background: on ? FBC.cover : FBC.pageAlt, color: on ? '#fff' : FBC.heading,
     });
 
     return (
@@ -3027,7 +2991,7 @@
           </div>
 
           {points.length === 0 ? (
-            <p className="text-sm text-fb-muted py-8 text-center rounded-xl" style={{ background: '#EBE5D5' }}>
+            <p className="text-sm text-fb-muted py-8 text-center rounded-xl" style={{ background: FBC.pageAlt }}>
               This project has no points yet.
             </p>
           ) : (
@@ -3054,15 +3018,15 @@
                 <input type="text" inputMode="text" value={range} onChange={e => setRange(e.target.value)}
                   placeholder="Range: 1-50, 75, 9001-9010"
                   className="flex-1 min-w-0 px-3 py-2.5 rounded-xl text-base text-fb-text outline-none font-data"
-                  style={{ background: '#FDFAF4', border: '1px solid #CEC5B0' }} />
+                  style={{ background: FBC.field, border: `1px solid ${FBC.border}` }} />
                 <button disabled={!matched.length} onClick={() => change(s => matched.forEach(p => s.add(p.id)))}
                   className="py-2.5 px-3 rounded-xl text-sm font-semibold"
-                  style={{ background: '#EBE5D5', border: '1px solid #CEC5B0', color: '#3C5445', opacity: matched.length ? 1 : 0.4 }}>
+                  style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}`, color: FBC.heading, opacity: matched.length ? 1 : 0.4 }}>
                   Add
                 </button>
                 <button disabled={!matched.length} onClick={() => setSel(new Set(matched.map(p => p.id)))}
                   className="py-2.5 px-3 rounded-xl text-sm font-semibold text-white"
-                  style={{ background: '#4E7864', opacity: matched.length ? 1 : 0.4 }}>
+                  style={{ background: FBC.accent, opacity: matched.length ? 1 : 0.4 }}>
                   Only
                 </button>
               </div>
@@ -3077,17 +3041,17 @@
                 <p className={lbl} style={{ marginBottom: 0 }}>{sel.size} of {points.length} selected</p>
                 <p className="text-[11px] text-fb-muted">{withMap} with a map position</p>
               </div>
-              <div className="rounded-xl mb-3" style={{ flex: '1 1 auto', minHeight: 120, overflowY: 'auto', border: '1px solid #CEC5B0', background: '#FDFAF4' }}>
+              <div className="rounded-xl mb-3" style={{ flex: '1 1 auto', minHeight: 120, overflowY: 'auto', border: `1px solid ${FBC.border}`, background: FBC.field }}>
                 {points.map(p => {
                   const on  = sel.has(p.id);
                   const uri = p.lat !== null ? fbGeo.geoUri(p.lat, p.lon, [p.number, p.desc].filter(Boolean).join(' ')) : null;
                   return (
-                    <div key={p.id} className="flex items-center" style={{ borderBottom: '1px solid #EBE5D5' }}>
+                    <div key={p.id} className="flex items-center" style={{ borderBottom: `1px solid ${FBC.pageAlt}` }}>
                       <button onClick={() => toggle(p.id)} role="checkbox" aria-checked={on}
                         className="flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2.5 text-left"
                         style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}>
                         <span style={{ width: 24, height: 24, borderRadius: 6, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                       border: `2px solid ${on ? '#4E7864' : '#B8AE99'}`, background: on ? '#4E7864' : 'transparent', color: '#fff', fontSize: 15, lineHeight: 1 }}>
+                                       border: `2px solid ${on ? FBC.accent : '#B8AE99'}`, background: on ? FBC.accent : 'transparent', color: '#fff', fontSize: 15, lineHeight: 1 }}>
                           {on ? '✓' : ''}
                         </span>
                         <span style={{ fontSize: 14, width: 20, textAlign: 'center', flexShrink: 0 }}>{fbGeo.SOURCES[p.source]?.icon}</span>
@@ -3113,7 +3077,7 @@
                 {POINT_EXPORT_FORMATS.map(f => (
                   <button key={f.id} onClick={() => pickFormat(f.id)}
                     className="flex-1 py-2 rounded-xl text-center"
-                    style={{ background: format === f.id ? '#3C5445' : '#EBE5D5', color: format === f.id ? '#fff' : '#3C5445', border: '1px solid #CEC5B0' }}>
+                    style={{ background: format === f.id ? FBC.cover : FBC.pageAlt, color: format === f.id ? '#fff' : FBC.heading, border: `1px solid ${FBC.border}` }}>
                     <span className="block text-sm font-bold">{f.label}</span>
                     <span className="block text-[10px]" style={{ opacity: 0.75 }}>{f.sub}</span>
                   </button>
@@ -3127,7 +3091,7 @@
                       Point, Northing, Easting, Elevation, Description — in <b>{crs.short}</b>, as shown in the app
                     </span>
                     <span className="text-[11px] font-bold px-2.5 py-1 rounded-full flex-shrink-0"
-                      style={{ background: header ? '#4E7864' : '#CEC5B0', color: header ? '#fff' : '#6B635C' }}>
+                      style={{ background: header ? FBC.accent : FBC.border, color: header ? '#fff' : '#6B635C' }}>
                       Header row {header ? 'ON' : 'OFF'}
                     </span>
                   </button>
@@ -3140,17 +3104,17 @@
               </div>
 
               {blocked && (
-                <p className="text-xs rounded-xl px-3 py-2 mb-2 flex-shrink-0" style={{ background: '#FFF6E0', border: '1px solid #E0C070', color: '#5A4A1E' }}>{blocked}</p>
+                <p className="text-xs rounded-xl px-3 py-2 mb-2 flex-shrink-0" style={{ background: FBC.warnPale, border: `1px solid ${FBC.warnLine}`, color: '#5A4A1E' }}>{blocked}</p>
               )}
               <button onClick={() => doExport(false)} disabled={!!blocked || busy}
                 className="w-full py-3.5 rounded-xl font-semibold text-base text-white active:opacity-80 flex-shrink-0"
-                style={{ background: '#4E7864', opacity: blocked || busy ? 0.45 : 1 }}>
+                style={{ background: FBC.accent, opacity: blocked || busy ? 0.45 : 1 }}>
                 {busy ? 'Exporting…' : `${shareable ? 'Share' : 'Save'} ${usable} point${usable === 1 ? '' : 's'} as ${fmt.label}`}
               </button>
               {shareable && !blocked && (
                 <button onClick={() => doExport(true)} disabled={busy}
                   className="w-full pt-3 text-sm font-semibold flex-shrink-0"
-                  style={{ background: 'transparent', border: 'none', color: '#3C5445', cursor: 'pointer' }}>
+                  style={{ background: 'transparent', border: 'none', color: FBC.heading, cursor: 'pointer' }}>
                   Save to Downloads instead
                 </button>
               )}
@@ -3184,13 +3148,13 @@
           <h2 className="text-xl font-bold text-fb-text mb-4">Project Settings</h2>
 
           {/* Tab bar */}
-          <div className="flex gap-1 p-1 rounded-xl mb-5" style={{ background: '#EBE5D5' }}>
+          <div className="flex gap-1 p-1 rounded-xl mb-5" style={{ background: FBC.pageAlt }}>
             {[['transfer', '↔ Transfer'], ['settings', '⚙ Settings']].map(([id, label]) => (
               <button key={id} onClick={() => setTab(id)}
                 className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all"
                 style={{
-                  background:  tab === id ? '#F5F0E3' : 'transparent',
-                  color:       tab === id ? '#3C5445' : '#9A908A',
+                  background:  tab === id ? FBC.page : 'transparent',
+                  color:       tab === id ? FBC.heading : FBC.inkFaint,
                   boxShadow:   tab === id ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
                 }}>
                 {label}
@@ -3203,7 +3167,7 @@
               {/* Export button */}
               <button onClick={() => setShowExport(true)}
                 className="w-full py-3 rounded-xl font-semibold text-sm text-white active:opacity-80 flex items-center justify-center gap-2 mb-1"
-                style={{ background: '#4E7864' }}>
+                style={{ background: FBC.accent }}>
                 <span style={{ fontSize: 16 }}>↑</span> Export Project File
               </button>
               <p className="text-xs text-fb-muted text-center mb-4">
@@ -3213,7 +3177,7 @@
               {/* Export points */}
               <button onClick={() => setShowExportPts(true)}
                 className="w-full py-3 rounded-xl font-semibold text-sm text-fb-text active:opacity-80 flex items-center justify-center gap-2 mb-1"
-                style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
                 <span style={{ fontSize: 16 }}>📍</span> Export Points
               </button>
               <p className="text-xs text-fb-muted text-center mb-5">
@@ -3224,7 +3188,7 @@
               <p className="text-xs font-bold text-fb-muted uppercase tracking-widest mb-2">Transfer History</p>
               {chain.length === 0
                 ? (
-                  <p className="text-sm text-fb-muted py-6 text-center rounded-xl" style={{ background: '#EBE5D5' }}>
+                  <p className="text-sm text-fb-muted py-6 text-center rounded-xl" style={{ background: FBC.pageAlt }}>
                     No exports or imports yet.
                   </p>
                 )
@@ -3232,10 +3196,10 @@
                   <div className="space-y-2 max-h-64 overflow-y-auto">
                     {[...chain].reverse().map((rec, i) => (
                       <div key={i} className="rounded-xl px-3 py-2.5"
-                        style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                        style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
                         <div className="flex items-center gap-2 mb-0.5">
                           <span className="text-xs font-bold px-1.5 py-0.5 rounded-md text-white"
-                            style={{ background: rec.action === 'export' ? '#4E7864' : '#1d4ed8', fontSize: 9 }}>
+                            style={{ background: rec.action === 'export' ? FBC.accent : '#1d4ed8', fontSize: 9 }}>
                             {rec.action === 'export' ? '↑ Export' : '↓ Import'} #{rec.seq}
                           </span>
                           <span className="text-xs font-semibold text-fb-text">{rec.by || 'Unknown'}</span>
@@ -3266,7 +3230,7 @@
                   else { onReload(); toast.success('Project restored'); }
                 }}
                 className="w-full py-3 rounded-xl font-semibold text-sm text-fb-text active:opacity-80 mb-1"
-                style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
                 {project.archived ? 'Restore Project to Active' : 'Archive Project'}
               </button>
               <p className="text-xs text-fb-muted text-center">
@@ -3441,7 +3405,7 @@
                     </p>
                     <button onClick={() => importInputRef.current && importInputRef.current.click()}
                       className="text-xs font-semibold px-3 py-2 rounded-lg active:opacity-70"
-                      style={{ background: '#EBE5D5', border: '1px solid #CEC5B0', color: '#3C5445' }}>
+                      style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}`, color: FBC.heading }}>
                       ↓ Import Project
                     </button>
                   </div>
@@ -3468,7 +3432,7 @@
               installed PWA is on the new build. */}
           <footer style={{
             textAlign: 'center', padding: '16px 16px max(16px, env(safe-area-inset-bottom))',
-            fontSize: 11, color: '#A0948A', fontFamily: 'Courier New, monospace',
+            fontSize: 11, color: '#A0948A', fontFamily: FBF.sketch,
             letterSpacing: '0.05em',
           }}>
             FieldBook v{APP_VERSION}
@@ -3528,7 +3492,7 @@
     const pageCount = project.pages?.length || 0;
     const [ctxMenu, setCtxMenu] = useState(null);
     const sideBtn = enabled => ({
-      color: enabled ? '#7A7066' : '#D3CCBE', background: 'rgba(60,84,69,0.08)',
+      color: enabled ? '#7A7066' : '#D3CCBE', background: `${fbAlpha('cover', 0.08)}`,
     });
     return (
       <>
@@ -3554,7 +3518,7 @@
           className="flex-1 min-w-0 bg-white rounded-2xl shadow-sm border border-fb-border overflow-hidden active:scale-[0.98] transition-transform cursor-pointer"
           style={project.archived ? { opacity: 0.75 } : undefined}>
           <div className="flex h-full">
-            <div className="w-1.5 flex-shrink-0" style={{ background: project.archived ? '#B8AFA2' : '#3C5445' }} />
+            <div className="w-1.5 flex-shrink-0" style={{ background: project.archived ? '#B8AFA2' : FBC.cover }} />
             <div className="flex-1 min-w-0 p-4">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 min-w-0">
@@ -3638,13 +3602,13 @@
         </p>
         <button onClick={onNew}
           className="flex items-center gap-2 px-6 py-3 rounded-2xl text-white font-semibold text-base shadow-lg active:scale-95 transition-transform"
-          style={{ background: '#4E7864' }}>
+          style={{ background: FBC.accent }}>
           <Ico.Plus /> New Project
         </button>
         {onImport && (
           <button onClick={onImport}
             className="mt-3 px-6 py-3 rounded-2xl font-semibold text-sm active:opacity-70"
-            style={{ background: '#EBE5D5', border: '1px solid #CEC5B0', color: '#3C5445' }}>
+            style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}`, color: FBC.heading }}>
             ↓ Import Project (.fieldbook)
           </button>
         )}
@@ -3687,7 +3651,7 @@
             <button onClick={onClose} className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-600 font-semibold">Cancel</button>
             <button onClick={handleCreate}
               className="flex-1 py-3 rounded-xl text-white font-semibold"
-              style={{ background: form.name.trim() ? '#4E7864' : '#9A908A' }}>
+              style={{ background: form.name.trim() ? FBC.accent : FBC.inkFaint }}>
               Create
             </button>
           </div>
@@ -3898,10 +3862,10 @@
       const bgX = bx - pad, bgY = by - 12 * ps;
       return `<g>
         <rect x="${bgX.toFixed(1)}" y="${bgY.toFixed(1)}" width="${bgW.toFixed(1)}" height="${bgH.toFixed(1)}" rx="${(3*ps).toFixed(1)}" fill="rgba(255,255,255,0.88)" stroke="#DDD6C8" stroke-width="${(0.8*ps).toFixed(1)}"/>
-        <line x1="${bx.toFixed(1)}" y1="${by.toFixed(1)}" x2="${(bx+barPxW).toFixed(1)}" y2="${by.toFixed(1)}" stroke="#3C5445" stroke-width="${(sw*2).toFixed(1)}"/>
-        <line x1="${bx.toFixed(1)}" y1="${(by-bh/2).toFixed(1)}" x2="${bx.toFixed(1)}" y2="${(by+bh/2).toFixed(1)}" stroke="#3C5445" stroke-width="${sw.toFixed(1)}"/>
-        <line x1="${(bx+barPxW).toFixed(1)}" y1="${(by-bh/2).toFixed(1)}" x2="${(bx+barPxW).toFixed(1)}" y2="${(by+bh/2).toFixed(1)}" stroke="#3C5445" stroke-width="${sw.toFixed(1)}"/>
-        <text x="${(bx+barPxW/2).toFixed(1)}" y="${(by-bh/2-2.5*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${fs.toFixed(1)}" fill="#3C5445" font-family="Courier New,monospace" font-weight="bold">${barLabel}</text>
+        <line x1="${bx.toFixed(1)}" y1="${by.toFixed(1)}" x2="${(bx+barPxW).toFixed(1)}" y2="${by.toFixed(1)}" stroke="${FBC.cover}" stroke-width="${(sw*2).toFixed(1)}"/>
+        <line x1="${bx.toFixed(1)}" y1="${(by-bh/2).toFixed(1)}" x2="${bx.toFixed(1)}" y2="${(by+bh/2).toFixed(1)}" stroke="${FBC.cover}" stroke-width="${sw.toFixed(1)}"/>
+        <line x1="${(bx+barPxW).toFixed(1)}" y1="${(by-bh/2).toFixed(1)}" x2="${(bx+barPxW).toFixed(1)}" y2="${(by+bh/2).toFixed(1)}" stroke="${FBC.cover}" stroke-width="${sw.toFixed(1)}"/>
+        <text x="${(bx+barPxW/2).toFixed(1)}" y="${(by-bh/2-2.5*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${fs.toFixed(1)}" fill="${FBC.cover}" font-family="Courier New,monospace" font-weight="bold">${barLabel}</text>
       </g>`;
     }
 
@@ -3917,10 +3881,10 @@
       const nFs   = (9.5 * ps).toFixed(1);
       return `<g>
         <circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="${(R+2.5*ps).toFixed(1)}" fill="white" opacity="0.92"/>
-        <circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="${(R+1.5*ps).toFixed(1)}" fill="none" stroke="#3C5445" stroke-width="${(sw*1.2).toFixed(1)}"/>
-        <polygon points="${ax.toFixed(1)},${tipY.toFixed(1)} ${(ax-wingX).toFixed(1)},${ay.toFixed(1)} ${(ax+wingX).toFixed(1)},${ay.toFixed(1)}" fill="#3C5445"/>
-        <polygon points="${ax.toFixed(1)},${baseY.toFixed(1)} ${(ax-wingX).toFixed(1)},${ay.toFixed(1)} ${(ax+wingX).toFixed(1)},${ay.toFixed(1)}" fill="white" stroke="#3C5445" stroke-width="${sw.toFixed(1)}"/>
-        <text x="${ax.toFixed(1)}" y="${(tipY-3.5*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${nFs}" fill="#3C5445" font-family="Helvetica,Arial,sans-serif" font-weight="bold">N</text>
+        <circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="${(R+1.5*ps).toFixed(1)}" fill="none" stroke="${FBC.cover}" stroke-width="${(sw*1.2).toFixed(1)}"/>
+        <polygon points="${ax.toFixed(1)},${tipY.toFixed(1)} ${(ax-wingX).toFixed(1)},${ay.toFixed(1)} ${(ax+wingX).toFixed(1)},${ay.toFixed(1)}" fill="${FBC.cover}"/>
+        <polygon points="${ax.toFixed(1)},${baseY.toFixed(1)} ${(ax-wingX).toFixed(1)},${ay.toFixed(1)} ${(ax+wingX).toFixed(1)},${ay.toFixed(1)}" fill="white" stroke="${FBC.cover}" stroke-width="${sw.toFixed(1)}"/>
+        <text x="${ax.toFixed(1)}" y="${(tipY-3.5*ps).toFixed(1)}" text-anchor="middle" dominant-baseline="auto" font-size="${nFs}" fill="${FBC.cover}" font-family="Helvetica,Arial,sans-serif" font-weight="bold">N</text>
       </g>`;
     }
 
@@ -3957,7 +3921,7 @@
       if (lid && !visLayers.has(lid)) continue;
       if (s.visible === false) continue;  // per-shape visibility
 
-      const stroke = s.stroke || '#3C5445';
+      const stroke = s.stroke || FBC.cover;
       const sw     = (s.strokeWidth || 1.5) * ps;  // multiply by ps so lines match screen thickness
       const fill   = s.fill || 'none';
       const sOp    = s.strokeOpacity ?? 1;
@@ -4122,7 +4086,7 @@
           // Point symbol — constant screen-size elements scaled by ps
           const r = 13 * ps;
           const sw = (s.strokeWidth || 1.5) * ps;
-          const stroke = s.stroke || '#3C5445';
+          const stroke = s.stroke || FBC.cover;
           const cx = s.x, cy = s.y;
           const sym = s.symbol || 'survey';
           let symEl = '';
@@ -4213,7 +4177,7 @@
       if (showDims) dimsSVG += _dimsSVG(s);
     }
 
-    const bgAttr = transparent ? '' : ' style="background:#F5F0E3;"';
+    const bgAttr = transparent ? '' : ` style="background:${FBC.page};"`;
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}" width="${outW}" height="${outH}"${bgAttr}>${shapesSVG}${dimsSVG}</svg>`;
   }
 
@@ -5160,12 +5124,12 @@
   // ─────────────────────────────────────────────────────────────────────────────
 
   const TYPE_META = {
-    data:   { label: 'Data',   color: '#3C5445', bg: '#D2E8DA', Icon: () => <Ico.Table />  },
-    sketch: { label: 'Sketch', color: '#3B82F6', bg: '#EFF6FF', Icon: () => <Ico.Grid />   },
-    title:  { label: 'Title',  color: '#D97706', bg: '#FEF3C7', Icon: () => <Ico.File />   },
-    photo:  { label: 'Photos', color: '#7C3AED', bg: '#EDE9FE', Icon: () => <Ico.Camera /> },
-    points: { label: 'Points', color: '#0E7490', bg: '#E0F2FE', Icon: () => <Ico.Pin />    },
-    notes:  { label: 'Notes',  color: '#B45309', bg: '#FEF3C7', Icon: () => <Ico.Pencil /> },
+    data:   { label: 'Data',   ...FB_BRAND.PAGE_TYPES.data,   Icon: () => <Ico.Table />  },
+    sketch: { label: 'Sketch', ...FB_BRAND.PAGE_TYPES.sketch, Icon: () => <Ico.Grid />   },
+    title:  { label: 'Title',  ...FB_BRAND.PAGE_TYPES.title,  Icon: () => <Ico.File />   },
+    photo:  { label: 'Photos', ...FB_BRAND.PAGE_TYPES.photo,  Icon: () => <Ico.Camera /> },
+    points: { label: 'Points', ...FB_BRAND.PAGE_TYPES.points, Icon: () => <Ico.Pin />    },
+    notes:  { label: 'Notes',  ...FB_BRAND.PAGE_TYPES.notes,  Icon: () => <Ico.Pencil /> },
   };
 
   function ProjectView({ projectId }) {
@@ -5340,7 +5304,7 @@
     }
 
     return (
-      <div className="flex flex-col h-full" style={{ background: '#3C5445' }}>
+      <div className="flex flex-col h-full" style={{ background: FBC.cover }}>
         <NavBar title={project.name}
           subtitle={project.jobNumber ? `Job #${project.jobNumber}` : undefined}
           onBack={() => navigate('#/')}
@@ -5387,11 +5351,11 @@
 
         {project.archived && (
           <div className="flex items-center justify-between gap-3 px-4 py-2"
-            style={{ background: '#EBE5D5', borderBottom: '1px solid #CEC5B0' }}>
+            style={{ background: FBC.pageAlt, borderBottom: `1px solid ${FBC.border}` }}>
             <p className="text-xs font-bold uppercase tracking-widest text-fb-muted">Archived project</p>
             <button onClick={() => { DB.setProjectArchived(projectId, false); reload(); toast.success('Project restored'); }}
               className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white active:opacity-80"
-              style={{ background: '#3C5445' }}>
+              style={{ background: FBC.cover }}>
               Restore
             </button>
           </div>
@@ -5399,7 +5363,7 @@
 
         <div className="flex-1 overflow-y-auto p-4 screen-enter">
           {/* Cover */}
-          <div className="rounded-2xl overflow-hidden shadow-2xl mb-4" style={{ background: '#1a3526', border: '1.5px solid #2D6A4F' }}>
+          <div className="rounded-2xl overflow-hidden shadow-2xl mb-4" style={{ background: FBC.coverDeep, border: `1.5px solid ${FBC.coverEdge}` }}>
             {editingCover ? (
               <>
                 <div className="px-5 py-3 border-b border-fb-mid/30 flex items-center justify-between">
@@ -5861,7 +5825,7 @@
     useEffect(() => { if (ref.current) ref.current.indeterminate = !!indeterminate; }, [indeterminate]);
     return (
       <input ref={ref} type="checkbox" checked={checked} onChange={onChange}
-        style={{ width: 22, height: 22, accentColor: '#3C5445', flexShrink: 0 }} />
+        style={{ width: 22, height: 22, accentColor: FBC.cover, flexShrink: 0 }} />
     );
   }
 
@@ -5957,7 +5921,7 @@
           </div>
           <button onClick={doExport} disabled={checked.size === 0}
             className="w-full mt-4 py-3 rounded-xl text-white font-semibold transition-colors active:opacity-80"
-            style={{ background: checked.size ? '#3C5445' : '#aaa' }}>
+            style={{ background: checked.size ? FBC.cover : '#aaa' }}>
             Export {checked.size} of {pages.length} page{pages.length !== 1 ? 's' : ''}
           </button>
           <button onClick={onClose}
@@ -6593,7 +6557,7 @@
     const PageContent = getPageComponent(page.type);
 
     return (
-      <div className="flex flex-col h-full" style={{ background: '#FDFAF4' }}>
+      <div className="flex flex-col h-full" style={{ background: FBC.field }}>
         {page.type !== 'sketch' && (
           <NavBar
             title={page.title && page.title.trim() ? page.title.trim() : `P.${page.pageNumber} — ${meta.label}`}
@@ -6764,7 +6728,7 @@
     ];
 
     return (
-      <div className="flex flex-col h-full" style={{ background: '#FDFAF4' }}>
+      <div className="flex flex-col h-full" style={{ background: FBC.field }}>
         <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
         {/* Formatting toolbar */}
         <div style={{
@@ -6777,8 +6741,8 @@
               title={btn.title}
               style={{
                 minWidth: 32, height: 32, padding: '0 8px', borderRadius: 7,
-                border: '1px solid #D4CFCA', background: '#FDFAF4', cursor: 'pointer',
-                fontSize: 13, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", color: '#3C5445',
+                border: '1px solid #D4CFCA', background: FBC.field, cursor: 'pointer',
+                fontSize: 13, fontFamily: FBF.ui, color: FBC.heading,
                 flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
                 ...btn.style,
               }}>
@@ -6790,9 +6754,9 @@
             title="Drop a GPS pin at your position"
             style={{
               height: 32, padding: '0 10px', borderRadius: 7, marginLeft: 4,
-              border: '1px solid #4E7864', background: '#D2E8DA', cursor: 'pointer',
-              fontSize: 13, fontWeight: 600, color: '#3C5445', flexShrink: 0, whiteSpace: 'nowrap',
-              fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+              border: `1px solid ${FBC.accent}`, background: FBC.accentPale, cursor: 'pointer',
+              fontSize: 13, fontWeight: 600, color: FBC.heading, flexShrink: 0, whiteSpace: 'nowrap',
+              fontFamily: FBF.ui,
             }}>
             📍 Drop GPS pin
           </button>
@@ -6811,9 +6775,9 @@
           style={{
             flex: 1, minHeight: 0, overflowY: 'auto',
             padding: '16px 18px', outline: 'none',
-            fontFamily: "'Caveat', cursive", fontSize: 18,
-            lineHeight: 1.7, color: '#1A1A1A',
-            caretColor: '#4E7864',
+            fontFamily: FBF.hand, fontSize: 18,
+            lineHeight: 1.7, color: FBC.ink,
+            caretColor: FBC.accent,
           }}
         />
       </div>
@@ -7044,7 +7008,7 @@
     }
 
     const fieldCls = 'w-full px-3 py-3 rounded-xl text-base text-fb-text outline-none';
-    const fieldSty = { background: '#FDFAF4', border: '1px solid #CEC5B0' };
+    const fieldSty = { background: FBC.field, border: `1px solid ${FBC.border}` };
 
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && phase !== 'recording' && onClose()}>
@@ -7052,7 +7016,7 @@
           <div tabIndex={0} className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" style={{ outline: 'none' }} />
           <h2 className="text-xl font-bold text-fb-text mb-3">🎙 {heading}</h2>
 
-          <div className="rounded-xl px-4 py-4 mb-3 text-center" style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+          <div className="rounded-xl px-4 py-4 mb-3 text-center" style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
             <p className="font-data text-fb-text" style={{ fontSize: 34, lineHeight: 1.1, color: phase === 'recording' ? '#B3261E' : undefined }}>
               {fmtDur(phase === 'recording' ? secs : phase === 'idle' ? 0 : durRef.current)}
             </p>
@@ -7062,14 +7026,14 @@
                 : 'Recorded — play it back, then save'}
             </p>
             {geotag && (
-              <p className="text-xs font-data mt-2" style={{ color: fix ? '#3C5445' : '#9A908A' }}>
+              <p className="text-xs font-data mt-2" style={{ color: fix ? FBC.heading : FBC.inkFaint }}>
                 {fix ? `📍 ${fbGeo.fmtPosition(fix.lat, fix.lon, crsId)} · ${fbGeo.fmtAcc(fix.acc)}` : '📍 Locating…'}
               </p>
             )}
           </div>
 
           {err && (
-            <p className="text-sm rounded-xl px-3 py-2.5 mb-3" style={{ background: '#FBE9E7', border: '1px solid #E6B8AF', color: '#8A2B1D' }}>{err}</p>
+            <p className="text-sm rounded-xl px-3 py-2.5 mb-3" style={{ background: '#FBE9E7', border: `1px solid ${FBC.errorLine}`, color: '#8A2B1D' }}>{err}</p>
           )}
 
           {(phase === 'recorded' || phase === 'saving') && (
@@ -7092,7 +7056,7 @@
           {phase === 'recording' && (
             <button onClick={stop}
               className="w-full py-4 rounded-xl font-semibold text-base text-white active:opacity-80"
-              style={{ background: '#3C5445' }}>
+              style={{ background: FBC.cover }}>
               ■ Stop
             </button>
           )}
@@ -7100,12 +7064,12 @@
             <div className="flex gap-2">
               <button onClick={() => { setPreviewUrl(null); blobRef.current = null; setPhase('idle'); }} disabled={phase === 'saving'}
                 className="py-3.5 px-5 rounded-xl font-semibold text-sm text-fb-text active:opacity-80"
-                style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
                 Redo
               </button>
               <button onClick={save} disabled={phase === 'saving'}
                 className="flex-1 py-3.5 rounded-xl font-semibold text-base text-white active:opacity-80"
-                style={{ background: '#4E7864', opacity: phase === 'saving' ? 0.6 : 1 }}>
+                style={{ background: FBC.accent, opacity: phase === 'saving' ? 0.6 : 1 }}>
                 {phase === 'saving' ? 'Saving…' : 'Save voice note'}
               </button>
             </div>
@@ -7151,16 +7115,16 @@
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <button onClick={toggle} disabled={missing} title={playing ? 'Pause' : 'Play'}
             style={{ width: 44, height: 44, borderRadius: 22, flexShrink: 0, border: 'none', cursor: 'pointer',
-                     background: missing ? '#CEC5B0' : '#3C5445', color: '#FDFAF4', fontSize: 16 }}>
+                     background: missing ? FBC.border : FBC.cover, color: FBC.field, fontSize: 16 }}>
             {playing ? '❚❚' : '▶'}
           </button>
           <input type="text" value={rec.title || ''} onChange={e => onChange({ title: e.target.value })}
             placeholder={compact ? 'Voice memo…' : 'Voice note title…'} maxLength={80}
-            style={{ flex: 1, minWidth: 0, fontFamily: "'Caveat', cursive", fontSize: 17, border: 'none',
-                     borderBottom: '1px solid #E5E1D8', background: 'transparent', outline: 'none', color: '#1A1A1A', padding: '2px 0' }} />
+            style={{ flex: 1, minWidth: 0, fontFamily: FBF.hand, fontSize: 17, border: 'none',
+                     borderBottom: '1px solid #E5E1D8', background: 'transparent', outline: 'none', color: FBC.ink, padding: '2px 0' }} />
           <span className="font-data" style={{ fontSize: 13, color: '#6B635C', flexShrink: 0 }}>{fmtDur(rec.dur)}</span>
           <button onClick={onDelete} title="Delete recording"
-            style={{ width: 36, height: 36, borderRadius: 18, flexShrink: 0, border: 'none', background: 'transparent', color: '#9A908A', cursor: 'pointer',
+            style={{ width: 36, height: 36, borderRadius: 18, flexShrink: 0, border: 'none', background: 'transparent', color: FBC.inkFaint, cursor: 'pointer',
                      display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Ico.Trash />
           </button>
@@ -7170,8 +7134,8 @@
           <textarea value={rec.desc || ''} onChange={e => onChange({ desc: e.target.value })}
             placeholder="Description…" rows={2}
             style={{ width: '100%', boxSizing: 'border-box', resize: 'none', marginTop: 10, borderRadius: 8,
-                     border: '1px solid #E5E1D8', padding: '8px 10px', fontFamily: "'Caveat', cursive", fontSize: 15,
-                     outline: 'none', background: '#F5F0E3', color: '#1A1A1A' }} />
+                     border: '1px solid #E5E1D8', padding: '8px 10px', fontFamily: FBF.hand, fontSize: 15,
+                     outline: 'none', background: FBC.page, color: FBC.ink }} />
         )}
         {children}
       </div>
@@ -7218,26 +7182,26 @@
     }
 
     const chip = { height: 36, padding: '0 12px', borderRadius: 10, fontSize: 12.5, fontWeight: 600, flexShrink: 0,
-                   border: '1px solid #CEC5B0', background: '#EBE5D5', color: '#3C5445', cursor: 'pointer',
+                   border: `1px solid ${FBC.border}`, background: FBC.pageAlt, color: FBC.heading, cursor: 'pointer',
                    display: 'inline-flex', alignItems: 'center', textDecoration: 'none', whiteSpace: 'nowrap' };
 
     return (
       <div style={{ marginTop: 10 }}>
-        <div className="font-data" style={{ fontSize: 13, color: pt ? '#1A1A1A' : '#9A908A' }}>📍 {pos}</div>
+        <div className="font-data" style={{ fontSize: 13, color: pt ? FBC.ink : FBC.inkFaint }}>📍 {pos}</div>
         {(tag || ht) && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0 10px', marginTop: 2 }}>
-            {tag && <span style={{ fontSize: 11.5, fontWeight: 600, color: linkedElsewhere ? '#3C5445' : '#9A5B00' }}>{tag}</span>}
+            {tag && <span style={{ fontSize: 11.5, fontWeight: 600, color: linkedElsewhere ? FBC.heading : FBC.warn }}>{tag}</span>}
             {ht && <span style={{ fontSize: 11.5, color: '#6B635C' }}>{ht}</span>}
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, overflowX: 'auto' }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#9A908A', letterSpacing: '0.06em', flexShrink: 0 }}>PT #</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: FBC.inkFaint, letterSpacing: '0.06em', flexShrink: 0 }}>PT #</span>
           <input type="text" inputMode="numeric" value={num} placeholder="—"
             onChange={e => setNum(e.target.value)} onBlur={commit}
             onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
             className="font-data"
-            style={{ width: 72, height: 36, flexShrink: 0, borderRadius: 10, border: '1px solid #CEC5B0',
-                     background: '#FDFAF4', padding: '0 8px', fontSize: 15, outline: 'none', color: '#1A1A1A' }} />
+            style={{ width: 72, height: 36, flexShrink: 0, borderRadius: 10, border: `1px solid ${FBC.border}`,
+                     background: FBC.field, padding: '0 8px', fontSize: 15, outline: 'none', color: FBC.ink }} />
           <button style={chip} onClick={onLink}>Link…</button>
           {linkedElsewhere && <button style={chip} onClick={onUnlink}>Unlink</button>}
           {pt && !pt.rowId && onAddPoint && <button style={chip} onClick={onAddPoint}>＋ Points</button>}
@@ -7265,17 +7229,17 @@
           <h2 className="text-xl font-bold text-fb-text mb-3">Link to Point</h2>
           <input type="text" value={q} onChange={e => setQ(e.target.value)} placeholder="Search number or description"
             className="w-full px-3 py-3 rounded-xl text-base text-fb-text outline-none mb-3"
-            style={{ background: '#FDFAF4', border: '1px solid #CEC5B0' }} />
+            style={{ background: FBC.field, border: `1px solid ${FBC.border}` }} />
           <div style={{ maxHeight: '45vh', overflowY: 'auto' }} className="space-y-1.5">
             {list.length === 0 && (
-              <p className="text-sm text-fb-muted py-6 text-center rounded-xl" style={{ background: '#EBE5D5' }}>
+              <p className="text-sm text-fb-muted py-6 text-center rounded-xl" style={{ background: FBC.pageAlt }}>
                 {all.length === 0 ? 'No numbered points on this project\'s Points pages yet.' : 'No matching points.'}
               </p>
             )}
             {list.map(p => (
               <button key={p.id} onClick={() => onPick(p)}
                 className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left active:opacity-80"
-                style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
                 <span style={{ fontSize: 15, width: 22, textAlign: 'center', flexShrink: 0 }}>{fbGeo.SOURCES[p.source]?.icon}</span>
                 <span className="font-data text-base text-fb-text" style={{ width: 64, flexShrink: 0 }}>{p.number}</span>
                 <span className="flex-1 min-w-0">
@@ -7659,7 +7623,7 @@
     }
 
     return (
-      <div className="flex flex-col h-full" style={{ background: '#FDFAF4' }}>
+      <div className="flex flex-col h-full" style={{ background: FBC.field }}>
         <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
         {/* Hidden file inputs.
             Camera input uses capture="environment" to open the rear camera directly.
@@ -7677,7 +7641,7 @@
           <button onClick={() => !uploading && camRef.current?.click()}
             disabled={uploading}
             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                     padding: '12px 0', borderRadius: 14, background: '#3C5445', color: '#FDFAF4',
+                     padding: '12px 0', borderRadius: 14, background: FBC.cover, color: FBC.field,
                      fontWeight: 600, fontSize: 14, border: 'none',
                      cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? 0.6 : 1 }}>
             <Ico.Camera /> {uploading ? 'Importing…' : 'Camera'}
@@ -7685,15 +7649,15 @@
           <button onClick={() => !uploading && fileRef.current?.click()}
             disabled={uploading}
             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                     padding: '12px 0', borderRadius: 14, background: 'transparent', color: '#3C5445',
-                     fontWeight: 600, fontSize: 14, border: '2px solid #3C5445',
+                     padding: '12px 0', borderRadius: 14, background: 'transparent', color: FBC.heading,
+                     fontWeight: 600, fontSize: 14, border: `2px solid ${FBC.cover}`,
                      cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? 0.6 : 1 }}>
             <Ico.Download /> {uploading ? 'Importing…' : 'Upload'}
           </button>
           <button onClick={() => setRecorder({ photoId: null })}
             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                     padding: '12px 0', borderRadius: 14, background: 'transparent', color: '#3C5445',
-                     fontWeight: 600, fontSize: 14, border: '2px solid #3C5445', cursor: 'pointer' }}>
+                     padding: '12px 0', borderRadius: 14, background: 'transparent', color: FBC.heading,
+                     fontWeight: 600, fontSize: 14, border: `2px solid ${FBC.cover}`, cursor: 'pointer' }}>
             🎙 Voice
           </button>
         </div>
@@ -7701,9 +7665,9 @@
         <button onClick={toggleGeotag}
           style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '6px 16px 10px',
                    background: 'transparent', border: 'none', borderBottom: '1px solid #E5E1D8', cursor: 'pointer', textAlign: 'left' }}>
-          <span style={{ flex: 1, fontSize: 12.5, color: '#5A5248' }}>📍 Tag new photos &amp; voice notes with phone position</span>
+          <span style={{ flex: 1, fontSize: 12.5, color: FBC.inkMuted }}>📍 Tag new photos &amp; voice notes with phone position</span>
           <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
-                         background: geotag ? '#4E7864' : '#CEC5B0', color: geotag ? '#fff' : '#6B635C' }}>
+                         background: geotag ? FBC.accent : FBC.border, color: geotag ? '#fff' : '#6B635C' }}>
             {geotag ? 'ON' : 'OFF'}
           </span>
         </button>
@@ -7751,8 +7715,8 @@
                   rows={2}
                   style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, resize: 'none',
                            borderRadius: 8, border: '1px solid #E5E1D8', padding: '8px 10px',
-                           fontFamily: "'Caveat', cursive", fontSize: 15, outline: 'none',
-                           background: '#F5F0E3', color: '#1A1A1A' }}
+                           fontFamily: FBF.hand, fontSize: 15, outline: 'none',
+                           background: FBC.page, color: FBC.ink }}
                 />
                 <MediaGeoRow rec={ph} source="photo" project={project} locating={!!locating[ph.id]}
                   onNumber={val => setNumber('photo', ph.id, val)}
@@ -7771,7 +7735,7 @@
                 )}
                 <button onClick={() => setRecorder({ photoId: ph.id })}
                   style={{ marginTop: 8, height: 36, padding: '0 12px', borderRadius: 10, fontSize: 12.5, fontWeight: 600,
-                           border: '1px solid #CEC5B0', background: '#EBE5D5', color: '#3C5445', cursor: 'pointer' }}>
+                           border: `1px solid ${FBC.border}`, background: FBC.pageAlt, color: FBC.heading, cursor: 'pointer' }}>
                   🎙 Add voice memo
                 </button>
               </div>
@@ -7807,7 +7771,7 @@
                             display: 'block' }} />
               {lbPhoto.note?.trim() && (
                 <div style={{ marginTop: 12, maxWidth: '96vw', color: '#E8E4DC',
-                              fontSize: 16, fontFamily: "'Caveat', cursive",
+                              fontSize: 16, fontFamily: FBF.hand,
                               textAlign: 'center', lineHeight: 1.4 }}>
                   {lbPhoto.note.trim()}
                 </div>
@@ -9717,7 +9681,7 @@
     });
 
     // ── Formula reference highlighting (derived) ──────────────────────
-    const REF_COLORS = ['#e63946','#1d6fa0','#2a9d8f','#c77d1a','#8338ec','#3a86ff','#fb5607'];
+    const REF_COLORS = ['#e63946',FBC.info,'#2a9d8f','#c77d1a','#8338ec','#3a86ff','#fb5607'];
 
     const isFormulaEditing =
       (editingCell !== null && editValue.startsWith('=')) ||
@@ -9767,7 +9731,7 @@
             cursor: 'pointer', outline: 'none', border: 'none', width: '100%',
           }}>
           <span style={{
-            fontSize: 10, fontFamily: "'Oswald', sans-serif", fontWeight: 500,
+            fontSize: 10, fontFamily: FBF.print, fontWeight: 500,
             color: 'rgba(60,50,30,0.70)', letterSpacing: '0.05em',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
@@ -9922,7 +9886,7 @@
                   <button disabled={!mapUri} onClick={() => { setOpenTbMenu(null); window.location.href = mapUri; }}>
                     🗺 Open in Map
                   </button>
-                  <div style={{ fontSize: 10.5, color: '#9A908A', padding: '0 12px 6px' }}>{mapHint}</div>
+                  <div style={{ fontSize: 10.5, color: FBC.inkFaint, padding: '0 12px 6px' }}>{mapHint}</div>
                   {mediaPage && (
                     <button onClick={() => { setOpenTbMenu(null); navigate(`#/project/${projectId}/page/${mediaPage.id}`); }}>
                       {fbGeo.SOURCES[rowSrc(mapRow)]?.icon} Go to {rowSrc(mapRow) === 'voice' ? 'voice note' : 'photo'}
@@ -9972,11 +9936,11 @@
         {page.type === 'points' && srcFilter !== 'all' && (
           <button onClick={() => setSrcFilter('all')}
             className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0 w-full text-left"
-            style={{ background: '#EBE5D5', border: 'none', borderBottom: '1px solid #CEC5B0', cursor: 'pointer' }}>
+            style={{ background: FBC.pageAlt, border: 'none', borderBottom: `1px solid ${FBC.border}`, cursor: 'pointer' }}>
             <span className="flex-1 text-xs text-fb-text">
               Showing {srcCounts[srcFilter] || 0} of {rows.length} — {fbGeo.SOURCES[srcFilter]?.icon} {fbGeo.SOURCES[srcFilter]?.label} only
             </span>
-            <span className="text-xs font-semibold" style={{ color: '#3C5445' }}>Show all</span>
+            <span className="text-xs font-semibold" style={{ color: FBC.heading }}>Show all</span>
           </button>
         )}
 
@@ -10004,7 +9968,7 @@
               }}
               style={{
                 padding: '2px 6px', borderRadius: 4, fontSize: 10, fontWeight: 700,
-                fontFamily: 'Courier New, monospace', flexShrink: 0, cursor: 'pointer',
+                fontFamily: FBF.sketch, flexShrink: 0, cursor: 'pointer',
                 border: `1.5px solid ${activeCellHasOverride ? typeColors[activeCellEffType] : typeColors[activeCellEffType] + '88'}`,
                 color: typeColors[activeCellEffType],
                 background: activeCellHasOverride ? typeColors[activeCellEffType] + '22' : 'transparent',
@@ -10042,7 +10006,7 @@
             {formulaRefs.map(ref => (
               <span key={ref} style={{
                 padding: '1px 6px', borderRadius: 4, fontSize: 9.5,
-                fontFamily: 'Courier New, monospace', fontWeight: 700,
+                fontFamily: FBF.sketch, fontWeight: 700,
                 background: refColorMap[ref] + '22',
                 color: refColorMap[ref],
                 border: `1px solid ${refColorMap[ref]}60`,
@@ -10114,7 +10078,7 @@
             }
             isDraggingSelRef.current = false;
           }}
-          style={{ flex: 1, overflowX: 'auto', overflowY: 'auto', background: '#FDFAF4', outline: 'none' }}>
+          style={{ flex: 1, overflowX: 'auto', overflowY: 'auto', background: FBC.field, outline: 'none' }}>
           <table className="fb-table" style={{ tableLayout: 'fixed', width: 'max-content', minWidth: '100%' }}>
             <thead>
               <tr>
@@ -10164,7 +10128,7 @@
                     onDragEnd={handleRowDragEnd}
                     onDragLeave={() => { if (dragOverRow === ri) setDragOverRow(null); }}
                     title={row.geo ? `${fbGeo.SOURCES[row.geo.source]?.label || 'GPS point'} · ${fbGeo.fmtAcc(row.geo.acc)}` : 'Drag to reorder row'}
-                    style={row.geo ? { background: '#FFF6E0', fontSize: 11 } : undefined}>
+                    style={row.geo ? { background: FBC.warnPale, fontSize: 11 } : undefined}>
                     {row.geo ? (fbGeo.SOURCES[row.geo.source]?.icon || '📍') : ri + 1}
                   </td>
                   {columns.map((col, ci) => {
@@ -10284,15 +10248,15 @@
                             onBlur={() => commitEdit(ri, ci, editValue)}
                             onKeyDown={e => handleCellKeyDown(e, ri, ci)}
                             style={{ display: 'block', width: '100%', height: 32, padding: '0 5px',
-                              background: 'rgba(78,120,100,0.06)', border: 'none', outline: 'none',
-                              fontFamily: "'Caveat', cursive", fontSize: 17, textAlign: 'center', color: '#1A1A1A' }}
+                              background: `${fbAlpha('accent', 0.06)}`, border: 'none', outline: 'none',
+                              fontFamily: FBF.hand, fontSize: 17, textAlign: 'center', color: FBC.ink }}
                           />
                         ) : (
                           <span
                             className={isError ? 'dp-cell-error' : isDMS ? 'dp-cell-dms' : isFormula ? 'dp-cell-formula' : ''}
                             style={{ display: 'block', height: 32, lineHeight: '32px', padding: '0 5px',
                               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                              fontFamily: "'Caveat', cursive", fontSize: 17,
+                              fontFamily: FBF.hand, fontSize: 17,
                               cursor: 'default', userSelect: 'none' }}
                             onDoubleClick={() => startEdit(ri, ci)}>
                             {text}
@@ -10545,20 +10509,20 @@
               </p>
               {/* Header preview */}
               <div style={{ background: '#F5F1E8', borderRadius: 8, padding: '8px 10px', marginBottom: 16,
-                            fontSize: 12, fontFamily: 'Courier New, monospace', color: '#3C5445',
+                            fontSize: 12, fontFamily: FBF.sketch, color: FBC.heading,
                             overflowX: 'auto', whiteSpace: 'nowrap' }}>
                 <strong>Row 1:</strong> {csvImportModal.parsed[0].map(c => `"${c}"`).join(', ')}
               </div>
               {/* Use first row as headers toggle */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                             padding: '10px 12px', borderRadius: 10, background: '#F5F1E8', marginBottom: 20 }}>
-                <span style={{ fontSize: 14, color: '#3C5445', fontWeight: 500 }}>Use first row as column headers</span>
+                <span style={{ fontSize: 14, color: FBC.heading, fontWeight: 500 }}>Use first row as column headers</span>
                 <button
                   onClick={() => setCsvImportModal(m => ({ ...m, useHeader: !m.useHeader }))}
                   style={{ padding: '4px 14px', borderRadius: 20, border: 'none', cursor: 'pointer',
                            fontWeight: 700, fontSize: 12,
-                           background: csvImportModal.useHeader ? '#3C5445' : '#E5E1D8',
-                           color:      csvImportModal.useHeader ? '#FDFAF4'  : '#6B6560' }}>
+                           background: csvImportModal.useHeader ? FBC.cover : '#E5E1D8',
+                           color:      csvImportModal.useHeader ? FBC.field  : '#6B6560' }}>
                   {csvImportModal.useHeader ? 'ON' : 'OFF'}
                 </button>
               </div>
@@ -10575,7 +10539,7 @@
                 </button>
                 <button onClick={() => confirmDataCSVImport(csvImportModal.parsed, csvImportModal.useHeader)}
                   style={{ flex: 2, padding: '12px 0', borderRadius: 12, border: 'none',
-                           background: '#3C5445', color: '#FDFAF4', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
+                           background: FBC.cover, color: FBC.field, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
                   Import
                 </button>
               </div>
@@ -10798,7 +10762,7 @@
     const instrUnitClass  = 'text-[10px] text-fb-muted flex-shrink-0';
 
     return (
-      <div style={{ background: '#FDFAF4' }}>
+      <div style={{ background: FBC.field }}>
         <div className="page-header-strip px-4 py-2.5 flex items-center justify-between gap-3">
           <div className="flex-1 min-w-0">
             <p className={lblClass}>Title Page · P.{page.pageNumber}</p>
@@ -10877,10 +10841,10 @@
               placeholder="NAD83(CSRS), UTM Zone 20N / CGVD2013"
               className={inClass} />
             {!fbGeo.datumMatchesCrs(form.datum, projCrs.id) && (
-              <div className="flex items-center gap-2 mt-1.5 px-2.5 py-2 rounded-lg" style={{ background: '#FFF6E0', border: '1px solid #E0C070' }}>
+              <div className="flex items-center gap-2 mt-1.5 px-2.5 py-2 rounded-lg" style={{ background: FBC.warnPale, border: `1px solid ${FBC.warnLine}` }}>
                 <span className="flex-1 text-xs text-fb-text leading-snug">⚠ Project coordinate system is <b>{projCrs.short}</b> — this text doesn't match.</span>
                 <button onClick={() => handleChange('datum', projCrs.datumText)}
-                  className="text-xs font-semibold px-3 py-2 rounded-lg text-white flex-shrink-0" style={{ background: '#4E7864' }}>
+                  className="text-xs font-semibold px-3 py-2 rounded-lg text-white flex-shrink-0" style={{ background: FBC.accent }}>
                   Update
                 </button>
               </div>
