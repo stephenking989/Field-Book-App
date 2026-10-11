@@ -615,7 +615,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.164';
+  const APP_VERSION = '1.165';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -2468,6 +2468,26 @@
     return row;
   }
 
+  // "Fill Z from phone height" used to be opt-in and is now on by default.
+  // A project that never chose (gpsUseZ undefined) is switched on the first
+  // time it is opened: blank Z cells of its phone points are filled with H,
+  // and the choice is recorded so this runs once. Typed elevations are kept.
+  function migrateGeoDefaults(projectId) {
+    const project = DB.getProject(projectId);
+    if (!project || project.gpsUseZ !== undefined) return;
+    const pages = project.pages.map(pg => {
+      if (pg.type !== 'points' || !pg.rows) return pg;
+      let touched = false;
+      const rows = pg.rows.map(r => {
+        if (!r.geo || typeof r.geo.H !== 'number' || String(r.cells?.col_elev ?? '').trim()) return r;
+        touched = true;
+        return { ...r, cells: { ...r.cells, col_elev: fbGeo.fmtElev(r.geo.H) } };
+      });
+      return touched ? { ...pg, rows } : pg;
+    });
+    DB.updateProject(projectId, { gpsUseZ: true, pages });
+  }
+
   // Give a geotagged photo / voice note its OWN numbered point on the Points
   // page (source 'photo' | 'voice') so it is listed, exported and placeable on
   // a sketch like any other point. The row carries the media's position and
@@ -2680,7 +2700,7 @@
                   ? 'No height from this fix.'
                   : <>Ellipsoid ht (phone) {fbGeo.fmtElev(ht.h)} m
                       {ht.H !== null && <> · geoid N {ht.N.toFixed(1)} m · H {fbGeo.fmtElev(ht.H)} m (CGG2013a)</>}
-                      {' · '}{project?.gpsUseZ && ht.H !== null ? 'Z = H' : 'Z left blank'}</>}
+                      {' · '}{fbGeo.useZ(project) && ht.H !== null ? 'Z = H' : 'Z left blank'}</>}
               </p>
             </div>
           )}
@@ -2781,10 +2801,10 @@
       onReload();
     }
 
-    // Opt-in: Z = H (orthometric, CGG2013a) for phone points. Existing GPS rows
-    // follow the switch; a Z the user typed over is never cleared.
+    // Z = H (orthometric, CGG2013a) for phone points — on by default. Existing
+    // phone rows follow the switch; a Z the user typed over is never cleared.
     function toggleUseZ() {
-      const on = !project.gpsUseZ;
+      const on = !fbGeo.useZ(project);
       const fresh = DB.getProject(projectId);
       const pages = fresh.pages.map(pg => {
         if (pg.type !== 'points' || !pg.rows) return pg;
@@ -2872,10 +2892,271 @@
             <span className="block text-xs text-fb-muted leading-snug">Z = H = h − N (CGG2013a geoid, CGVD2013). Phone height is only ±5–15 m.</span>
           </span>
           <span className="text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0"
-            style={{ background: project.gpsUseZ ? '#4E7864' : '#CEC5B0', color: project.gpsUseZ ? '#fff' : '#6B635C' }}>
-            {project.gpsUseZ ? 'ON' : 'OFF'}
+            style={{ background: fbGeo.useZ(project) ? '#4E7864' : '#CEC5B0', color: fbGeo.useZ(project) ? '#fff' : '#6B635C' }}>
+            {fbGeo.useZ(project) ? 'ON' : 'OFF'}
           </span>
         </button>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // EXPORT POINTS — PNEZD CSV / KML / GPX
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Hand a file to the Android share sheet when the browser will share that
+  // type (so it can go straight to a map app); otherwise save it to Downloads.
+  // Chrome's share allow-list often rejects .kml / .gpx — that is expected, and
+  // is why the download fallback exists. Returns 'shared' | 'saved' | 'cancelled'.
+  function canShareFile(file) {
+    try { return !!(navigator.canShare && navigator.share && navigator.canShare({ files: [file] })); }
+    catch { return false; }
+  }
+  async function deliverFile(text, filename, mime, forceDownload) {
+    const file = new File([text], filename, { type: mime });
+    if (!forceDownload && canShareFile(file)) {
+      try {
+        await navigator.share({ files: [file], title: filename });
+        return 'shared';
+      } catch (e) {
+        if (e && e.name === 'AbortError') return 'cancelled';
+        // any other failure → fall through to a normal download
+      }
+    }
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    return 'saved';
+  }
+
+  const POINT_EXPORT_FORMATS = [
+    { id: 'csv', label: 'CSV', sub: 'PNEZD',        ext: 'csv', mime: 'text/csv' },
+    { id: 'kml', label: 'KML', sub: 'Google Earth', ext: 'kml', mime: 'application/vnd.google-earth.kml+xml' },
+    { id: 'gpx', label: 'GPX', sub: 'OsmAnd',       ext: 'gpx', mime: 'application/gpx+xml' },
+  ];
+  // Quick-select groups. A point can be in several (a GPS photo point is both
+  // "Photo" and "GPS").
+  const POINT_EXPORT_GROUPS = [
+    { id: 'entered', label: '◎ Entered',     test: p => p.source === 'instrument' },
+    { id: 'photo',   label: '📷 Photo',       test: p => p.source === 'photo' || p.hasPhoto },
+    { id: 'voice',   label: '🎙 Voice',       test: p => p.source === 'voice' || p.hasVoice },
+    { id: 'pins',    label: '📝 Notes pins',  test: p => p.source === 'notes-pin' },
+    { id: 'gps',     label: '📍 GPS (all phone)', test: p => p.phone },
+  ];
+
+  function ExportPointsModal({ projectId, onClose }) {
+    const project = DB.getProject(projectId);
+    const crs     = fbGeo.projectCrs(project);
+    const toast   = useToast();
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+
+    const [points] = useState(() => fbGeo.getProjectPoints(project));
+    const [sel, setSel]       = useState(() => new Set(points.map(p => p.id)));
+    const [range, setRange]   = useState('');
+    const [format, setFormat] = useState(() => {
+      try { const f = localStorage.getItem('fb_points_export_format'); return POINT_EXPORT_FORMATS.some(x => x.id === f) ? f : 'csv'; }
+      catch { return 'csv'; }
+    });
+    const [header, setHeader] = useState(false);
+    const [busy, setBusy]     = useState(false);
+
+    const fmt = POINT_EXPORT_FORMATS.find(f => f.id === format);
+    function pickFormat(id) {
+      setFormat(id);
+      try { localStorage.setItem('fb_points_export_format', id); } catch {}
+    }
+
+    const change = fn => setSel(prev => { const next = new Set(prev); fn(next); return next; });
+    const toggle = id => change(s => { if (s.has(id)) s.delete(id); else s.add(id); });
+
+    // Range field — "1-50, 75, 9001-9010"
+    const parsed  = fbGeo.parseRange(range);
+    const matched = parsed.ranges.length ? points.filter(p => fbGeo.inRanges(p.number, parsed.ranges)) : [];
+
+    const chosen   = points.filter(p => sel.has(p.id));
+    const withGrid = chosen.filter(p => p.N !== null && p.E !== null).length;
+    const withMap  = chosen.filter(p => p.lat !== null).length;
+    const usable   = format === 'csv' ? withGrid : withMap;
+    const blocked  = chosen.length === 0 ? 'Select at least one point.'
+      : usable > 0 ? null
+      : format === 'csv' ? 'None of the selected points have N/E.'
+      : !crs.proj4 ? 'This project uses local coordinates, which can\'t be converted to lat/lon — so there is nothing to send to a map app.'
+      : 'None of the selected points have a map position (their N/E is blank or outside the project\'s coordinate system).';
+
+    const base = (project.name || 'project').replace(/[^a-z0-9_\-]+/gi, '_').replace(/^_+|_+$/g, '') || 'project';
+    const filename = format === 'csv' ? `${base}_points_${crs.fileTag}.csv` : `${base}_points.${fmt.ext}`;
+    const shareable = canShareFile(new File(['x'], filename, { type: fmt.mime }));
+
+    async function doExport(forceDownload) {
+      if (blocked || busy) return;
+      const out = format === 'csv' ? fbGeo.toPNEZD(chosen, { header })
+                : format === 'kml' ? fbGeo.toKML(chosen, project)
+                : fbGeo.toGPX(chosen, project);
+      const left = out.skipped ? ` · ${out.skipped} left out (no ${format === 'csv' ? 'N/E' : 'map position'})` : '';
+      setBusy(true);
+      let how;
+      try { how = await deliverFile(out.text, filename, fmt.mime, forceDownload); }
+      catch (e) { console.error('Point export failed:', e); toast.error('Export failed'); setBusy(false); return; }
+      setBusy(false);
+      const n = `${out.count} point${out.count === 1 ? '' : 's'}`;
+      if (how === 'shared') toast.success(`${n} shared${left}`);
+      else if (how === 'saved') {
+        toast.success(format === 'csv'
+          ? `Saved ${filename}${left}`
+          : `Saved ${n} — open it from Downloads with OsmAnd or Google Earth${left}`);
+      }
+    }
+
+    const lbl = 'text-[10px] font-bold text-fb-muted uppercase tracking-widest mb-1.5';
+    const pill = on => ({
+      padding: '9px 13px', borderRadius: 999, fontSize: 13, fontWeight: 600, flexShrink: 0, cursor: 'pointer',
+      border: `1px solid ${on ? '#3C5445' : '#CEC5B0'}`, background: on ? '#3C5445' : '#EBE5D5', color: on ? '#fff' : '#3C5445',
+    });
+
+    return (
+      <div className="modal-backdrop" style={{ zIndex: 60 }} onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 24, maxHeight: '94vh', display: 'flex', flexDirection: 'column' }}>
+          <div tabIndex={0} className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-3 flex-shrink-0" style={{ outline: 'none' }} />
+          <div className="flex items-baseline justify-between mb-3 flex-shrink-0">
+            <h2 className="text-xl font-bold text-fb-text">Export Points</h2>
+            <span className="text-xs font-semibold text-fb-muted">{crs.short}</span>
+          </div>
+
+          {points.length === 0 ? (
+            <p className="text-sm text-fb-muted py-8 text-center rounded-xl" style={{ background: '#EBE5D5' }}>
+              This project has no points yet.
+            </p>
+          ) : (
+            <>
+              {/* Quick select */}
+              <div className="flex gap-1.5 mb-3 flex-shrink-0" style={{ overflowX: 'auto', paddingBottom: 2 }}>
+                <button style={pill(sel.size === points.length)} onClick={() => setSel(new Set(points.map(p => p.id)))}>All</button>
+                {POINT_EXPORT_GROUPS.map(g => {
+                  const mine = points.filter(g.test);
+                  if (!mine.length) return null;
+                  const on = mine.every(p => sel.has(p.id));
+                  return (
+                    <button key={g.id} style={pill(on)}
+                      onClick={() => change(s => mine.forEach(p => { if (on) s.delete(p.id); else s.add(p.id); }))}>
+                      {g.label} <span style={{ opacity: 0.7 }}>{mine.length}</span>
+                    </button>
+                  );
+                })}
+                <button style={pill(false)} onClick={() => setSel(new Set())}>None</button>
+              </div>
+
+              {/* Range */}
+              <div className="flex items-center gap-2 mb-1 flex-shrink-0">
+                <input type="text" inputMode="text" value={range} onChange={e => setRange(e.target.value)}
+                  placeholder="Range: 1-50, 75, 9001-9010"
+                  className="flex-1 min-w-0 px-3 py-2.5 rounded-xl text-base text-fb-text outline-none font-data"
+                  style={{ background: '#FDFAF4', border: '1px solid #CEC5B0' }} />
+                <button disabled={!matched.length} onClick={() => change(s => matched.forEach(p => s.add(p.id)))}
+                  className="py-2.5 px-3 rounded-xl text-sm font-semibold"
+                  style={{ background: '#EBE5D5', border: '1px solid #CEC5B0', color: '#3C5445', opacity: matched.length ? 1 : 0.4 }}>
+                  Add
+                </button>
+                <button disabled={!matched.length} onClick={() => setSel(new Set(matched.map(p => p.id)))}
+                  className="py-2.5 px-3 rounded-xl text-sm font-semibold text-white"
+                  style={{ background: '#4E7864', opacity: matched.length ? 1 : 0.4 }}>
+                  Only
+                </button>
+              </div>
+              <p className="text-xs text-fb-muted mb-2 flex-shrink-0" style={{ minHeight: 16 }}>
+                {range.trim()
+                  ? <>{matched.length} point{matched.length === 1 ? '' : 's'} matched{parsed.bad.length ? ` · can't read "${parsed.bad.join(' ')}"` : ''}</>
+                  : 'Add puts the range into the selection; Only replaces the selection with it.'}
+              </p>
+
+              {/* Checklist */}
+              <div className="flex items-center justify-between mb-1 flex-shrink-0">
+                <p className={lbl} style={{ marginBottom: 0 }}>{sel.size} of {points.length} selected</p>
+                <p className="text-[11px] text-fb-muted">{withMap} with a map position</p>
+              </div>
+              <div className="rounded-xl mb-3" style={{ flex: '1 1 auto', minHeight: 120, overflowY: 'auto', border: '1px solid #CEC5B0', background: '#FDFAF4' }}>
+                {points.map(p => {
+                  const on  = sel.has(p.id);
+                  const uri = p.lat !== null ? fbGeo.geoUri(p.lat, p.lon, [p.number, p.desc].filter(Boolean).join(' ')) : null;
+                  return (
+                    <div key={p.id} className="flex items-center" style={{ borderBottom: '1px solid #EBE5D5' }}>
+                      <button onClick={() => toggle(p.id)} role="checkbox" aria-checked={on}
+                        className="flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2.5 text-left"
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}>
+                        <span style={{ width: 24, height: 24, borderRadius: 6, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                       border: `2px solid ${on ? '#4E7864' : '#B8AE99'}`, background: on ? '#4E7864' : 'transparent', color: '#fff', fontSize: 15, lineHeight: 1 }}>
+                          {on ? '✓' : ''}
+                        </span>
+                        <span style={{ fontSize: 14, width: 20, textAlign: 'center', flexShrink: 0 }}>{fbGeo.SOURCES[p.source]?.icon}</span>
+                        <span className="font-data text-base text-fb-text" style={{ width: 62, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.number || '—'}</span>
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-sm text-fb-text truncate">{p.desc || '—'}</span>
+                          <span className="block text-[11px] text-fb-muted font-data truncate">
+                            {p.N !== null && p.E !== null ? `N ${p.text.n}  E ${p.text.e}${p.text.z ? '  Z ' + p.text.z : ''}`
+                              : p.lat !== null ? fbGeo.fmtLatLon(p.lat, p.lon) : 'no coordinates'}
+                          </span>
+                        </span>
+                      </button>
+                      {uri && (
+                        <a href={uri} title="Open in map app" className="flex-shrink-0 px-3 py-2.5" style={{ fontSize: 17, textDecoration: 'none' }}>🗺</a>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Format */}
+              <div className="flex gap-1.5 mb-2 flex-shrink-0">
+                {POINT_EXPORT_FORMATS.map(f => (
+                  <button key={f.id} onClick={() => pickFormat(f.id)}
+                    className="flex-1 py-2 rounded-xl text-center"
+                    style={{ background: format === f.id ? '#3C5445' : '#EBE5D5', color: format === f.id ? '#fff' : '#3C5445', border: '1px solid #CEC5B0' }}>
+                    <span className="block text-sm font-bold">{f.label}</span>
+                    <span className="block text-[10px]" style={{ opacity: 0.75 }}>{f.sub}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="flex-shrink-0 mb-3" style={{ minHeight: 30 }}>
+                {format === 'csv' ? (
+                  <button onClick={() => setHeader(h => !h)} className="flex items-center gap-2 w-full text-left"
+                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px 0' }}>
+                    <span className="flex-1 text-xs text-fb-text">
+                      Point, Northing, Easting, Elevation, Description — in <b>{crs.short}</b>, as shown in the app
+                    </span>
+                    <span className="text-[11px] font-bold px-2.5 py-1 rounded-full flex-shrink-0"
+                      style={{ background: header ? '#4E7864' : '#CEC5B0', color: header ? '#fff' : '#6B635C' }}>
+                      Header row {header ? 'ON' : 'OFF'}
+                    </span>
+                  </button>
+                ) : (
+                  <p className="text-xs text-fb-muted leading-snug">
+                    Lat/lon for a phone map app{format === 'kml' ? ', one folder per point type' : ' — waypoints grouped by point type'}.
+                    Grid values, source and accuracy go in each point's description.
+                  </p>
+                )}
+              </div>
+
+              {blocked && (
+                <p className="text-xs rounded-xl px-3 py-2 mb-2 flex-shrink-0" style={{ background: '#FFF6E0', border: '1px solid #E0C070', color: '#5A4A1E' }}>{blocked}</p>
+              )}
+              <button onClick={() => doExport(false)} disabled={!!blocked || busy}
+                className="w-full py-3.5 rounded-xl font-semibold text-base text-white active:opacity-80 flex-shrink-0"
+                style={{ background: '#4E7864', opacity: blocked || busy ? 0.45 : 1 }}>
+                {busy ? 'Exporting…' : `${shareable ? 'Share' : 'Save'} ${usable} point${usable === 1 ? '' : 's'} as ${fmt.label}`}
+              </button>
+              {shareable && !blocked && (
+                <button onClick={() => doExport(true)} disabled={busy}
+                  className="w-full pt-3 text-sm font-semibold flex-shrink-0"
+                  style={{ background: 'transparent', border: 'none', color: '#3C5445', cursor: 'pointer' }}>
+                  Save to Downloads instead
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </div>
     );
   }
@@ -2883,9 +3164,10 @@
   function ProjectSettingsModal({ project, projectId, onClose, onReload }) {
     const [tab,        setTab]        = useState('transfer');
     const [showExport, setShowExport] = useState(false);
+    const [showExportPts, setShowExportPts] = useState(false);
     const toast    = useToast();
     const trapRef  = useRef(null);
-    useFocusTrap(trapRef, true, onClose);
+    useFocusTrap(trapRef, !showExportPts, onClose);
 
     const chain = project.exportChain || [];
 
@@ -2924,8 +3206,18 @@
                 style={{ background: '#4E7864' }}>
                 <span style={{ fontSize: 16 }}>↑</span> Export Project File
               </button>
-              <p className="text-xs text-fb-muted text-center mb-5">
+              <p className="text-xs text-fb-muted text-center mb-4">
                 Downloads a <code className="font-data">.fieldbook</code> file — share or import on any device
+              </p>
+
+              {/* Export points */}
+              <button onClick={() => setShowExportPts(true)}
+                className="w-full py-3 rounded-xl font-semibold text-sm text-fb-text active:opacity-80 flex items-center justify-center gap-2 mb-1"
+                style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
+                <span style={{ fontSize: 16 }}>📍</span> Export Points
+              </button>
+              <p className="text-xs text-fb-muted text-center mb-5">
+                PNEZD CSV in the project grid, or KML / GPX for a phone map app
               </p>
 
               {/* Transfer history */}
@@ -2993,6 +3285,7 @@
             onDone={handleExportDone}
           />
         )}
+        {showExportPts && <ExportPointsModal projectId={projectId} onClose={() => setShowExportPts(false)} />}
       </div>
     );
   }
@@ -4767,6 +5060,12 @@
         _titleFieldSP('Summary of Work',             page.summary);
         _titleFieldSP('Code List',                   page.codeList, { mono: true });
         _titleFieldSP('Digital File Names',          page.fileNames, { mono: true });
+      } else if (page.type === 'photo') {
+        // Same body as the whole-project export: photo grid with point number
+        // and coordinates under each photo, then the voice-note record.
+        const pagePhotos = page.photos || [];
+        const urls = await resolvePhotoUrls(pagePhotos);
+        await _pdfPhotoPageBody(pdf, page, pagePhotos, urls, proj, W, H, margin, contentY);
       } else if (page.type === 'notes') {
         let rawHtml = page.notesHtml || '';
         rawHtml = rawHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n')
@@ -4879,6 +5178,7 @@
     const [exporting, setExporting] = useState(false);
     const [showSettings,    setShowSettings]    = useState(false);
     const [showGps,         setShowGps]         = useState(false);
+    const [showExportPts,   setShowExportPts]   = useState(false);
     const [pageActionTarget, setPageActionTarget] = useState(null); // page object
     const [pageExportTarget, setPageExportTarget] = useState(null); // page object
     const [pageCopyToTarget, setPageCopyToTarget] = useState(null); // page object
@@ -4893,7 +5193,7 @@
     // reference to setProject makes React bail out (Object.is), so the UI wouldn't
     // update until a remount. Spread into a new object to force the re-render.
     function reload() { const p = DB.getProject(projectId); setProject(p ? { ...p } : null); }
-    useEffect(() => { reload(); }, [projectId]);
+    useEffect(() => { migrateGeoDefaults(projectId); reload(); }, [projectId]);
 
     function startEditCover() {
       setCoverForm({
@@ -5057,6 +5357,14 @@
                   ? <span style={{ fontSize: 14 }}>⏳</span>
                   : <Ico.Download />
                 }
+              </button>
+              <button
+                onClick={() => setShowExportPts(true)}
+                title="Export points (CSV / KML / GPX)"
+                className="p-2 rounded-xl active:bg-white/10 transition-colors"
+                style={{ fontSize: 16, lineHeight: 1 }}
+              >
+                📤
               </button>
               <button
                 onClick={() => setShowGps(true)}
@@ -5283,6 +5591,8 @@
             reader.readAsText(file);
             e.target.value = '';
           }} />
+
+        {showExportPts && <ExportPointsModal projectId={projectId} onClose={() => setShowExportPts(false)} />}
 
         {showGps && (
           <GpsCaptureSheet projectId={projectId}
@@ -6191,7 +6501,7 @@
       setProject(proj);
       if (proj) setPage(proj.pages.find(p => p.id === pageId) || null);
     }
-    useEffect(() => { reload(); }, [projectId, pageId]);
+    useEffect(() => { migrateGeoDefaults(projectId); reload(); }, [projectId, pageId]);
 
     if (!project || !page) return (
       <div className="flex flex-col h-full bg-fb-cream">

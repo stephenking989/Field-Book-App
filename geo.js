@@ -195,14 +195,17 @@
     };
   }
 
+  // Phone points get Z = H (orthometric, CGVD2013 via the geoid) unless the
+  // project has switched "Fill Z from phone height" off.
+  function useZ(project) { return !project || project.gpsUseZ !== false; }
+
   // PNEZD cell values for a GPS-sourced point in the project's CRS.
-  // Z stays blank unless the project opted in (then Z = H, CGVD2013).
   function gpsCells(geo, project) {
     const g = toGrid(geo.lat, geo.lon, projectCrsId(project));
     return {
       col_north: g ? fmtGrid(g.n) : '',
       col_east:  g ? fmtGrid(g.e) : '',
-      col_elev:  (project && project.gpsUseZ && fin(geo.H)) ? fmtElev(geo.H) : '',
+      col_elev:  (useZ(project) && fin(geo.H)) ? fmtElev(geo.H) : '',
     };
   }
 
@@ -262,6 +265,7 @@
       phone: !!geo, acc: geo ? (geo.acc ?? null) : null, ts: geo ? (geo.ts || null) : null,
       refPageId: geo ? (geo.notePageId || geo.mediaPageId || null) : null,
       mediaId: geo ? (geo.mediaId || null) : null,
+      from: geo ? (geo.from || 'device') : null,
     };
   }
 
@@ -340,10 +344,10 @@
     if (!rec) return null;
     const link = mediaRow(rec, rows || rowPoints(project));
     const geo = (rec.geo && fin(rec.geo.lat) && fin(rec.geo.lon)) ? rec.geo : null;
-    if (link) return { ...link, rowId: link.id, own: link.mediaId === rec.id, from: geo ? (geo.from || 'device') : null };
+    if (link) return { ...link, rowId: link.id, own: link.mediaId === rec.id };
     if (!geo) return null;
     const g = toGrid(geo.lat, geo.lon, projectCrsId(project));
-    const Z = (project.gpsUseZ && fin(geo.H)) ? geo.H : null;
+    const Z = (useZ(project) && fin(geo.H)) ? geo.H : null;
     return {
       id: rec.id, number: '',
       N: g ? g.n : null, E: g ? g.e : null, Z,
@@ -507,6 +511,103 @@
     return ranges.some(([lo, hi]) => n >= lo && n <= hi);
   }
 
+  // ─── Export writers (PNEZD CSV, KML, GPX) ──────────────────────────────────
+  // All three take index entries from getProjectPoints().
+  const xmlEsc = v => String(v ?? '').replace(/[<>&'"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]));
+  const csvCell = v => { const t = String(v ?? ''); return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+  const pad2 = n => String(n).padStart(2, '0');
+  function fmtWhen(ts) {
+    const d = ts ? new Date(ts) : null;
+    if (!d || isNaN(d)) return '';
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+  function pointName(p) {
+    return [p.number, p.desc].filter(Boolean).join(' ') || (SOURCES[p.source] ? SOURCES[p.source].label : 'Point');
+  }
+  // How good a point's position is, in words.
+  function qualityText(p) {
+    if (!p.phone) return 'entered coordinates';
+    return p.from === 'exif' ? (fin(p.acc) ? `±${Math.round(p.acc)} m photo EXIF GPS` : 'photo EXIF GPS') : fmtAcc(p.acc);
+  }
+  function gridText(p) {
+    if (p.N === null || p.E === null) return '';
+    return `N ${p.text.n}  E ${p.text.e}${p.text.z ? '  Z ' + p.text.z : ''}`;
+  }
+  // Lines describing a point for a map app's info balloon.
+  function describe(p, crs) {
+    const out = [];
+    const grid = gridText(p);
+    if (grid) out.push(grid);
+    out.push(crs.epsg ? `${crs.label} (EPSG:${crs.epsg})` : crs.label);
+    out.push(`Source: ${SOURCES[p.source] ? SOURCES[p.source].label : p.source} · ${qualityText(p)}`);
+    const when = fmtWhen(p.ts);
+    if (when) out.push(when);
+    return out;
+  }
+
+  // PNEZD, comma-delimited, in the project's CRS. Coordinates are written
+  // exactly as they appear in the app. Points with no N/E are left out.
+  // Returns { text, count, skipped }.
+  function toPNEZD(points, opts) {
+    const rows = points.filter(p => p.N !== null && p.E !== null);
+    const lines = rows.map(p => [csvCell(p.number), p.text.n, p.text.e, p.text.z, csvCell(p.desc)].join(','));
+    if (opts && opts.header) lines.unshift('Point,Northing,Easting,Elevation,Description');
+    return { text: lines.join('\r\n') + (lines.length ? '\r\n' : ''), count: rows.length, skipped: points.length - rows.length };
+  }
+
+  // KML (lat/lon), one folder per source category. Returns { text, count, skipped }.
+  function toKML(points, project) {
+    const crs = projectCrs(project);
+    const pts = points.filter(p => p.lat !== null && p.lon !== null);
+    const folders = Object.keys(SOURCES).map(src => {
+      const mine = pts.filter(p => p.source === src);
+      if (!mine.length) return '';
+      const marks = mine.map(p => {
+        const body = describe(p, crs).map(xmlEsc).join('<br/>').replace(/]]>/g, ']]&gt;');
+        const when = p.ts && !isNaN(new Date(p.ts)) ? `<TimeStamp><when>${new Date(p.ts).toISOString()}</when></TimeStamp>` : '';
+        const alt = p.Z !== null ? ',' + p.Z.toFixed(1) : '';
+        return `      <Placemark><name>${xmlEsc(pointName(p))}</name><description><![CDATA[${body}]]></description>${when}` +
+               `<Point><coordinates>${p.lon.toFixed(8)},${p.lat.toFixed(8)}${alt}</coordinates></Point></Placemark>`;
+      }).join('\n');
+      return `    <Folder><name>${xmlEsc(SOURCES[src].label)}</name>\n${marks}\n    </Folder>`;
+    }).filter(Boolean).join('\n');
+    const text = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${xmlEsc((project.name || 'FieldBook') + ' — points')}</name>
+    <description>${xmlEsc(`Exported from FieldBook. Grid: ${crs.label}. Positions are NAD83(CSRS) lat/lon, used as WGS84.`)}</description>
+${folders}
+  </Document>
+</kml>
+`;
+    return { text, count: pts.length, skipped: points.length - pts.length };
+  }
+
+  // GPX 1.1 waypoints — OsmAnd's native format. <type> carries the source
+  // category, which OsmAnd uses to group the waypoints.
+  function toGPX(points, project) {
+    const crs = projectCrs(project);
+    const pts = points.filter(p => p.lat !== null && p.lon !== null);
+    const wpts = pts.map(p => {
+      const ele  = p.Z !== null ? `<ele>${p.Z.toFixed(1)}</ele>` : '';
+      const time = p.ts && !isNaN(new Date(p.ts)) ? `<time>${new Date(p.ts).toISOString()}</time>` : '';
+      return `  <wpt lat="${p.lat.toFixed(8)}" lon="${p.lon.toFixed(8)}">${ele}${time}` +
+             `<name>${xmlEsc(pointName(p))}</name><desc>${xmlEsc(describe(p, crs).join(' | '))}</desc>` +
+             `<type>${xmlEsc(SOURCES[p.source] ? SOURCES[p.source].label : p.source)}</type></wpt>`;
+    }).join('\n');
+    const text = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="FieldBook" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>${xmlEsc((project.name || 'FieldBook') + ' — points')}</name>
+    <desc>${xmlEsc(`Grid: ${crs.label}. Positions are NAD83(CSRS) lat/lon, used as WGS84.`)}</desc>
+    <time>${new Date().toISOString()}</time>
+  </metadata>
+${wpts}
+</gpx>
+`;
+    return { text, count: pts.length, skipped: points.length - pts.length };
+  }
+
   // ─── Self-test ─────────────────────────────────────────────────────────────
   // Run from the browser console:   fbGeo.geoSelfTest()
   //
@@ -603,11 +704,12 @@
     getCrs, projectCrsId, projectCrs, isGrid,
     toLatLon, toGrid, geoidN, orthoHeight,
     fmtGrid, fmtElev, fmtAcc, fmtLatLon, fmtPosition, geoUri,
-    makeGeo, gpsCells,
+    makeGeo, gpsCells, useZ,
     rowPoint, rowPoints, mediaRow, mediaPoint, pinText, refreshPins,
     getProjectPoints, pointNumberCounts, usedPointNumbers, gpsPtStart, nextGpsPtNum,
     crsChangeSummary, applyCrsChange, datumMatchesCrs,
     parseRange, inRanges,
+    toPNEZD, toKML, toGPX, qualityText,
     geoSelfTest,
   };
 })();
