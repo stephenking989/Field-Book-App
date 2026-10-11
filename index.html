@@ -579,7 +579,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.166';
+  const APP_VERSION = '1.167';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1528,8 +1528,8 @@
         <line x1="8" y1="17" x2="12" y2="17"/>
       </svg>
     ),
-    Camera: () => (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    Camera: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
         <circle cx="12" cy="13" r="4"/>
       </svg>
@@ -1562,8 +1562,8 @@
         <line x1="12" y1="15" x2="12" y2="3"/>
       </svg>
     ),
-    Upload: () => (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    Upload: ({ size = 18 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
         <polyline points="17 8 12 3 7 8"/>
         <line x1="12" y1="3" x2="12" y2="15"/>
@@ -1590,9 +1590,9 @@
         <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
       </svg>
     ),
-    // Survey point / crosshair — used for Points page type badge
-    Pin: () => (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    // Survey point / crosshair — Points page type badge, and GPS capture everywhere
+    Pin: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="12" r="7"/>
         <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/>
         <line x1="12" y1="2" x2="12" y2="5"/>
@@ -1601,7 +1601,75 @@
         <line x1="19" y1="12" x2="22" y2="12"/>
       </svg>
     ),
+    // ── Geo & Media Icons ────────────────────────────────────────────────────
+    Map: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/>
+        <line x1="8" y1="2" x2="8" y2="18"/>
+        <line x1="16" y1="6" x2="16" y2="22"/>
+      </svg>
+    ),
+    Mic: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="9" y="2" width="6" height="12" rx="3"/>
+        <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+        <line x1="12" y1="18" x2="12" y2="22"/>
+        <line x1="8" y1="22" x2="16" y2="22"/>
+      </svg>
+    ),
+    Play: ({ size = 18 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+        <polygon points="7 4 20 12 7 20 7 4"/>
+      </svg>
+    ),
+    Pause: ({ size = 18 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+        <rect x="6" y="4" width="4.5" height="16" rx="1"/>
+        <rect x="13.5" y="4" width="4.5" height="16" rx="1"/>
+      </svg>
+    ),
+    Warn: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/>
+        <line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+    ),
+    Link: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+      </svg>
+    ),
+    Note: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <line x1="8" y1="13" x2="16" y2="13"/>
+        <line x1="8" y1="17" x2="13" y2="17"/>
+      </svg>
+    ),
   };
+
+  // Caution / error notice box (DESIGN.md → Notices).
+  function Notice({ tone = 'warn', className = '', children }) {
+    const err = tone === 'error';
+    return (
+      <div className={`rounded-xl px-3 py-2.5 border text-sm text-fb-ink flex gap-2 ${err ? 'bg-fb-error-pale border-fb-error-line' : 'bg-fb-warn-pale border-fb-warn-line'} ${className}`}>
+        <span className={`flex-shrink-0 mt-0.5 ${err ? 'text-fb-error' : 'text-fb-warn'}`}><Ico.Warn /></span>
+        <span className="flex-1 min-w-0">{children}</span>
+      </div>
+    );
+  }
+
+  // Point-source marker — the short tag from fbGeo.SOURCES drawn as a badge.
+  function SourceTag({ source }) {
+    const tag = fbGeo.SOURCES[source]?.tag;
+    if (!tag) return null;
+    return <span className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider flex-shrink-0 bg-fb-page-deep text-fb-ink-muted">{tag}</span>;
+  }
+  // The same sources as icons, for places too narrow for a tag (Points-page row gutter, menus).
+  const SOURCE_ICO = { 'gps': Ico.Pin, 'notes-pin': Ico.Note, 'photo': Ico.Camera, 'voice': Ico.Mic };
 
   // ─────────────────────────────────────────────────────────────────────────────
   // TOAST SYSTEM
@@ -2608,58 +2676,55 @@
 
     const grid = result && fbGeo.toGrid(result.lat, result.lon, crs.id);
     const ht   = result && fbGeo.orthoHeight(result.h, result.lat, result.lon);
-    const fieldCls = 'w-full px-3 py-3 rounded-xl text-base text-fb-text outline-none font-data';
-    const fieldSty = { background: FBC.field, border: `1px solid ${FBC.border}` };
-    const lbl = 'text-[10px] font-bold text-fb-muted uppercase tracking-widest mb-1';
+    const fieldCls = 'w-full px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint';
+    const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest';
 
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
         <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 32 }}>
-          <div tabIndex={0} className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" style={{ outline: 'none' }} />
-          <div className="flex items-baseline justify-between mb-3">
-            <h2 className="text-xl font-bold text-fb-text">📍 {heading}</h2>
-            <span className="text-xs font-semibold text-fb-muted">{crs.short}</span>
+          <div tabIndex={0} className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4 outline-none" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">{heading}</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted font-data">{crs.short}</span>
           </div>
 
           {/* Live receiver readout */}
-          <div className="rounded-xl px-4 py-3 mb-3 text-center" style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
-            <p className={lbl}>{phase === 'averaging' ? 'Averaging' : 'Live accuracy'}</p>
-            <p className="font-data text-fb-text" style={{ fontSize: 30, lineHeight: 1.1 }}>
+          <div className="rounded-xl px-4 py-3 mb-3 text-center bg-fb-page-alt border border-fb-border">
+            <p className={lbl + ' mb-1'}>{phase === 'averaging' ? 'Averaging' : 'Live accuracy'}</p>
+            <p className="font-data text-fb-ink text-[30px] leading-tight">
               {fix ? `±${fix.acc < 10 ? fix.acc.toFixed(1) : Math.round(fix.acc)} m` : '— —'}
             </p>
-            <p className="text-xs text-fb-muted mt-1">
+            <p className={`text-xs text-fb-ink-muted mt-1${phase !== 'averaging' && fix ? ' font-data' : ''}`}>
               {phase === 'averaging'
                 ? `${remaining} s left · ${count} fix${count === 1 ? '' : 'es'}`
                 : fix ? fbGeo.fmtPosition(fix.lat, fix.lon, crs.id) : 'Waiting for GPS…'}
             </p>
             {phase === 'averaging' && (
-              <div className="h-1.5 rounded-full mt-2 overflow-hidden" style={{ background: FBC.border }}>
-                <div style={{ height: '100%', width: `${100 * (1 - remaining / secs)}%`, background: FBC.accent, transition: 'width 0.25s linear' }} />
+              <div className="h-1.5 rounded-full mt-2 overflow-hidden bg-fb-border">
+                <div className="h-full bg-fb-accent transition-[width] duration-[250ms] ease-linear" style={{ width: `${100 * (1 - remaining / secs)}%` }} />
               </div>
             )}
           </div>
 
-          {err && (
-            <p className="text-sm rounded-xl px-3 py-2.5 mb-3" style={{ background: '#FBE9E7', border: `1px solid ${FBC.errorLine}`, color: '#8A2B1D' }}>{err}</p>
-          )}
+          {err && <Notice tone="error" className="mb-3">{err}</Notice>}
 
           {/* Averaged result */}
           {result && (
-            <div className="rounded-xl px-3 py-2.5 mb-3" style={{ background: FBC.field, border: `1px solid ${FBC.border}` }}>
+            <div className="rounded-xl px-3 py-2.5 mb-3 bg-fb-field border border-fb-border">
               <div className="flex items-center justify-between mb-1">
-                <span className={lbl} style={{ marginBottom: 0 }}>Averaged · {result.fixes} fix{result.fixes === 1 ? '' : 'es'}</span>
-                <span className="text-xs font-semibold" style={{ color: FBC.warn }}>{fbGeo.fmtAcc(result.acc)}</span>
+                <span className={lbl}>Averaged · {result.fixes} fix{result.fixes === 1 ? '' : 'es'}</span>
+                <span className="text-xs font-semibold text-fb-warn">{fbGeo.fmtAcc(result.acc)}</span>
               </div>
               {grid
                 ? <>
-                    <p className="font-data text-base text-fb-text">N {fbGeo.fmtGrid(grid.n)}</p>
-                    <p className="font-data text-base text-fb-text">E {fbGeo.fmtGrid(grid.e)}</p>
+                    <p className="font-data text-base text-fb-ink">N {fbGeo.fmtGrid(grid.n)}</p>
+                    <p className="font-data text-base text-fb-ink">E {fbGeo.fmtGrid(grid.e)}</p>
                   </>
                 : <>
-                    <p className="font-data text-base text-fb-text">{fbGeo.fmtLatLon(result.lat, result.lon)}</p>
-                    <p className="text-xs text-fb-muted">Local coordinates — lat/lon is stored, no grid N/E.</p>
+                    <p className="font-data text-base text-fb-ink">{fbGeo.fmtLatLon(result.lat, result.lon)}</p>
+                    <p className="text-xs text-fb-ink-muted">Local coordinates — lat/lon is stored, no grid N/E.</p>
                   </>}
-              <p className="text-xs text-fb-muted mt-1 leading-snug">
+              <p className="text-xs text-fb-ink-muted mt-1 leading-snug">
                 {ht.h === null
                   ? 'No height from this fix.'
                   : <>Ellipsoid ht (phone) {fbGeo.fmtElev(ht.h)} m
@@ -2670,28 +2735,27 @@
           )}
 
           <div className="flex gap-2 mb-3">
-            <div style={{ width: 110 }}>
-              <p className={lbl}>Pt #</p>
+            <div className="w-[110px]">
+              <p className={lbl + ' mb-1.5'}>Pt #</p>
               <input type="text" inputMode="numeric" value={number} onChange={e => setNumber(e.target.value)}
-                className={fieldCls} style={fieldSty} />
+                className={fieldCls + ' font-data'} />
             </div>
             <div className="flex-1 min-w-0">
-              <p className={lbl}>Description</p>
+              <p className={lbl + ' mb-1.5'}>Description</p>
               <input type="text" value={desc} onChange={e => setDesc(e.target.value)} placeholder="IP fd, culvert, gate…"
-                className={fieldCls} style={{ ...fieldSty, fontFamily: 'inherit' }} />
+                className={fieldCls} />
             </div>
           </div>
-          {duplicate && (
-            <p className="text-xs font-semibold mb-3" style={{ color: FBC.warn }}>⚠ Point {numTrim} already exists in this project.</p>
-          )}
+          {duplicate && <Notice className="mb-3">Point {numTrim} already exists in this project.</Notice>}
 
           {phase !== 'averaging' && (
             <div className="flex items-center gap-1.5 mb-3">
-              <span className="text-xs text-fb-muted mr-1">Average for</span>
+              <span className="text-xs text-fb-ink-muted mr-1">Average for</span>
               {GPS_AVG_CHOICES.map(n => (
                 <button key={n} onClick={() => setSecs(n)}
-                  className="flex-1 py-2 rounded-lg text-sm font-semibold"
-                  style={{ background: secs === n ? FBC.cover : FBC.pageAlt, color: secs === n ? '#fff' : FBC.heading, border: `1px solid ${FBC.border}` }}>
+                  className={`flex-1 h-9 rounded-lg text-sm font-semibold border ${secs === n
+                    ? 'bg-fb-cover border-fb-cover text-white'
+                    : 'bg-fb-page-alt border-fb-border text-fb-heading'}`}>
                   {n} s
                 </button>
               ))}
@@ -2701,24 +2765,21 @@
           {phase === 'done' ? (
             <div className="flex gap-2">
               <button onClick={start}
-                className="py-3.5 px-5 rounded-xl font-semibold text-sm text-fb-text active:opacity-80"
-                style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
+                className="py-3 px-5 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep">
                 Redo
               </button>
               <button onClick={save}
-                className="flex-1 py-3.5 rounded-xl font-semibold text-base text-white active:opacity-80"
-                style={{ background: FBC.accent }}>
+                className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80">
                 {duplicate ? 'Save anyway' : 'Save point'}
               </button>
             </div>
           ) : (
             <button onClick={start} disabled={phase === 'averaging' || !navigator.geolocation}
-              className="w-full py-3.5 rounded-xl font-semibold text-base text-white active:opacity-80"
-              style={{ background: FBC.accent, opacity: phase === 'averaging' ? 0.6 : 1 }}>
+              className="w-full py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
               {phase === 'averaging' ? 'Hold still…' : `Record ${secs} s average`}
             </button>
           )}
-          <p className="text-[11px] text-fb-muted text-center mt-3 leading-snug">
+          <p className="text-[11px] text-fb-ink-muted text-center mt-3 leading-snug">
             Recon grade only — phone GPS, treated as NAD83(CSRS). Not for survey control.
           </p>
         </div>
@@ -2726,7 +2787,7 @@
     );
   }
 
-  // Coordinate-system block of the ⚙ Settings tab in ProjectSettingsModal.
+  // Coordinate-system block of the Settings tab in ProjectSettingsModal.
   function ProjectGeoSettings({ project, projectId, onReload }) {
     const toast = useToast();
     const crsId = fbGeo.projectCrsId(project);
@@ -2785,7 +2846,7 @@
       onReload();
     }
 
-    const lbl = 'text-xs font-bold text-fb-muted uppercase tracking-widest mb-2';
+    const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
     const to = pending && fbGeo.getCrs(pending.toId);
 
     return (
@@ -2794,27 +2855,29 @@
         <div className="space-y-1.5">
           {fbGeo.CRS_REGISTRY.map(c => (
             <button key={c.id} onClick={() => pickCrs(c.id)}
-              className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left active:opacity-80"
-              style={{ background: c.id === crsId ? FBC.accentPale : FBC.pageAlt, border: `1px solid ${c.id === crsId ? FBC.accent : FBC.border}` }}>
-              <span style={{ width: 18, height: 18, borderRadius: 9, flexShrink: 0, border: `2px solid ${FBC.accent}`, background: c.id === crsId ? FBC.accent : 'transparent' }} />
+              className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left border active:opacity-80 ${c.id === crsId
+                ? 'bg-fb-accent-pale border-fb-accent' : 'bg-fb-page-alt border-fb-border'}`}>
+              <span className={`w-[18px] h-[18px] rounded-full border-2 border-fb-accent flex-shrink-0 ${c.id === crsId ? 'bg-fb-accent' : ''}`} />
               <span className="flex-1 min-w-0">
-                <span className="block text-sm font-semibold text-fb-text">{c.label}</span>
-                <span className="block text-xs text-fb-muted font-data">{c.epsg ? `EPSG:${c.epsg}` : 'No lat/lon — KML/GPX export disabled'}</span>
+                <span className="block text-sm font-semibold text-fb-ink">{c.label}</span>
+                <span className="block text-xs text-fb-ink-muted font-data">{c.epsg ? `EPSG:${c.epsg}` : 'No lat/lon — KML/GPX export disabled'}</span>
               </span>
             </button>
           ))}
         </div>
         {crsId === 'local' && (
-          <p className="text-xs text-fb-muted mt-2 leading-snug">
+          <p className="text-xs text-fb-ink-muted mt-2 leading-snug">
             Local coordinates can't be converted to lat/lon, so points can't be sent to a map app.
             Phone-GPS points still store their lat/lon but get no N/E.
           </p>
         )}
 
         {pending && (
-          <div className="rounded-xl px-3 py-3 mt-3" style={{ background: FBC.warnPale, border: `1px solid ${FBC.warnLine}` }}>
-            <p className="text-sm font-semibold text-fb-text mb-1">Change to {to.short}?</p>
-            <p className="text-xs text-fb-text leading-snug mb-3">
+          <div className="rounded-xl px-3 py-2.5 mt-3 bg-fb-warn-pale border border-fb-warn-line">
+            <p className="text-sm font-semibold text-fb-ink mb-1 flex items-center gap-2">
+              <span className="text-fb-warn flex-shrink-0"><Ico.Warn /></span>Change to {to.short}?
+            </p>
+            <p className="text-xs text-fb-ink leading-snug mb-3">
               This project has {pending.instrument} entered point{pending.instrument === 1 ? '' : 's'} and {pending.gps} phone-GPS point{pending.gps === 1 ? '' : 's'}.
               {pending.gps > 0 && <> GPS points always recalculate from their stored lat/lon.</>}
               {pending.instrument > 0 && (pending.canReproject
@@ -2823,16 +2886,16 @@
             </p>
             <div className="flex flex-wrap gap-2">
               <button onClick={() => setPending(null)}
-                className="py-3 px-4 rounded-xl text-sm font-semibold text-fb-text" style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
+                className="py-3 px-4 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">
                 Cancel
               </button>
               <button onClick={() => applyCrs(pending.toId, false)}
-                className="flex-1 py-3 px-4 rounded-xl text-sm font-semibold text-white" style={{ background: FBC.accent }}>
+                className="flex-1 py-3 px-4 rounded-xl text-sm font-semibold text-white bg-fb-accent active:opacity-80">
                 {pending.canReproject && pending.instrument > 0 ? 'Relabel only' : 'Change'}
               </button>
               {pending.canReproject && pending.instrument > 0 && (
                 <button onClick={() => applyCrs(pending.toId, true)}
-                  className="flex-1 py-3 px-4 rounded-xl text-sm font-semibold text-white" style={{ background: FBC.cover }}>
+                  className="flex-1 py-3 px-4 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep">
                   Reproject {pending.instrument}
                 </button>
               )}
@@ -2841,22 +2904,19 @@
         )}
 
         <p className={lbl + ' mt-5'}>Phone GPS Points</p>
-        <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1.5" style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
-          <span className="flex-1 text-sm text-fb-text">Number GPS points from</span>
+        <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1.5 bg-fb-page-alt border border-fb-border">
+          <span className="flex-1 text-sm text-fb-ink">Number GPS points from</span>
           <input type="text" inputMode="numeric" value={startNum}
             onChange={e => setStartNum(e.target.value)} onBlur={e => saveStartNum(e.target.value)}
-            className="font-data text-base text-fb-text text-right outline-none rounded-lg px-2 py-1.5"
-            style={{ width: 90, background: FBC.field, border: `1px solid ${FBC.border}` }} />
+            className="w-[90px] rounded-lg px-2 py-1.5 text-base text-right font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
         </div>
         <button onClick={toggleUseZ}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left active:opacity-80"
-          style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left bg-fb-page-alt border border-fb-border active:opacity-80">
           <span className="flex-1 min-w-0">
-            <span className="block text-sm text-fb-text">Fill Z from phone height</span>
-            <span className="block text-xs text-fb-muted leading-snug">Z = H = h − N (CGG2013a geoid, CGVD2013). Phone height is only ±5–15 m.</span>
+            <span className="block text-sm text-fb-ink">Fill Z from phone height</span>
+            <span className="block text-xs text-fb-ink-muted leading-snug">Z = H = h − N (CGG2013a geoid, CGVD2013). Phone height is only ±5–15 m.</span>
           </span>
-          <span className="text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0"
-            style={{ background: fbGeo.useZ(project) ? FBC.accent : FBC.border, color: fbGeo.useZ(project) ? '#fff' : '#6B635C' }}>
+          <span className={`text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0 ${fbGeo.useZ(project) ? 'bg-fb-accent text-white' : 'bg-fb-border text-fb-ink'}`}>
             {fbGeo.useZ(project) ? 'ON' : 'OFF'}
           </span>
         </button>
@@ -2904,11 +2964,11 @@
   // Quick-select groups. A point can be in several (a GPS photo point is both
   // "Photo" and "GPS").
   const POINT_EXPORT_GROUPS = [
-    { id: 'entered', label: '◎ Entered',     test: p => p.source === 'instrument' },
-    { id: 'photo',   label: '📷 Photo',       test: p => p.source === 'photo' || p.hasPhoto },
-    { id: 'voice',   label: '🎙 Voice',       test: p => p.source === 'voice' || p.hasVoice },
-    { id: 'pins',    label: '📝 Notes pins',  test: p => p.source === 'notes-pin' },
-    { id: 'gps',     label: '📍 GPS (all phone)', test: p => p.phone },
+    { id: 'entered', label: 'Entered',                           test: p => p.source === 'instrument' },
+    { id: 'photo',   label: 'Photo',           Icon: Ico.Camera, test: p => p.source === 'photo' || p.hasPhoto },
+    { id: 'voice',   label: 'Voice',           Icon: Ico.Mic,    test: p => p.source === 'voice' || p.hasVoice },
+    { id: 'pins',    label: 'Notes pins',      Icon: Ico.Note,   test: p => p.source === 'notes-pin' },
+    { id: 'gps',     label: 'GPS (all phone)', Icon: Ico.Pin,    test: p => p.phone },
   ];
 
   function ExportPointsModal({ projectId, onClose }) {
@@ -2975,97 +3035,94 @@
       }
     }
 
-    const lbl = 'text-[10px] font-bold text-fb-muted uppercase tracking-widest mb-1.5';
-    const pill = on => ({
-      padding: '9px 13px', borderRadius: 999, fontSize: 13, fontWeight: 600, flexShrink: 0, cursor: 'pointer',
-      border: `1px solid ${on ? FBC.cover : FBC.border}`, background: on ? FBC.cover : FBC.pageAlt, color: on ? '#fff' : FBC.heading,
-    });
+    const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest';
+    const chip = on => `h-9 px-3 rounded-lg text-sm font-semibold border inline-flex items-center gap-1.5 flex-shrink-0 whitespace-nowrap ${on
+      ? 'bg-fb-cover border-fb-cover text-white'
+      : 'bg-fb-page-alt border-fb-border text-fb-heading'}`;
+    const secondary = 'py-3 px-4 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-40';
 
     return (
       <div className="modal-backdrop" style={{ zIndex: 60 }} onClick={e => e.target === e.currentTarget && onClose()}>
-        <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 24, maxHeight: '94vh', display: 'flex', flexDirection: 'column' }}>
-          <div tabIndex={0} className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-3 flex-shrink-0" style={{ outline: 'none' }} />
-          <div className="flex items-baseline justify-between mb-3 flex-shrink-0">
-            <h2 className="text-xl font-bold text-fb-text">Export Points</h2>
-            <span className="text-xs font-semibold text-fb-muted">{crs.short}</span>
+        <div ref={trapRef} className="modal-sheet flex flex-col" style={{ paddingBottom: 24, maxHeight: '94vh' }}>
+          <div tabIndex={0} className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4 flex-shrink-0 outline-none" />
+          <div className="flex items-baseline justify-between mb-4 flex-shrink-0">
+            <h2 className="text-xl font-bold text-fb-ink">Export Points</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted font-data">{crs.short}</span>
           </div>
 
           {points.length === 0 ? (
-            <p className="text-sm text-fb-muted py-8 text-center rounded-xl" style={{ background: FBC.pageAlt }}>
+            <p className="text-sm text-fb-ink-muted py-6 text-center rounded-xl bg-fb-page-alt">
               This project has no points yet.
             </p>
           ) : (
             <>
               {/* Quick select */}
-              <div className="flex gap-1.5 mb-3 flex-shrink-0" style={{ overflowX: 'auto', paddingBottom: 2 }}>
-                <button style={pill(sel.size === points.length)} onClick={() => setSel(new Set(points.map(p => p.id)))}>All</button>
+              <div className="flex gap-1.5 mb-3 pb-0.5 flex-shrink-0 overflow-x-auto">
+                <button className={chip(sel.size === points.length)} onClick={() => setSel(new Set(points.map(p => p.id)))}>All</button>
                 {POINT_EXPORT_GROUPS.map(g => {
                   const mine = points.filter(g.test);
                   if (!mine.length) return null;
                   const on = mine.every(p => sel.has(p.id));
                   return (
-                    <button key={g.id} style={pill(on)}
+                    <button key={g.id} className={chip(on)}
                       onClick={() => change(s => mine.forEach(p => { if (on) s.delete(p.id); else s.add(p.id); }))}>
-                      {g.label} <span style={{ opacity: 0.7 }}>{mine.length}</span>
+                      {g.Icon && <g.Icon size={14} />}{g.label} <span className="opacity-70 font-data">{mine.length}</span>
                     </button>
                   );
                 })}
-                <button style={pill(false)} onClick={() => setSel(new Set())}>None</button>
+                <button className={chip(false)} onClick={() => setSel(new Set())}>None</button>
               </div>
 
               {/* Range */}
               <div className="flex items-center gap-2 mb-1 flex-shrink-0">
                 <input type="text" inputMode="text" value={range} onChange={e => setRange(e.target.value)}
                   placeholder="Range: 1-50, 75, 9001-9010"
-                  className="flex-1 min-w-0 px-3 py-2.5 rounded-xl text-base text-fb-text outline-none font-data"
-                  style={{ background: FBC.field, border: `1px solid ${FBC.border}` }} />
+                  className="flex-1 min-w-0 px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint font-data" />
                 <button disabled={!matched.length} onClick={() => change(s => matched.forEach(p => s.add(p.id)))}
-                  className="py-2.5 px-3 rounded-xl text-sm font-semibold"
-                  style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}`, color: FBC.heading, opacity: matched.length ? 1 : 0.4 }}>
+                  className={secondary}>
                   Add
                 </button>
                 <button disabled={!matched.length} onClick={() => setSel(new Set(matched.map(p => p.id)))}
-                  className="py-2.5 px-3 rounded-xl text-sm font-semibold text-white"
-                  style={{ background: FBC.accent, opacity: matched.length ? 1 : 0.4 }}>
+                  className={secondary}>
                   Only
                 </button>
               </div>
-              <p className="text-xs text-fb-muted mb-2 flex-shrink-0" style={{ minHeight: 16 }}>
+              <p className="text-xs text-fb-ink-muted mb-2 flex-shrink-0 min-h-[16px]">
                 {range.trim()
                   ? <>{matched.length} point{matched.length === 1 ? '' : 's'} matched{parsed.bad.length ? ` · can't read "${parsed.bad.join(' ')}"` : ''}</>
                   : 'Add puts the range into the selection; Only replaces the selection with it.'}
               </p>
 
               {/* Checklist */}
-              <div className="flex items-center justify-between mb-1 flex-shrink-0">
-                <p className={lbl} style={{ marginBottom: 0 }}>{sel.size} of {points.length} selected</p>
-                <p className="text-[11px] text-fb-muted">{withMap} with a map position</p>
+              <div className="flex items-center justify-between mb-1.5 flex-shrink-0">
+                <p className={lbl}>{sel.size} of {points.length} selected</p>
+                <p className="text-[11px] text-fb-ink-muted">{withMap} with a map position</p>
               </div>
-              <div className="rounded-xl mb-3" style={{ flex: '1 1 auto', minHeight: 120, overflowY: 'auto', border: `1px solid ${FBC.border}`, background: FBC.field }}>
+              <div className="rounded-xl mb-3 overflow-y-auto bg-fb-field border border-fb-border" style={{ flex: '1 1 auto', minHeight: 120 }}>
                 {points.map(p => {
                   const on  = sel.has(p.id);
                   const uri = p.lat !== null ? fbGeo.geoUri(p.lat, p.lon, [p.number, p.desc].filter(Boolean).join(' ')) : null;
                   return (
-                    <div key={p.id} className="flex items-center" style={{ borderBottom: `1px solid ${FBC.pageAlt}` }}>
+                    <div key={p.id} className="flex items-stretch border-b border-fb-page-alt">
                       <button onClick={() => toggle(p.id)} role="checkbox" aria-checked={on}
-                        className="flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2.5 text-left"
-                        style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}>
-                        <span style={{ width: 24, height: 24, borderRadius: 6, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                       border: `2px solid ${on ? FBC.accent : '#B8AE99'}`, background: on ? FBC.accent : 'transparent', color: '#fff', fontSize: 15, lineHeight: 1 }}>
+                        className="flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2.5 text-left active:bg-fb-page-alt">
+                        <span className={`w-6 h-6 rounded border-2 border-fb-accent flex-shrink-0 flex items-center justify-center text-sm leading-none text-white ${on ? 'bg-fb-accent' : ''}`}>
                           {on ? '✓' : ''}
                         </span>
-                        <span style={{ fontSize: 14, width: 20, textAlign: 'center', flexShrink: 0 }}>{fbGeo.SOURCES[p.source]?.icon}</span>
-                        <span className="font-data text-base text-fb-text" style={{ width: 62, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.number || '—'}</span>
+                        <span className="font-data text-base text-fb-ink w-16 flex-shrink-0 truncate">{p.number || '—'}</span>
                         <span className="flex-1 min-w-0">
-                          <span className="block text-sm text-fb-text truncate">{p.desc || '—'}</span>
-                          <span className="block text-[11px] text-fb-muted font-data truncate">
+                          <span className="flex items-center gap-1.5">
+                            <span className="flex-1 min-w-0 text-sm text-fb-ink truncate">{p.desc || '—'}</span>
+                            <SourceTag source={p.source} />
+                          </span>
+                          <span className="block text-xs text-fb-ink-muted font-data truncate">
                             {p.N !== null && p.E !== null ? `N ${p.text.n}  E ${p.text.e}${p.text.z ? '  Z ' + p.text.z : ''}`
                               : p.lat !== null ? fbGeo.fmtLatLon(p.lat, p.lon) : 'no coordinates'}
                           </span>
                         </span>
                       </button>
                       {uri && (
-                        <a href={uri} title="Open in map app" className="flex-shrink-0 px-3 py-2.5" style={{ fontSize: 17, textDecoration: 'none' }}>🗺</a>
+                        <a href={uri} title="Open in map app" className="flex-shrink-0 flex items-center px-3 text-fb-heading active:bg-fb-page-alt"><Ico.Map size={18} /></a>
                       )}
                     </div>
                   );
@@ -3076,45 +3133,40 @@
               <div className="flex gap-1.5 mb-2 flex-shrink-0">
                 {POINT_EXPORT_FORMATS.map(f => (
                   <button key={f.id} onClick={() => pickFormat(f.id)}
-                    className="flex-1 py-2 rounded-xl text-center"
-                    style={{ background: format === f.id ? FBC.cover : FBC.pageAlt, color: format === f.id ? '#fff' : FBC.heading, border: `1px solid ${FBC.border}` }}>
-                    <span className="block text-sm font-bold">{f.label}</span>
-                    <span className="block text-[10px]" style={{ opacity: 0.75 }}>{f.sub}</span>
+                    className={`flex-1 py-2 rounded-lg text-center border ${format === f.id
+                      ? 'bg-fb-cover border-fb-cover text-white'
+                      : 'bg-fb-page-alt border-fb-border text-fb-heading'}`}>
+                    <span className="block text-sm font-semibold">{f.label}</span>
+                    <span className="block text-[10px] opacity-75">{f.sub}</span>
                   </button>
                 ))}
               </div>
-              <div className="flex-shrink-0 mb-3" style={{ minHeight: 30 }}>
+              <div className="flex-shrink-0 mb-3 min-h-[30px]">
                 {format === 'csv' ? (
-                  <button onClick={() => setHeader(h => !h)} className="flex items-center gap-2 w-full text-left"
-                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px 0' }}>
-                    <span className="flex-1 text-xs text-fb-text">
+                  <button onClick={() => setHeader(h => !h)} className="flex items-center gap-2 w-full text-left py-1">
+                    <span className="flex-1 text-xs text-fb-ink">
                       Point, Northing, Easting, Elevation, Description — in <b>{crs.short}</b>, as shown in the app
                     </span>
-                    <span className="text-[11px] font-bold px-2.5 py-1 rounded-full flex-shrink-0"
-                      style={{ background: header ? FBC.accent : FBC.border, color: header ? '#fff' : '#6B635C' }}>
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0 ${header ? 'bg-fb-accent text-white' : 'bg-fb-border text-fb-ink'}`}>
                       Header row {header ? 'ON' : 'OFF'}
                     </span>
                   </button>
                 ) : (
-                  <p className="text-xs text-fb-muted leading-snug">
+                  <p className="text-xs text-fb-ink-muted leading-snug">
                     Lat/lon for a phone map app{format === 'kml' ? ', one folder per point type' : ' — waypoints grouped by point type'}.
                     Grid values, source and accuracy go in each point's description.
                   </p>
                 )}
               </div>
 
-              {blocked && (
-                <p className="text-xs rounded-xl px-3 py-2 mb-2 flex-shrink-0" style={{ background: FBC.warnPale, border: `1px solid ${FBC.warnLine}`, color: '#5A4A1E' }}>{blocked}</p>
-              )}
+              {blocked && <Notice className="mb-2 flex-shrink-0">{blocked}</Notice>}
               <button onClick={() => doExport(false)} disabled={!!blocked || busy}
-                className="w-full py-3.5 rounded-xl font-semibold text-base text-white active:opacity-80 flex-shrink-0"
-                style={{ background: FBC.accent, opacity: blocked || busy ? 0.45 : 1 }}>
+                className="w-full py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint flex-shrink-0">
                 {busy ? 'Exporting…' : `${shareable ? 'Share' : 'Save'} ${usable} point${usable === 1 ? '' : 's'} as ${fmt.label}`}
               </button>
               {shareable && !blocked && (
                 <button onClick={() => doExport(true)} disabled={busy}
-                  className="w-full pt-3 text-sm font-semibold flex-shrink-0"
-                  style={{ background: 'transparent', border: 'none', color: FBC.heading, cursor: 'pointer' }}>
+                  className="w-full pt-3 text-sm font-semibold text-fb-heading active:opacity-80 flex-shrink-0">
                   Save to Downloads instead
                 </button>
               )}
@@ -3149,7 +3201,7 @@
 
           {/* Tab bar */}
           <div className="flex gap-1 p-1 rounded-xl mb-5" style={{ background: FBC.pageAlt }}>
-            {[['transfer', '↔ Transfer'], ['settings', '⚙ Settings']].map(([id, label]) => (
+            {[['transfer', 'Transfer'], ['settings', 'Settings']].map(([id, label]) => (
               <button key={id} onClick={() => setTab(id)}
                 className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all"
                 style={{
@@ -3176,9 +3228,8 @@
 
               {/* Export points */}
               <button onClick={() => setShowExportPts(true)}
-                className="w-full py-3 rounded-xl font-semibold text-sm text-fb-text active:opacity-80 flex items-center justify-center gap-2 mb-1"
-                style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
-                <span style={{ fontSize: 16 }}>📍</span> Export Points
+                className="w-full py-3 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep flex items-center justify-center gap-2 mb-1">
+                <Ico.Upload size={16} /> Export Points
               </button>
               <p className="text-xs text-fb-muted text-center mb-5">
                 PNEZD CSV in the project grid, or KML / GPX for a phone map app
@@ -5326,17 +5377,15 @@
                 onClick={() => setShowExportPts(true)}
                 title="Export points (CSV / KML / GPX)"
                 className="p-2 rounded-xl active:bg-white/10 transition-colors"
-                style={{ fontSize: 16, lineHeight: 1 }}
               >
-                📤
+                <Ico.Upload />
               </button>
               <button
                 onClick={() => setShowGps(true)}
                 title="Record a GPS point"
                 className="p-2 rounded-xl active:bg-white/10 transition-colors"
-                style={{ fontSize: 17, lineHeight: 1 }}
               >
-                📍
+                <Ico.Pin size={18} />
               </button>
               <button
                 onClick={() => setShowSettings(true)}
@@ -6752,13 +6801,8 @@
           <button onPointerDown={e => { e.preventDefault(); savePinRange(); }}
             onClick={() => setPinOpen(true)}
             title="Drop a GPS pin at your position"
-            style={{
-              height: 32, padding: '0 10px', borderRadius: 7, marginLeft: 4,
-              border: `1px solid ${FBC.accent}`, background: FBC.accentPale, cursor: 'pointer',
-              fontSize: 13, fontWeight: 600, color: FBC.heading, flexShrink: 0, whiteSpace: 'nowrap',
-              fontFamily: FBF.ui,
-            }}>
-            📍 Drop GPS pin
+            className="h-8 px-2.5 ml-1 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 bg-fb-accent-pale border border-fb-accent text-fb-heading">
+            <Ico.Pin size={14} /> Drop GPS pin
           </button>
         </div>
         {pinOpen && (
@@ -7007,69 +7051,63 @@
       }
     }
 
-    const fieldCls = 'w-full px-3 py-3 rounded-xl text-base text-fb-text outline-none';
-    const fieldSty = { background: FBC.field, border: `1px solid ${FBC.border}` };
+    const fieldCls = 'w-full px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint';
 
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && phase !== 'recording' && onClose()}>
         <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 32 }}>
-          <div tabIndex={0} className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" style={{ outline: 'none' }} />
-          <h2 className="text-xl font-bold text-fb-text mb-3">🎙 {heading}</h2>
+          <div tabIndex={0} className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4 outline-none" />
+          <h2 className="text-xl font-bold text-fb-ink mb-4">{heading}</h2>
 
-          <div className="rounded-xl px-4 py-4 mb-3 text-center" style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
-            <p className="font-data text-fb-text" style={{ fontSize: 34, lineHeight: 1.1, color: phase === 'recording' ? '#B3261E' : undefined }}>
+          <div className="rounded-xl px-4 py-3 mb-3 text-center bg-fb-page-alt border border-fb-border">
+            <p className={`font-data text-[30px] leading-tight ${phase === 'recording' ? 'text-fb-error' : 'text-fb-ink'}`}>
               {fmtDur(phase === 'recording' ? secs : phase === 'idle' ? 0 : durRef.current)}
             </p>
-            <p className="text-xs text-fb-muted mt-1">
+            <p className="text-xs text-fb-ink-muted mt-1">
               {phase === 'recording' ? `Recording… (max ${VOICE_MAX_SECS / 60} min)`
                 : phase === 'idle' ? 'Tap Record to start'
                 : 'Recorded — play it back, then save'}
             </p>
             {geotag && (
-              <p className="text-xs font-data mt-2" style={{ color: fix ? FBC.heading : FBC.inkFaint }}>
-                {fix ? `📍 ${fbGeo.fmtPosition(fix.lat, fix.lon, crsId)} · ${fbGeo.fmtAcc(fix.acc)}` : '📍 Locating…'}
+              <p className={`text-xs font-data mt-2 flex items-center justify-center gap-1.5 ${fix ? 'text-fb-heading' : 'text-fb-ink-faint'}`}>
+                <Ico.Pin size={14} />
+                <span>{fix ? `${fbGeo.fmtPosition(fix.lat, fix.lon, crsId)} · ${fbGeo.fmtAcc(fix.acc)}` : 'Locating…'}</span>
               </p>
             )}
           </div>
 
-          {err && (
-            <p className="text-sm rounded-xl px-3 py-2.5 mb-3" style={{ background: '#FBE9E7', border: `1px solid ${FBC.errorLine}`, color: '#8A2B1D' }}>{err}</p>
-          )}
+          {err && <Notice tone="error" className="mb-3">{err}</Notice>}
 
           {(phase === 'recorded' || phase === 'saving') && (
             <>
-              <audio controls src={previewUrl || undefined} style={{ width: '100%', marginBottom: 12 }} />
+              <audio controls src={previewUrl || undefined} className="w-full mb-3" />
               <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Title (optional)"
-                className={fieldCls + ' mb-2'} style={fieldSty} maxLength={80} />
+                className={fieldCls + ' mb-2'} maxLength={80} />
               <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder="Description (optional)" rows={2}
-                className={fieldCls + ' mb-3'} style={{ ...fieldSty, resize: 'none' }} />
+                className={fieldCls + ' mb-3 resize-none'} />
             </>
           )}
 
           {phase === 'idle' && (
             <button onClick={start}
-              className="w-full py-4 rounded-xl font-semibold text-base text-white active:opacity-80"
-              style={{ background: '#B3261E' }}>
-              ● Record
+              className="w-full py-3.5 rounded-xl text-base font-semibold text-white bg-fb-error active:opacity-80 flex items-center justify-center gap-2">
+              <Ico.Mic size={18} /> Record
             </button>
           )}
           {phase === 'recording' && (
             <button onClick={stop}
-              className="w-full py-4 rounded-xl font-semibold text-base text-white active:opacity-80"
-              style={{ background: FBC.cover }}>
-              ■ Stop
+              className="w-full py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 flex items-center justify-center gap-2">
+              <span className="w-3 h-3 bg-current" /> Stop
             </button>
           )}
           {(phase === 'recorded' || phase === 'saving') && (
             <div className="flex gap-2">
               <button onClick={() => { setPreviewUrl(null); blobRef.current = null; setPhase('idle'); }} disabled={phase === 'saving'}
-                className="py-3.5 px-5 rounded-xl font-semibold text-sm text-fb-text active:opacity-80"
-                style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
+                className="py-3 px-5 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep">
                 Redo
               </button>
               <button onClick={save} disabled={phase === 'saving'}
-                className="flex-1 py-3.5 rounded-xl font-semibold text-base text-white active:opacity-80"
-                style={{ background: FBC.accent, opacity: phase === 'saving' ? 0.6 : 1 }}>
+                className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
                 {phase === 'saving' ? 'Saving…' : 'Save voice note'}
               </button>
             </div>
@@ -7109,33 +7147,26 @@
     }
 
     return (
-      <div style={compact
-        ? { padding: '6px 0' }
-        : { flexShrink: 0, borderRadius: 16, border: '1px solid #E5E1D8', background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', padding: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div className={compact ? 'py-1.5' : 'flex-shrink-0 rounded-xl p-3 bg-fb-page-alt border border-fb-border'}>
+        <div className="flex items-center gap-2.5">
           <button onClick={toggle} disabled={missing} title={playing ? 'Pause' : 'Play'}
-            style={{ width: 44, height: 44, borderRadius: 22, flexShrink: 0, border: 'none', cursor: 'pointer',
-                     background: missing ? FBC.border : FBC.cover, color: FBC.field, fontSize: 16 }}>
-            {playing ? '❚❚' : '▶'}
+            className="w-11 h-11 rounded-full flex-shrink-0 flex items-center justify-center text-white bg-fb-accent active:opacity-80 disabled:bg-fb-border">
+            {playing ? <Ico.Pause /> : <Ico.Play />}
           </button>
           <input type="text" value={rec.title || ''} onChange={e => onChange({ title: e.target.value })}
             placeholder={compact ? 'Voice memo…' : 'Voice note title…'} maxLength={80}
-            style={{ flex: 1, minWidth: 0, fontFamily: FBF.hand, fontSize: 17, border: 'none',
-                     borderBottom: '1px solid #E5E1D8', background: 'transparent', outline: 'none', color: FBC.ink, padding: '2px 0' }} />
-          <span className="font-data" style={{ fontSize: 13, color: '#6B635C', flexShrink: 0 }}>{fmtDur(rec.dur)}</span>
+            className="flex-1 min-w-0 py-0.5 font-handwritten text-[17px] text-fb-ink bg-transparent border-b border-fb-border outline-none placeholder:text-fb-ink-faint" />
+          <span className="font-data text-[13px] text-fb-ink-muted flex-shrink-0">{fmtDur(rec.dur)}</span>
           <button onClick={onDelete} title="Delete recording"
-            style={{ width: 36, height: 36, borderRadius: 18, flexShrink: 0, border: 'none', background: 'transparent', color: FBC.inkFaint, cursor: 'pointer',
-                     display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            className="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center text-fb-error active:bg-fb-page-deep">
             <Ico.Trash />
           </button>
         </div>
-        {missing && <p style={{ fontSize: 12, color: '#8A2B1D', marginTop: 4 }}>Recording not found on this device.</p>}
+        {missing && <p className="text-xs font-semibold text-fb-error mt-1">Recording not found on this device.</p>}
         {!compact && (
           <textarea value={rec.desc || ''} onChange={e => onChange({ desc: e.target.value })}
             placeholder="Description…" rows={2}
-            style={{ width: '100%', boxSizing: 'border-box', resize: 'none', marginTop: 10, borderRadius: 8,
-                     border: '1px solid #E5E1D8', padding: '8px 10px', fontFamily: FBF.hand, fontSize: 15,
-                     outline: 'none', background: FBC.page, color: FBC.ink }} />
+            className="w-full resize-none mt-2.5 rounded-lg px-2.5 py-2 font-handwritten text-base text-fb-ink bg-fb-page border border-fb-border outline-none placeholder:text-fb-ink-faint" />
         )}
         {children}
       </div>
@@ -7181,34 +7212,33 @@
       onNumber(v);
     }
 
-    const chip = { height: 36, padding: '0 12px', borderRadius: 10, fontSize: 12.5, fontWeight: 600, flexShrink: 0,
-                   border: `1px solid ${FBC.border}`, background: FBC.pageAlt, color: FBC.heading, cursor: 'pointer',
-                   display: 'inline-flex', alignItems: 'center', textDecoration: 'none', whiteSpace: 'nowrap' };
+    const chip = 'h-9 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep';
 
     return (
-      <div style={{ marginTop: 10 }}>
-        <div className="font-data" style={{ fontSize: 13, color: pt ? FBC.ink : FBC.inkFaint }}>📍 {pos}</div>
+      <div className="mt-2.5">
+        <div className="flex items-center gap-2">
+          {pt && <SourceTag source={pt.source} />}
+          <span className={`font-data text-[13px] min-w-0 ${pt ? 'text-fb-ink' : 'text-fb-ink-faint'}`}>{pos}</span>
+        </div>
         {(tag || ht) && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0 10px', marginTop: 2 }}>
-            {tag && <span style={{ fontSize: 11.5, fontWeight: 600, color: linkedElsewhere ? FBC.heading : FBC.warn }}>{tag}</span>}
-            {ht && <span style={{ fontSize: 11.5, color: '#6B635C' }}>{ht}</span>}
+          <div className="flex flex-wrap gap-x-2.5 mt-0.5">
+            {tag && <span className={`text-xs font-semibold ${linkedElsewhere ? 'text-fb-heading' : 'text-fb-warn'}`}>{tag}</span>}
+            {ht && <span className="text-xs text-fb-ink-muted">{ht}</span>}
           </div>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, overflowX: 'auto' }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: FBC.inkFaint, letterSpacing: '0.06em', flexShrink: 0 }}>PT #</span>
+        <div className="flex items-center gap-1.5 mt-2 overflow-x-auto">
+          <span className="font-heading text-[10px] font-semibold tracking-[0.09em] uppercase text-fb-heading flex-shrink-0">Pt #</span>
           <input type="text" inputMode="numeric" value={num} placeholder="—"
             onChange={e => setNum(e.target.value)} onBlur={commit}
             onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
-            className="font-data"
-            style={{ width: 72, height: 36, flexShrink: 0, borderRadius: 10, border: `1px solid ${FBC.border}`,
-                     background: FBC.field, padding: '0 8px', fontSize: 15, outline: 'none', color: FBC.ink }} />
-          <button style={chip} onClick={onLink}>Link…</button>
-          {linkedElsewhere && <button style={chip} onClick={onUnlink}>Unlink</button>}
-          {pt && !pt.rowId && onAddPoint && <button style={chip} onClick={onAddPoint}>＋ Points</button>}
+            className="w-[72px] h-9 flex-shrink-0 rounded-lg px-2 text-base font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint" />
+          <button className={chip} onClick={onLink}><Ico.Link size={14} /> Link…</button>
+          {linkedElsewhere && <button className={chip} onClick={onUnlink}>Unlink</button>}
+          {pt && !pt.rowId && onAddPoint && <button className={chip} onClick={onAddPoint}>＋ Points</button>}
           {!pt && onLocate && (
-            <button style={chip} onClick={onLocate} disabled={locating}>{locating ? 'Locating…' : '📍 Locate'}</button>
+            <button className={chip} onClick={onLocate} disabled={locating}><Ico.Pin size={14} /> {locating ? 'Locating…' : 'Locate'}</button>
           )}
-          {uri && <a href={uri} style={chip}>🗺 Map</a>}
+          {uri && <a href={uri} className={chip}><Ico.Map size={14} /> Map</a>}
         </div>
       </div>
     );
@@ -7225,26 +7255,26 @@
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
         <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 24 }}>
-          <div tabIndex={0} className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" style={{ outline: 'none' }} />
-          <h2 className="text-xl font-bold text-fb-text mb-3">Link to Point</h2>
+          <div tabIndex={0} className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4 outline-none" />
+          <h2 className="text-xl font-bold text-fb-ink mb-4">Link to Point</h2>
           <input type="text" value={q} onChange={e => setQ(e.target.value)} placeholder="Search number or description"
-            className="w-full px-3 py-3 rounded-xl text-base text-fb-text outline-none mb-3"
-            style={{ background: FBC.field, border: `1px solid ${FBC.border}` }} />
-          <div style={{ maxHeight: '45vh', overflowY: 'auto' }} className="space-y-1.5">
+            className="w-full px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint mb-3" />
+          <div className="space-y-1.5 overflow-y-auto" style={{ maxHeight: '45vh' }}>
             {list.length === 0 && (
-              <p className="text-sm text-fb-muted py-6 text-center rounded-xl" style={{ background: FBC.pageAlt }}>
+              <p className="text-sm text-fb-ink-muted py-6 text-center rounded-xl bg-fb-page-alt">
                 {all.length === 0 ? 'No numbered points on this project\'s Points pages yet.' : 'No matching points.'}
               </p>
             )}
             {list.map(p => (
               <button key={p.id} onClick={() => onPick(p)}
-                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left active:opacity-80"
-                style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
-                <span style={{ fontSize: 15, width: 22, textAlign: 'center', flexShrink: 0 }}>{fbGeo.SOURCES[p.source]?.icon}</span>
-                <span className="font-data text-base text-fb-text" style={{ width: 64, flexShrink: 0 }}>{p.number}</span>
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left bg-fb-page-alt border border-fb-border active:opacity-80">
+                <span className="font-data text-base text-fb-ink w-16 flex-shrink-0 truncate">{p.number}</span>
                 <span className="flex-1 min-w-0">
-                  <span className="block text-sm text-fb-text truncate">{p.desc || '—'}</span>
-                  <span className="block text-xs text-fb-muted font-data truncate">
+                  <span className="flex items-center gap-1.5">
+                    <span className="flex-1 min-w-0 text-sm text-fb-ink truncate">{p.desc || '—'}</span>
+                    <SourceTag source={p.source} />
+                  </span>
+                  <span className="block text-xs text-fb-ink-muted font-data truncate">
                     {p.N !== null && p.E !== null ? `N ${p.text.n}  E ${p.text.e}` : 'no coordinates'}
                   </span>
                 </span>
@@ -7658,16 +7688,15 @@
             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                      padding: '12px 0', borderRadius: 14, background: 'transparent', color: FBC.heading,
                      fontWeight: 600, fontSize: 14, border: `2px solid ${FBC.cover}`, cursor: 'pointer' }}>
-            🎙 Voice
+            <Ico.Mic /> Voice
           </button>
         </div>
         {/* Geotag toggle — in-app photos and voice notes take the phone's position */}
         <button onClick={toggleGeotag}
-          style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '6px 16px 10px',
-                   background: 'transparent', border: 'none', borderBottom: '1px solid #E5E1D8', cursor: 'pointer', textAlign: 'left' }}>
-          <span style={{ flex: 1, fontSize: 12.5, color: FBC.inkMuted }}>📍 Tag new photos &amp; voice notes with phone position</span>
-          <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
-                         background: geotag ? FBC.accent : FBC.border, color: geotag ? '#fff' : '#6B635C' }}>
+          className="w-full flex items-center gap-2 px-4 pt-1.5 pb-2.5 text-left border-b border-fb-border">
+          <span className="text-fb-ink-muted flex-shrink-0"><Ico.Pin size={14} /></span>
+          <span className="flex-1 text-xs text-fb-ink-muted">Tag new photos &amp; voice notes with phone position</span>
+          <span className={`text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0 ${geotag ? 'bg-fb-accent text-white' : 'bg-fb-border text-fb-ink'}`}>
             {geotag ? 'ON' : 'OFF'}
           </span>
         </button>
@@ -7725,7 +7754,7 @@
                   onUnlink={() => unlink('photo', ph.id)}
                   onAddPoint={() => adoptPoint('photo', ph.id)} />
                 {(ph.voice || []).length > 0 && (
-                  <div style={{ marginTop: 10, borderTop: '1px solid #E5E1D8', paddingTop: 4 }}>
+                  <div className="mt-2.5 pt-1 border-t border-fb-border">
                     {ph.voice.map(v => (
                       <VoiceCard key={v.id} rec={v} compact
                         onChange={patch => patchMemo(ph.id, v.id, patch)}
@@ -7734,9 +7763,8 @@
                   </div>
                 )}
                 <button onClick={() => setRecorder({ photoId: ph.id })}
-                  style={{ marginTop: 8, height: 36, padding: '0 12px', borderRadius: 10, fontSize: 12.5, fontWeight: 600,
-                           border: `1px solid ${FBC.border}`, background: FBC.pageAlt, color: FBC.heading, cursor: 'pointer' }}>
-                  🎙 Add voice memo
+                  className="mt-2 h-9 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep">
+                  <Ico.Mic size={14} /> Add voice memo
                 </button>
               </div>
             </div>
@@ -9817,7 +9845,7 @@
                   <button onClick={() => { importPointsCSV(); setOpenTbMenu(null); }}>⬆ Import CSV…</button>
                   <div className="dp-drop-sep" />
                   <div className="dp-drop-section">Phone GPS</div>
-                  <button onClick={() => { setGpsOpen(true); setOpenTbMenu(null); }}>📍 GPS point…</button>
+                  <button onClick={() => { setGpsOpen(true); setOpenTbMenu(null); }}><Ico.Pin size={14} /> GPS point…</button>
                 </>
               )}
               {page.type !== 'points' && (
@@ -9884,12 +9912,12 @@
                   <div className="dp-drop-sep" />
                   <div className="dp-drop-section">Location</div>
                   <button disabled={!mapUri} onClick={() => { setOpenTbMenu(null); window.location.href = mapUri; }}>
-                    🗺 Open in Map
+                    <Ico.Map size={14} /> Open in Map
                   </button>
-                  <div style={{ fontSize: 10.5, color: FBC.inkFaint, padding: '0 12px 6px' }}>{mapHint}</div>
+                  <div className="text-[10px] text-fb-ink-faint px-3 pb-1.5">{mapHint}</div>
                   {mediaPage && (
                     <button onClick={() => { setOpenTbMenu(null); navigate(`#/project/${projectId}/page/${mediaPage.id}`); }}>
-                      {fbGeo.SOURCES[rowSrc(mapRow)]?.icon} Go to {rowSrc(mapRow) === 'voice' ? 'voice note' : 'photo'}
+                      {rowSrc(mapRow) === 'voice' ? <Ico.Mic size={14} /> : <Ico.Camera size={14} />} Go to {rowSrc(mapRow) === 'voice' ? 'voice note' : 'photo'}
                     </button>
                   )}
                   <div className="dp-drop-sep" />
@@ -9900,7 +9928,7 @@
                   {Object.keys(fbGeo.SOURCES).filter(k => srcCounts[k]).map(k => (
                     <button key={k} onClick={() => { setSrcFilter(k); setOpenTbMenu(null); }}>
                       <span style={{ width: 14 }}>{srcFilter === k ? '✓' : ''}</span>
-                      {fbGeo.SOURCES[k].icon} {fbGeo.SOURCES[k].label} ({srcCounts[k]})
+                      {fbGeo.SOURCES[k].label} ({srcCounts[k]})
                     </button>
                   ))}
                 </>
@@ -9938,7 +9966,7 @@
             className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0 w-full text-left"
             style={{ background: FBC.pageAlt, border: 'none', borderBottom: `1px solid ${FBC.border}`, cursor: 'pointer' }}>
             <span className="flex-1 text-xs text-fb-text">
-              Showing {srcCounts[srcFilter] || 0} of {rows.length} — {fbGeo.SOURCES[srcFilter]?.icon} {fbGeo.SOURCES[srcFilter]?.label} only
+              Showing {srcCounts[srcFilter] || 0} of {rows.length} — {fbGeo.SOURCES[srcFilter]?.label} only
             </span>
             <span className="text-xs font-semibold" style={{ color: FBC.heading }}>Show all</span>
           </button>
@@ -10128,8 +10156,10 @@
                     onDragEnd={handleRowDragEnd}
                     onDragLeave={() => { if (dragOverRow === ri) setDragOverRow(null); }}
                     title={row.geo ? `${fbGeo.SOURCES[row.geo.source]?.label || 'GPS point'} · ${fbGeo.fmtAcc(row.geo.acc)}` : 'Drag to reorder row'}
-                    style={row.geo ? { background: FBC.warnPale, fontSize: 11 } : undefined}>
-                    {row.geo ? (fbGeo.SOURCES[row.geo.source]?.icon || '📍') : ri + 1}
+                    style={row.geo ? { background: FBC.warnPale } : undefined}>
+                    {row.geo
+                      ? <div className="flex justify-center text-fb-heading">{React.createElement(SOURCE_ICO[row.geo.source] || Ico.Pin, { size: 13 })}</div>
+                      : ri + 1}
                   </td>
                   {columns.map((col, ci) => {
                     const isActive = activeCell && activeCell.rowIdx === ri && activeCell.colIdx === ci;
@@ -10841,10 +10871,11 @@
               placeholder="NAD83(CSRS), UTM Zone 20N / CGVD2013"
               className={inClass} />
             {!fbGeo.datumMatchesCrs(form.datum, projCrs.id) && (
-              <div className="flex items-center gap-2 mt-1.5 px-2.5 py-2 rounded-lg" style={{ background: FBC.warnPale, border: `1px solid ${FBC.warnLine}` }}>
-                <span className="flex-1 text-xs text-fb-text leading-snug">⚠ Project coordinate system is <b>{projCrs.short}</b> — this text doesn't match.</span>
+              <div className="flex items-center gap-2 mt-1.5 px-3 py-2 rounded-xl bg-fb-warn-pale border border-fb-warn-line">
+                <span className="text-fb-warn flex-shrink-0"><Ico.Warn /></span>
+                <span className="flex-1 text-xs text-fb-ink leading-snug">Project coordinate system is <b>{projCrs.short}</b> — this text doesn't match.</span>
                 <button onClick={() => handleChange('datum', projCrs.datumText)}
-                  className="text-xs font-semibold px-3 py-2 rounded-lg text-white flex-shrink-0" style={{ background: FBC.accent }}>
+                  className="text-xs font-semibold px-3 py-2 rounded-lg text-white bg-fb-accent active:opacity-80 flex-shrink-0">
                   Update
                 </button>
               </div>

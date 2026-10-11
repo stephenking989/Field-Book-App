@@ -226,12 +226,13 @@
   //          pageId, pageType, pageTitle }
   //   N/E/Z are numbers or null. lat/lon are null when the project is Local
   //   (instrument points) — phone-sourced entries always keep their lat/lon.
+  // `tag` is the short marker the UI draws as a badge (see SourceTag in index.html).
   const SOURCES = {
-    'instrument': { label: 'Entered', icon: '◎' },
-    'gps':        { label: 'GPS point',   icon: '📍' },
-    'notes-pin':  { label: 'Notes pin',   icon: '📝' },
-    'photo':      { label: 'Photo',       icon: '📷' },
-    'voice':      { label: 'Voice note',  icon: '🎙' },
+    'instrument': { label: 'Entered',     tag: 'INST' },
+    'gps':        { label: 'GPS point',   tag: 'GPS' },
+    'notes-pin':  { label: 'Notes pin',   tag: 'NOTE' },
+    'photo':      { label: 'Photo',       tag: 'PHOTO' },
+    'voice':      { label: 'Voice note',  tag: 'VOICE' },
   };
 
   function num(v) {
@@ -275,7 +276,7 @@
     const n = String(c.col_north ?? '').trim(), e = String(c.col_east ?? '').trim();
     const pos = (n && e) ? `N ${n}  E ${e}` : fmtLatLon(g.lat, g.lon);
     const desc = String(c.col_desc ?? '').trim();
-    return `📍 Pt ${String(c.col_ptnum ?? '').trim()}${desc ? ' ' + desc : ''} · ${pos} · ${fmtAcc(g.acc)}`;
+    return `Pt ${String(c.col_ptnum ?? '').trim()}${desc ? ' ' + desc : ''} · ${pos} · ${fmtAcc(g.acc)}`;
   }
 
   // Rewrite every GPS pin chip in a note's HTML from its point row, so the
