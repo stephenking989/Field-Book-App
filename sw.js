@@ -4,7 +4,7 @@
 // Bump this string every time you deploy new code.
 // The activate handler deletes any cache with a different name, forcing
 // browsers and installed PWAs to discard stale files and re-fetch everything.
-const CACHE_NAME = 'fieldbook-v1.167';
+const CACHE_NAME = 'fieldbook-v1.168';
 
 // Core app shell files to pre-cache on install
 const APP_SHELL = [
@@ -19,10 +19,27 @@ const APP_SHELL = [
 ];
 
 // ─── Install ─────────────────────────────────────────────────────────────────
+// Every shell file is fetched fresh, past the browser's HTTP cache and the
+// GitHub Pages CDN — both keep files for 10 minutes. cache.addAll() reads
+// through them, so a phone that updated just after a deploy could store the
+// PREVIOUS version's index.html under the new cache name; cache-first then
+// served that stale copy until the next bump, however often the app was
+// restarted. The ?v= query makes each version's files a URL nothing has cached.
+function fetchFresh(url) {
+  return fetch(`${url}?v=${CACHE_NAME}`, { cache: 'reload' }).then((response) => {
+    if (!response.ok) throw new Error(`${url} → HTTP ${response.status}`);
+    return response;
+  });
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(APP_SHELL);
+    // Fetch everything first so a failed download leaves nothing half-written;
+    // a failed install is simply retried the next time the app is opened.
+    Promise.all(APP_SHELL.map(fetchFresh)).then((responses) => {
+      return caches.open(CACHE_NAME).then((cache) => {
+        return Promise.all(APP_SHELL.map((url, i) => cache.put(url, responses[i])));
+      });
     })
   );
   // Take control immediately without waiting for old SW to die
