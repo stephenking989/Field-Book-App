@@ -214,15 +214,17 @@
   //   'instrument'  Points-page row typed / imported / placed on a sketch
   //   'gps'         Points-page row captured with phone GPS
   //   'notes-pin'   Points-page row dropped from a Notes page
-  //   'photo'       position of a photo on a Photos page
-  //   'voice'       position of a voice note (standalone or attached to a photo)
+  //   'photo'       Points-page row created for a geotagged photo
+  //   'voice'       Points-page row created for a geotagged voice note
+  // Every phone-sourced position is a real Points-page row, so it is numbered,
+  // listed, exportable and placeable on a sketch like any other point.
   //
   // Entry: { id, number, N, E, Z, desc, lat, lon, source, phone, acc, ts,
   //          pageId, pageType, pageTitle }
   //   N/E/Z are numbers or null. lat/lon are null when the project is Local
   //   (instrument points) — phone-sourced entries always keep their lat/lon.
   const SOURCES = {
-    'instrument': { label: 'Points page', icon: '◎' },
+    'instrument': { label: 'Entered', icon: '◎' },
     'gps':        { label: 'GPS point',   icon: '📍' },
     'notes-pin':  { label: 'Notes pin',   icon: '📝' },
     'photo':      { label: 'Photo',       icon: '📷' },
@@ -258,7 +260,8 @@
       lat: ll ? ll.lat : null, lon: ll ? ll.lon : null,
       source: geo ? (geo.source || 'gps') : 'instrument',
       phone: !!geo, acc: geo ? (geo.acc ?? null) : null, ts: geo ? (geo.ts || null) : null,
-      refPageId: geo ? (geo.notePageId || null) : null,
+      refPageId: geo ? (geo.notePageId || geo.mediaPageId || null) : null,
+      mediaId: geo ? (geo.mediaId || null) : null,
     };
   }
 
@@ -313,69 +316,84 @@
     return out;
   }
 
-  // A media record (photo / standalone voice note) as a point, or null when it
-  // has no position. A record whose point number matches a Points-page row is
-  // LINKED to that point and takes the point's coordinates (matching by number
-  // survives import/duplicate, where row ids are regenerated). Otherwise it is
-  // its own point at the phone position it was captured with.
-  //   rows — optional pre-built rowPoints(project), to avoid rebuilding per record
+  // The Points-page point a media record (photo / voice note) belongs to:
+  //   1. a link the user made to some OTHER point — rec.ptId, with rec.ptNum
+  //      as a fallback because row ids are regenerated on project import; or
+  //   2. the record's OWN point — the row created for it when it was
+  //      geotagged, found through row.geo.mediaId === rec.id.
+  // `rows` is rowPoints(project).
+  function mediaRow(rec, rows) {
+    if (!rec) return null;
+    if (rec.ptId || rec.ptNum) {
+      const num = String(rec.ptNum ?? '').trim();
+      const hit = rows.find(r => r.id === rec.ptId) || (num ? rows.find(r => r.number === num) : null);
+      if (hit) return hit;
+    }
+    return rows.find(r => r.mediaId === rec.id) || null;
+  }
+
+  // A media record as a point, or null when it has no position at all.
+  //   rowId — the Points-page row it resolves to (null = not on the Points
+  //           page yet; it is then described from its own phone position)
+  //   own   — true when that row is the record's own point
   function mediaPoint(rec, project, source, rows) {
     if (!rec) return null;
-    const number = String(rec.ptNum ?? '').trim();
-    const link = number ? (rows || rowPoints(project)).find(r => r.number === number) : null;
+    const link = mediaRow(rec, rows || rowPoints(project));
     const geo = (rec.geo && fin(rec.geo.lat) && fin(rec.geo.lon)) ? rec.geo : null;
-    if (!link && !geo) return null;
-    const desc = rec.title || rec.note || rec.desc || '';
-    if (link) {
-      return {
-        id: rec.id, number, N: link.N, E: link.E, Z: link.Z, text: link.text,
-        desc: desc || link.desc, lat: link.lat, lon: link.lon,
-        source, phone: link.phone, acc: link.acc, ts: (geo && geo.ts) || rec.createdAt || link.ts,
-        linkedRowId: link.id, linkedDesc: link.desc,
-      };
-    }
+    if (link) return { ...link, rowId: link.id, own: link.mediaId === rec.id, from: geo ? (geo.from || 'device') : null };
+    if (!geo) return null;
     const g = toGrid(geo.lat, geo.lon, projectCrsId(project));
     const Z = (project.gpsUseZ && fin(geo.H)) ? geo.H : null;
     return {
-      id: rec.id, number,
+      id: rec.id, number: '',
       N: g ? g.n : null, E: g ? g.e : null, Z,
       text: { n: g ? fmtGrid(g.n) : '', e: g ? fmtGrid(g.e) : '', z: Z !== null ? fmtElev(Z) : '' },
-      desc, lat: geo.lat, lon: geo.lon,
+      desc: rec.title || rec.note || rec.desc || '',
+      lat: geo.lat, lon: geo.lon,
       source, phone: true, acc: geo.acc ?? null, ts: geo.ts || rec.createdAt || null,
-      from: geo.from || 'device', linkedRowId: null,
+      from: geo.from || 'device', rowId: null, own: false, mediaId: null,
     };
   }
 
+  // Every point in the project. Points-page rows come first; each carries
+  // hasPhoto / hasVoice when a photo or voice note belongs to it. A geotagged
+  // media record that has no row yet (page not opened since it was copied in)
+  // is appended as its own entry so nothing with a position is ever missed.
   function getProjectPoints(project) {
     if (!project) return [];
     const rows = rowPoints(project);
     const out = rows.slice();
+    const byId = {};
+    out.forEach(r => { byId[r.id] = r; });
     (project.pages || []).forEach(pg => {
       if (pg.type !== 'photo') return;
-      const push = (rec, source, fallback) => {
+      const take = (rec, source, flag, fallback) => {
         const pt = mediaPoint(rec, project, source, rows);
-        if (pt) out.push({ ...pt, desc: pt.desc || fallback, pageId: pg.id, pageType: pg.type, pageTitle: pg.title || '' });
+        if (!pt) return;
+        if (pt.rowId) { byId[pt.rowId][flag] = true; return; }
+        if (rec.noPoint) return;   // its point was deleted on the Points page
+        out.push({ ...pt, desc: pt.desc || fallback, pageId: pg.id, pageType: pg.type, pageTitle: pg.title || '' });
       };
-      // Voice memos attached to a photo belong to that photo — they are not
-      // points of their own.
-      (pg.photos || []).forEach(ph => push(ph, 'photo', 'Photo'));
-      (pg.voiceNotes || []).forEach(v => push(v, 'voice', 'Voice note'));
+      // Voice memos attached to a photo belong to that photo — not points.
+      (pg.photos || []).forEach(ph => take(ph, 'photo', 'hasPhoto', 'Photo'));
+      (pg.voiceNotes || []).forEach(v => take(v, 'voice', 'hasVoice', 'Voice note'));
     });
     return out;
   }
 
-  // How many records (point rows + photos + voice notes) carry each number.
+  // How many Points-page rows carry each number.
   function pointNumberCounts(project) {
     const counts = {};
-    const add = v => { const n = String(v ?? '').trim(); if (n) counts[n] = (counts[n] || 0) + 1; };
     (project && project.pages || []).forEach(pg => {
-      if (pg.type === 'points') (pg.rows || []).forEach(r => add(r.cells?.col_ptnum));
-      (pg.photos || []).forEach(ph => ph && add(ph.ptNum));
-      (pg.voiceNotes || []).forEach(v => v && add(v.ptNum));
+      if (pg.type !== 'points') return;
+      (pg.rows || []).forEach(r => {
+        const n = String(r.cells?.col_ptnum ?? '').trim();
+        if (n) counts[n] = (counts[n] || 0) + 1;
+      });
     });
     return counts;
   }
-  // Every point number in use anywhere in the project (as trimmed strings).
+  // Every point number in use in the project (as trimmed strings).
   function usedPointNumbers(project) {
     return new Set(Object.keys(pointNumberCounts(project)));
   }
@@ -586,7 +604,7 @@
     toLatLon, toGrid, geoidN, orthoHeight,
     fmtGrid, fmtElev, fmtAcc, fmtLatLon, fmtPosition, geoUri,
     makeGeo, gpsCells,
-    rowPoint, rowPoints, mediaPoint, pinText, refreshPins,
+    rowPoint, rowPoints, mediaRow, mediaPoint, pinText, refreshPins,
     getProjectPoints, pointNumberCounts, usedPointNumbers, gpsPtStart, nextGpsPtNum,
     crsChangeSummary, applyCrsChange, datumMatchesCrs,
     parseRange, inRanges,

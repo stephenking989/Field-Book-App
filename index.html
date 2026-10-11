@@ -615,7 +615,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.163';
+  const APP_VERSION = '1.164';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1769,7 +1769,7 @@
   // DATA MANAGEMENT MODAL
   // ─────────────────────────────────────────────────────────────────────────────
 
-  function DataManagementModal({ onClose }) {
+  function DataManagementModal({ onClose, onImportProject }) {
     const toast = useToast();
     const trapRef = useRef(null);
     const fileInputRef = useRef(null);
@@ -1912,6 +1912,15 @@
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {onImportProject && (
+              <button onClick={onImportProject} style={btnStyle}>
+                <span style={{ fontSize: 22 }}>📂</span>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: '#1A1A1A' }}>Import Project</div>
+                  <div style={{ fontSize: 12, color: '#5A5248', marginTop: 1 }}>Add one project from a .fieldbook file — nothing is overwritten</div>
+                </div>
+              </button>
+            )}
             <button onClick={exportBackup} style={btnStyle}>
               <span style={{ fontSize: 22 }}>⬇</span>
               <div>
@@ -2170,13 +2179,15 @@
       cloned.shapes = cloned.shapes.map(s => ({ ...s, id: uid() }));
     }
     if (Array.isArray(cloned.photos)) {
-      cloned.photos = cloned.photos.map(ph => ({
+      // ptId / ptNum link a record to a point in the SOURCE project; the copy
+      // gets its own point when its page is first opened (ensureMediaPoints).
+      cloned.photos = cloned.photos.map(({ ptId, ptNum, noPoint, ...ph }) => ({
         ...ph, id: uid(),
         ...(Array.isArray(ph.voice) ? { voice: ph.voice.map(v => ({ ...v, id: uid() })) } : {}),
       }));
     }
     if (Array.isArray(cloned.voiceNotes)) {
-      cloned.voiceNotes = cloned.voiceNotes.map(v => ({ ...v, id: uid() }));
+      cloned.voiceNotes = cloned.voiceNotes.map(({ ptId, ptNum, noPoint, ...v }) => ({ ...v, id: uid() }));
     }
     return cloned;
   }
@@ -2455,6 +2466,69 @@
     const row = makeGpsRow(project, point);
     addPointRow(projectId, row);
     return row;
+  }
+
+  // Give a geotagged photo / voice note its OWN numbered point on the Points
+  // page (source 'photo' | 'voice') so it is listed, exported and placeable on
+  // a sketch like any other point. The row carries the media's position and
+  // points back at it through geo.mediaId. Returns the row.
+  function createMediaPoint(projectId, pageId, kind, rec, number) {
+    const project = DB.getProject(projectId);
+    if (!project || !rec || !rec.geo) return null;
+    return addGpsPointRow(projectId, {
+      number: String(number || '').trim() || String(fbGeo.nextGpsPtNum(project)),
+      desc: kind === 'voice' ? (rec.title ? `Voice: ${rec.title}` : 'Voice note') : 'Photo',
+      geo: { ...rec.geo, source: kind, mediaId: rec.id, mediaPageId: pageId },
+    });
+  }
+
+  // A media record is gone, or was linked to another point: drop its own
+  // point too — unless that point has been placed on a sketch, in which case
+  // it stays behind as an ordinary GPS point.
+  function removeMediaPoint(projectId, mediaId) {
+    const project = DB.getProject(projectId);
+    if (!project) return;
+    for (const pg of project.pages) {
+      if (pg.type !== 'points') continue;
+      const row = (pg.rows || []).find(r => r.geo && r.geo.mediaId === mediaId);
+      if (!row) continue;
+      const onSketch = project.pages.some(sp => sp.type === 'sketch' &&
+        (sp.shapes || []).some(sh => sh.type === 'point' && sh.pointId === row.id));
+      if (onSketch) {
+        const { mediaId: _m, mediaPageId: _p, ...geo } = row.geo;
+        DB.updatePage(projectId, pg.id, { rows: pg.rows.map(r => r.id === row.id ? { ...r, geo: { ...geo, source: 'gps' } } : r) });
+      } else {
+        DB.updatePage(projectId, pg.id, { rows: pg.rows.filter(r => r.id !== row.id) });
+      }
+      return;
+    }
+  }
+
+  // Lazy migration for a Photos page: every geotagged photo / voice note that
+  // doesn't resolve to a point yet (taken before points were created for
+  // media, or copied in from another project) gets its own. Records whose
+  // point the user deleted on the Points page (`noPoint`) are left alone.
+  // Returns true when the page was changed.
+  function ensureMediaPoints(projectId, pageId) {
+    const page = DB.getPage(projectId, pageId);
+    if (!page) return false;
+    let changed = false;
+    const fix = (kind, rec) => {
+      if (!rec || !rec.geo || rec.noPoint) return rec;
+      const rows = fbGeo.rowPoints(DB.getProject(projectId));
+      if (fbGeo.mediaRow(rec, rows)) return rec;
+      // A number typed under the old scheme that isn't a point yet becomes
+      // this record's own point number.
+      const want = String(rec.ptNum ?? '').trim();
+      createMediaPoint(projectId, pageId, kind, rec, (want && !rows.some(r => r.number === want)) ? want : '');
+      changed = true;
+      const { ptNum, ptId, ...rest } = rec;
+      return rest;
+    };
+    const photos = (page.photos || []).map(ph => fix('photo', ph));
+    const voiceNotes = (page.voiceNotes || []).map(v => fix('voice', v));
+    if (changed) DB.updatePage(projectId, pageId, { photos, ...(page.voiceNotes ? { voiceNotes } : {}) });
+    return changed;
   }
 
   // Bottom sheet that records an averaged phone-GPS fix. Pure UI: it hands
@@ -3065,12 +3139,19 @@
         <div className="flex-1 overflow-y-auto flex flex-col" style={{ background: '#F4F0E8' }}>
           <div className="flex-1">
             {projects.length === 0
-              ? <EmptyState onNew={() => setShowNew(true)} />
+              ? <EmptyState onNew={() => setShowNew(true)} onImport={() => importInputRef.current && importInputRef.current.click()} />
               : (
                 <div className="p-4 space-y-3 screen-enter">
-                  <p className="text-xs font-semibold text-fb-muted uppercase tracking-widest px-1 pt-1">
-                    {active.length} Project{active.length !== 1 ? 's' : ''}
-                  </p>
+                  <div className="flex items-center justify-between px-1 pt-1">
+                    <p className="text-xs font-semibold text-fb-muted uppercase tracking-widest">
+                      {active.length} Project{active.length !== 1 ? 's' : ''}
+                    </p>
+                    <button onClick={() => importInputRef.current && importInputRef.current.click()}
+                      className="text-xs font-semibold px-3 py-2 rounded-lg active:opacity-70"
+                      style={{ background: '#EBE5D5', border: '1px solid #CEC5B0', color: '#3C5445' }}>
+                      ↓ Import Project
+                    </button>
+                  </div>
                   {active.length === 0 && (
                     <p className="text-sm text-fb-muted text-center py-6">No active projects.</p>
                   )}
@@ -3110,7 +3191,10 @@
         />
 
         {showNew && <NewProjectModal onClose={() => setShowNew(false)} onCreate={handleCreate} />}
-        {showDataMgr && <DataManagementModal onClose={() => setShowDataMgr(false)} />}
+        {showDataMgr && (
+          <DataManagementModal onClose={() => setShowDataMgr(false)}
+            onImportProject={() => { setShowDataMgr(false); importInputRef.current && importInputRef.current.click(); }} />
+        )}
         {pendingImport && (
           <ImportProjectModal
             fileData={pendingImport}
@@ -3249,7 +3333,7 @@
     );
   }
 
-  function EmptyState({ onNew }) {
+  function EmptyState({ onNew, onImport }) {
     return (
       <div className="flex flex-col items-center justify-center h-full px-8 py-20 text-center screen-enter">
         <div className="w-20 h-20 rounded-3xl bg-fb-dark flex items-center justify-center mb-6 shadow-xl">
@@ -3264,6 +3348,13 @@
           style={{ background: '#4E7864' }}>
           <Ico.Plus /> New Project
         </button>
+        {onImport && (
+          <button onClick={onImport}
+            className="mt-3 px-6 py-3 rounded-2xl font-semibold text-sm active:opacity-70"
+            style={{ background: '#EBE5D5', border: '1px solid #CEC5B0', color: '#3C5445' }}>
+            ↓ Import Project (.fieldbook)
+          </button>
+        )}
       </div>
     );
   }
@@ -4313,47 +4404,8 @@
           // ── PHOTOS PAGE — 2×2 grid ──────────────────────────────────────────
           const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
           const pagePhotos = page.photos || [];
-          if (pagePhotos.length === 0) {
-            pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
-            pdf.text('(No photos)', W/2, contentY + 20, { align: 'center' });
-          } else {
-            const urls = await resolvePhotoUrls(pagePhotos);
-            const colGap = 6, rowGap = 8;
-            const cellW = (W - margin * 2 - colGap) / 2;
-            const maxImgH = 62, captH = 10;
-            const cellH = maxImgH + captH;
-            let pi = 0, isFirstPage = true;
-            while (pi < pagePhotos.length) {
-              if (!isFirstPage) pdf.addPage();
-              isFirstPage = false;
-              let py = contentY + 4;
-              for (let row = 0; row < 2 && pi < pagePhotos.length; row++) {
-                for (let col = 0; col < 2 && pi < pagePhotos.length; col++) {
-                  const ph = pagePhotos[pi++];
-                  const url = urls[ph.id];
-                  const cx = margin + col * (cellW + colGap);
-                  if (url) {
-                    try {
-                      const tmp = new Image();
-                      await new Promise(res => { tmp.onload = res; tmp.onerror = res; tmp.src = url; });
-                      const aspect = (tmp.naturalWidth || 4) / (tmp.naturalHeight || 3);
-                      let imgW = cellW, imgH = imgW / aspect;
-                      if (imgH > maxImgH) { imgH = maxImgH; imgW = imgH * aspect; }
-                      pdf.addImage(url, 'JPEG', cx + (cellW - imgW) / 2, py, imgW, imgH);
-                    } catch { /* skip unloadable */ }
-                  }
-                  if (ph.note?.trim()) {
-                    pdf.setFontSize(7.5); pdf.setTextColor(60, 60, 60);
-                    const captLines = pdf.splitTextToSize(ph.note.trim(), cellW).slice(0, 2);
-                    captLines.forEach((ln, li) => {
-                      pdf.text(ln, cx + cellW / 2, py + maxImgH + 4 + li * 4.5, { align: 'center' });
-                    });
-                  }
-                }
-                py += cellH + rowGap;
-              }
-            }
-          }
+          const urls = await resolvePhotoUrls(pagePhotos);
+          await _pdfPhotoPageBody(pdf, page, pagePhotos, urls, proj, W, H, margin, contentY);
 
         } else if (page.type === 'notes') {
           // ── NOTES PAGE ──────────────────────────────────────────────────────────
@@ -6356,11 +6408,13 @@
     // ── GPS pin — a geotagged point reference dropped into the note ──
     // The point itself is a Points-page row (source 'notes-pin'); the note
     // holds a non-editable chip that names it.
-    function openPin() {
+    // The caret position is saved on pointer-down (before the editor can lose
+    // it); the sheet opens on the click. Opening it on pointer-down put the
+    // sheet's backdrop under the finger, so the same tap closed it again.
+    function savePinRange() {
       const sel = window.getSelection();
       const inEditor = sel && sel.rangeCount && editorRef.current?.contains(sel.anchorNode);
       pinRangeRef.current = inEditor ? sel.getRangeAt(0).cloneRange() : null;
-      setPinOpen(true);
     }
 
     function insertPin(pt) {
@@ -6421,7 +6475,8 @@
               {btn.label}
             </button>
           ))}
-          <button onPointerDown={e => { e.preventDefault(); openPin(); }}
+          <button onPointerDown={e => { e.preventDefault(); savePinRange(); }}
+            onClick={() => setPinOpen(true)}
             title="Drop a GPS pin at your position"
             style={{
               height: 32, padding: '0 10px', borderRadius: 7, marginLeft: 4,
@@ -6533,21 +6588,27 @@
   }
 
   // GPS position written into an uploaded photo by the camera that took it.
-  // Returns a `geo` block or null. EXIF altitude is ignored — cameras disagree
-  // on whether it is ellipsoidal or sea-level, so it can't be reduced honestly.
+  // Returns a `geo` block or null. EXIF altitude is treated like the phone's
+  // own GPS height — ellipsoidal, reduced with the geoid (H = h − N). That is
+  // what Android cameras write; a camera that writes sea-level height instead
+  // would come out about 20 m high in Nova Scotia. Either way it is ±5–15 m.
   async function readExifGeo(file) {
     if (!window.exifr) return null;
     try {
-      const pos = await window.exifr.gps(file);
-      if (!pos || !isFinite(pos.latitude) || !isFinite(pos.longitude)) return null;
-      if (pos.latitude === 0 && pos.longitude === 0) return null;   // unset tags
-      let acc = null, ts = null;
-      try {
-        const x = await window.exifr.parse(file, ['GPSHPositioningError', 'DateTimeOriginal']);
-        if (x && isFinite(x.GPSHPositioningError)) acc = Number(x.GPSHPositioningError);
-        if (x && x.DateTimeOriginal instanceof Date && !isNaN(x.DateTimeOriginal)) ts = x.DateTimeOriginal.toISOString();
-      } catch {}
-      return { ...fbGeo.makeGeo({ lat: pos.latitude, lon: pos.longitude, h: null, acc, ts }, 'photo'), from: 'exif' };
+      // One pass over the GPS block (+ capture time). The options-object form
+      // is required — the lite build throws on a plain tag-name array.
+      const x = await window.exifr.parse(file, { ifd0: false, gps: true, exif: ['DateTimeOriginal'] });
+      if (!x || !isFinite(x.latitude) || !isFinite(x.longitude)) return null;
+      if (x.latitude === 0 && x.longitude === 0) return null;   // unset tags
+      let acc = null, ts = null, h = null;
+      if (typeof x.GPSHPositioningError === 'number' && isFinite(x.GPSHPositioningError)) acc = x.GPSHPositioningError;
+      if (typeof x.GPSAltitude === 'number' && isFinite(x.GPSAltitude)) {
+        const ref = x.GPSAltitudeRef;                      // 1 = below the reference surface
+        const below = ref === 1 || (ref && ref[0] === 1);
+        h = below ? -x.GPSAltitude : x.GPSAltitude;
+      }
+      if (x.DateTimeOriginal instanceof Date && !isNaN(x.DateTimeOriginal)) ts = x.DateTimeOriginal.toISOString();
+      return { ...fbGeo.makeGeo({ lat: x.latitude, lon: x.longitude, h, acc, ts }, 'photo'), from: 'exif' };
     } catch { return null; }
   }
 
@@ -6807,28 +6868,43 @@
     );
   }
 
-  // Position + point-number row under a photo or voice note.
-  //   rec.geo   — phone position (device fix or photo EXIF), if any
-  //   rec.ptNum — optional point number; if it matches a Points-page point the
-  //               record is linked to that point and shows the point's coordinates
-  function MediaGeoRow({ rec, source, project, locating, onChange, onLocate, onLink }) {
-    const crsId = fbGeo.projectCrsId(project);
-    const pt = fbGeo.mediaPoint(rec, project, source);
-    const num = String(rec.ptNum ?? '').trim();
-    const dup = !!num && !(pt && pt.linkedRowId) && (fbGeo.pointNumberCounts(project)[num] || 0) > 1;
+  // Position + point row under a photo or voice note. A geotagged record owns
+  // a numbered point on the Points page (so it is listed, exported and can be
+  // placed on a sketch); "Link…" attaches it to a different existing point
+  // instead — the monument in the photo, say.
+  //   onNumber(v) — Pt # typed: an existing number links, a new one renumbers
+  function MediaGeoRow({ rec, source, project, locating, onNumber, onLink, onUnlink, onLocate, onAddPoint }) {
+    const pt  = fbGeo.mediaPoint(rec, project, source);
+    const geo = rec.geo || null;
+    const number = pt ? pt.number : '';
+    const [num, setNum] = useState(number);
+    useEffect(() => { setNum(number); }, [number, rec.id]);
+    const linkedElsewhere = !!(pt && pt.rowId && !pt.own);
     const uri = pt && pt.lat !== null ? fbGeo.geoUri(pt.lat, pt.lon, [pt.number, pt.desc].filter(Boolean).join(' ')) : null;
 
-    let line, tag = null;
-    if (pt && pt.linkedRowId) {
-      line = (pt.N !== null && pt.E !== null) ? `N ${pt.text.n}  E ${pt.text.e}` : 'Point has no coordinates yet';
-      tag = `Linked to Pt ${pt.number}${pt.linkedDesc ? ' — ' + pt.linkedDesc : ''}`;
-    } else if (pt) {
-      line = fbGeo.fmtPosition(pt.lat, pt.lon, crsId);
-      tag = pt.from === 'exif'
-        ? (pt.acc !== null ? `±${Math.round(pt.acc)} m · photo EXIF GPS` : 'photo EXIF GPS')
-        : fbGeo.fmtAcc(pt.acc);
+    let pos, tag = null;
+    if (pt) {
+      pos = (pt.N !== null && pt.E !== null) ? `N ${pt.text.n}  E ${pt.text.e}${pt.text.z ? '  Z ' + pt.text.z : ''}`
+          : pt.lat !== null ? fbGeo.fmtLatLon(pt.lat, pt.lon)
+          : 'Point has no coordinates yet';
+      tag = linkedElsewhere ? `Linked to Pt ${pt.number}${pt.desc ? ' — ' + pt.desc : ''}`
+          : pt.from === 'exif' ? (pt.acc !== null ? `±${Math.round(pt.acc)} m · photo EXIF GPS` : 'photo EXIF GPS')
+          : fbGeo.fmtAcc(pt.acc);
     } else {
-      line = locating ? 'Locating…' : 'No position';
+      pos = locating ? 'Locating…' : 'No position';
+    }
+    // Phone height is always shown when there is one. Whether it is written to
+    // the point's Z is the project's "Fill Z from phone height" setting.
+    const ht = (!linkedElsewhere && geo && typeof geo.h === 'number')
+      ? (typeof geo.H === 'number'
+          ? `H ${fbGeo.fmtElev(geo.H)} m  (phone ht ${fbGeo.fmtElev(geo.h)} m − geoid ${geo.N.toFixed(1)} m)`
+          : `Ellipsoid ht ${fbGeo.fmtElev(geo.h)} m (phone)`)
+      : null;
+
+    function commit() {
+      const v = num.trim();
+      if (!v || v === number) { setNum(number); return; }
+      onNumber(v);
     }
 
     const chip = { height: 36, padding: '0 12px', borderRadius: 10, fontSize: 12.5, fontWeight: 600, flexShrink: 0,
@@ -6837,28 +6913,29 @@
 
     return (
       <div style={{ marginTop: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '2px 10px' }}>
-          <span className="font-data" style={{ fontSize: 13, color: pt ? '#1A1A1A' : '#9A908A' }}>📍 {line}</span>
-          {tag && <span style={{ fontSize: 11.5, fontWeight: 600, color: pt.linkedRowId ? '#3C5445' : '#9A5B00' }}>{tag}</span>}
-        </div>
+        <div className="font-data" style={{ fontSize: 13, color: pt ? '#1A1A1A' : '#9A908A' }}>📍 {pos}</div>
+        {(tag || ht) && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0 10px', marginTop: 2 }}>
+            {tag && <span style={{ fontSize: 11.5, fontWeight: 600, color: linkedElsewhere ? '#3C5445' : '#9A5B00' }}>{tag}</span>}
+            {ht && <span style={{ fontSize: 11.5, color: '#6B635C' }}>{ht}</span>}
+          </div>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, overflowX: 'auto' }}>
-          <input type="text" inputMode="numeric" value={rec.ptNum || ''} placeholder="Pt #"
-            onChange={e => onChange({ ptNum: e.target.value })}
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#9A908A', letterSpacing: '0.06em', flexShrink: 0 }}>PT #</span>
+          <input type="text" inputMode="numeric" value={num} placeholder="—"
+            onChange={e => setNum(e.target.value)} onBlur={commit}
+            onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
             className="font-data"
-            style={{ width: 76, height: 36, flexShrink: 0, borderRadius: 10, border: `1px solid ${dup ? '#D9A441' : '#CEC5B0'}`,
+            style={{ width: 72, height: 36, flexShrink: 0, borderRadius: 10, border: '1px solid #CEC5B0',
                      background: '#FDFAF4', padding: '0 8px', fontSize: 15, outline: 'none', color: '#1A1A1A' }} />
-          {!num && pt && (
-            <button style={chip} onClick={() => onChange({ ptNum: String(fbGeo.nextGpsPtNum(project)) })}>
-              # {fbGeo.nextGpsPtNum(project)}
-            </button>
-          )}
           <button style={chip} onClick={onLink}>Link…</button>
-          {!rec.geo && !(pt && pt.linkedRowId) && onLocate && (
+          {linkedElsewhere && <button style={chip} onClick={onUnlink}>Unlink</button>}
+          {pt && !pt.rowId && onAddPoint && <button style={chip} onClick={onAddPoint}>＋ Points</button>}
+          {!pt && onLocate && (
             <button style={chip} onClick={onLocate} disabled={locating}>{locating ? 'Locating…' : '📍 Locate'}</button>
           )}
           {uri && <a href={uri} style={chip}>🗺 Map</a>}
         </div>
-        {dup && <p style={{ fontSize: 11.5, fontWeight: 600, color: '#9A5B00', marginTop: 4 }}>⚠ Point {num} is used more than once.</p>}
       </div>
     );
   }
@@ -6886,7 +6963,7 @@
               </p>
             )}
             {list.map(p => (
-              <button key={p.id} onClick={() => onPick(p.number)}
+              <button key={p.id} onClick={() => onPick(p)}
                 className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left active:opacity-80"
                 style={{ background: '#EBE5D5', border: '1px solid #CEC5B0' }}>
                 <span style={{ fontSize: 15, width: 22, textAlign: 'center', flexShrink: 0 }}>{fbGeo.SOURCES[p.source]?.icon}</span>
@@ -6928,6 +7005,7 @@
     const [locating, setLocating]     = useState({});    // record id -> true while a fix is pending
     const [recorder, setRecorder]     = useState(null);  // null | { photoId: string | null }
     const [linkTarget, setLinkTarget] = useState(null);  // null | { kind: 'photo' | 'voice', id }
+    const [, bump] = useState(0);   // re-render after a Points-page row changes under a card
     const noFixToastRef = useRef(false);
 
     // Ref mirrors the photos state so async handlers always see the latest
@@ -6974,6 +7052,15 @@
           }
         }
 
+        // Every geotagged photo / voice note owns a numbered point on the Points page.
+        try {
+          if (ensureMediaPoints(projectId, page.id)) {
+            const fresh = DB.getPage(projectId, page.id) || {};
+            migrated = fresh.photos || [];
+            if (!cancelled) { voiceRef.current = fresh.voiceNotes || []; setVoiceNotes(voiceRef.current); }
+          }
+        } catch (err) { console.error('Media point migration failed:', err); }
+
         // Resolve all current refs into the urlMap.
         const refs = migrated.map(p => p.photoRef).filter(Boolean);
         const map  = await photoDB.getMany(refs);
@@ -6996,9 +7083,9 @@
     useEffect(() => {
       if (!onRegisterExports) return;
       onRegisterExports({
-        exportPage: () => exportPhotoPDF(page, photos, urlMap, toast),
+        exportPage: () => exportPhotoPDF({ ...page, voiceNotes }, photos, urlMap, toast, DB.getProject(projectId)),
       });
-    }, [page, photos, urlMap]);
+    }, [page, photos, urlMap, voiceNotes]);
 
     // Persist a specific `next` array to both DB and component state.
     // Returns true on success, false if localStorage threw (quota exceeded).
@@ -7057,6 +7144,7 @@
             setUrlMap(m => ({ ...m, [ref]: dataUrl }));
             savedCount++;
             if (fixP) locatePhoto(id, fixP, exifGeo);
+            else adoptPoint('photo', id);
           } else {
             // localStorage quota hit — the page-level save failed, so the ref
             // would be orphaned. Clean up the IDB entry we just wrote.
@@ -7097,7 +7185,7 @@
       fixP.then(fix => {
         setLocatingFor(id, false);
         const geo = fix ? fbGeo.makeGeo(fix, 'photo') : fallbackGeo;
-        if (geo) { patchPhoto(id, { geo }); return; }
+        if (geo) { patchPhoto(id, { geo }); adoptPoint('photo', id); return; }
         if (!noFixToastRef.current) {
           noFixToastRef.current = true;
           toast.error('No GPS position — photo saved without a location.');
@@ -7113,7 +7201,60 @@
         if (!fix) { toast.error('No GPS position available.'); return; }
         if (kind === 'photo') patchPhoto(id, { geo: fbGeo.makeGeo(fix, 'photo') });
         else patchVoice(id, { geo: fbGeo.makeGeo(fix, 'voice') });
+        adoptPoint(kind, id);
       });
+    }
+
+    // ── Points for media ──
+    const recOf = (kind, id) => (kind === 'photo' ? photosRef.current : voiceRef.current).find(r => r.id === id);
+    const patchRec = (kind, id, patch) => (kind === 'photo' ? patchPhoto(id, patch) : patchVoice(id, patch));
+
+    // Give a geotagged record its own point on the Points page, unless it
+    // already resolves to one.
+    function adoptPoint(kind, id, number) {
+      const rec = recOf(kind, id);
+      if (rec && rec.geo && !fbGeo.mediaRow(rec, fbGeo.rowPoints(DB.getProject(projectId)))) {
+        if (rec.noPoint) patchRec(kind, id, { noPoint: undefined });
+        createMediaPoint(projectId, page.id, kind, rec, number);
+      }
+      bump(n => n + 1);
+    }
+
+    // Link a record to another existing point; its own point is superseded.
+    function linkTo(kind, id, row) {
+      patchRec(kind, id, { ptId: row.id, ptNum: row.number });
+      if (row.mediaId !== id) removeMediaPoint(projectId, id);
+      bump(n => n + 1);
+    }
+
+    function unlink(kind, id) {
+      patchRec(kind, id, { ptId: undefined, ptNum: undefined });
+      adoptPoint(kind, id);
+    }
+
+    // Pt # typed on a card: an existing number links to that point, a new
+    // number renumbers the record's own point.
+    function setNumber(kind, id, value) {
+      const v = String(value).trim();
+      const rec = recOf(kind, id);
+      if (!v || !rec) return;
+      const rows = fbGeo.rowPoints(DB.getProject(projectId));
+      const cur = fbGeo.mediaRow(rec, rows);
+      if (cur && cur.number === v) return;
+      const other = rows.find(r => r.number === v);
+      if (other) { linkTo(kind, id, other); toast.success(`Linked to point ${v}`); return; }
+      if (cur && cur.mediaId === id) {
+        updatePointRow(projectId, cur.id, { col_ptnum: v });
+        bump(n => n + 1);
+        return;
+      }
+      if (rec.geo) {   // linked elsewhere (or no point yet) → its own point, with this number
+        patchRec(kind, id, { ptId: undefined, ptNum: undefined });
+        adoptPoint(kind, id, v);
+        return;
+      }
+      toast.error(`No point ${v} — use Link… to pick an existing point.`);
+      bump(n => n + 1);
     }
 
     function toggleGeotag() {
@@ -7142,11 +7283,13 @@
     function addVoice(rec) {
       const target = recorder;
       setRecorder(null);
-      const ok = (target && target.photoId)
+      const memo = !!(target && target.photoId);
+      const ok = memo
         ? savePhotos(photosRef.current.map(p => p.id === target.photoId ? { ...p, voice: [...(p.voice || []), rec] } : p))
         : saveVoiceNotes([...voiceRef.current, rec]);
-      if (ok) toast.success('Voice note saved');
-      else audioDB.del(rec.audioRef).catch(() => {});
+      if (!ok) { audioDB.del(rec.audioRef).catch(() => {}); return; }
+      if (!memo) adoptPoint('voice', rec.id);
+      toast.success('Voice note saved');
     }
 
     function patchVoice(id, patch) {
@@ -7156,7 +7299,10 @@
     function deleteVoice(id) {
       const v = voiceRef.current.find(x => x.id === id);
       if (!v || !window.confirm('Delete this voice note?')) return;
-      if (saveVoiceNotes(voiceRef.current.filter(x => x.id !== id))) dropAudioIfUnused(v.audioRef);
+      if (saveVoiceNotes(voiceRef.current.filter(x => x.id !== id))) {
+        dropAudioIfUnused(v.audioRef);
+        removeMediaPoint(projectId, id);
+      }
     }
 
     function patchMemo(photoId, memoId, patch) {
@@ -7178,8 +7324,9 @@
       const toRemove = photosRef.current.find(p => p.id === id);
       const next = photosRef.current.filter(p => p.id !== id);
       if (!savePhotos(next)) return;
-      // Voice memos recorded on this photo go with it
+      // Voice memos recorded on this photo go with it, and so does its point
       ((toRemove && toRemove.voice) || []).forEach(v => dropAudioIfUnused(v.audioRef));
+      removeMediaPoint(projectId, id);
       // Lazy IDB cleanup — pruneOrphans handles this safely at app-level, so
       // we don't need to worry about duplicate pages sharing a ref. Only
       // remove if we're confident no other page references it on this project.
@@ -7263,9 +7410,11 @@
               onChange={patch => patchVoice(v.id, patch)}
               onDelete={() => deleteVoice(v.id)}>
               <MediaGeoRow rec={v} source="voice" project={project} locating={!!locating[v.id]}
-                onChange={patch => patchVoice(v.id, patch)}
+                onNumber={val => setNumber('voice', v.id, val)}
                 onLocate={() => locateNow('voice', v.id)}
-                onLink={() => setLinkTarget({ kind: 'voice', id: v.id })} />
+                onLink={() => setLinkTarget({ kind: 'voice', id: v.id })}
+                onUnlink={() => unlink('voice', v.id)}
+                onAddPoint={() => adoptPoint('voice', v.id)} />
             </VoiceCard>
           ))}
           {photos.map((ph, i) => (
@@ -7296,9 +7445,11 @@
                            background: '#F5F0E3', color: '#1A1A1A' }}
                 />
                 <MediaGeoRow rec={ph} source="photo" project={project} locating={!!locating[ph.id]}
-                  onChange={patch => patchPhoto(ph.id, patch)}
+                  onNumber={val => setNumber('photo', ph.id, val)}
                   onLocate={() => locateNow('photo', ph.id)}
-                  onLink={() => setLinkTarget({ kind: 'photo', id: ph.id })} />
+                  onLink={() => setLinkTarget({ kind: 'photo', id: ph.id })}
+                  onUnlink={() => unlink('photo', ph.id)}
+                  onAddPoint={() => adoptPoint('photo', ph.id)} />
                 {(ph.voice || []).length > 0 && (
                   <div style={{ marginTop: 10, borderTop: '1px solid #E5E1D8', paddingTop: 4 }}>
                     {ph.voice.map(v => (
@@ -7326,11 +7477,7 @@
         {linkTarget && (
           <PointPickerSheet project={project}
             onClose={() => setLinkTarget(null)}
-            onPick={num => {
-              if (linkTarget.kind === 'photo') patchPhoto(linkTarget.id, { ptNum: num });
-              else patchVoice(linkTarget.id, { ptNum: num });
-              setLinkTarget(null);
-            }} />
+            onPick={row => { linkTo(linkTarget.kind, linkTarget.id, row); setLinkTarget(null); }} />
         )}
         {/* Lightbox — full image on tap */}
         {expandedId && (() => {
@@ -7392,8 +7539,130 @@
     return out;
   }
 
+  // Caption under a photo in PDF exports: its point number and coordinates in
+  // the project's system, how that position was obtained, the note, and one
+  // line per voice memo. Returns [{ text, style: 'bold' | 'grey' | 'note' }].
+  function _photoPdfCaption(ph, project) {
+    const lines = [];
+    const pt = fbGeo.mediaPoint(ph, project, 'photo');
+    if (pt) {
+      const pos = (pt.N !== null && pt.E !== null) ? `N ${pt.text.n}   E ${pt.text.e}`
+                : pt.lat !== null ? fbGeo.fmtLatLon(pt.lat, pt.lon) : '';
+      const own = !pt.rowId || pt.own;
+      const z = pt.text.z ? `   Z ${pt.text.z}`
+              : (own && ph.geo && typeof ph.geo.H === 'number') ? `   H ${fbGeo.fmtElev(ph.geo.H)} (phone)` : '';
+      lines.push({ text: `${pt.number ? 'Pt ' + pt.number + '   ' : ''}${pos}${z}`.trim(), style: 'bold' });
+      const how = !pt.phone ? 'Points page coordinates'
+                : pt.from === 'exif' ? 'photo EXIF GPS'
+                : fbGeo.fmtAcc(pt.acc);
+      lines.push({ text: `${how} · ${fbGeo.projectCrs(project).short}`, style: 'grey' });
+    }
+    if (ph.note && ph.note.trim()) lines.push({ text: ph.note.trim(), style: 'note' });
+    (ph.voice || []).forEach(v => {
+      lines.push({ text: `[Voice memo ${fmtDur(v.dur)}]${v.title ? ' ' + v.title : ''}`, style: 'grey' });
+    });
+    return lines;
+  }
+
+  // Body of a Photos page in a PDF: 2×2 photo grid with captions, then a
+  // "Voice notes" list — a record that each recording exists (title, length,
+  // time, position); the audio itself stays in the app / .fieldbook file.
+  // Shared by the whole-project export and the single-page export.
+  async function _pdfPhotoPageBody(pdf, page, photos, urls, project, W, H, margin, contentY) {
+    photos = photos || [];
+    const voice = page.voiceNotes || [];
+    if (photos.length === 0 && voice.length === 0) {
+      pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
+      pdf.text('(No photos)', W / 2, contentY + 20, { align: 'center' });
+      return;
+    }
+    const bottom = H - margin - 14;
+    const colGap = 6, rowGap = 6;
+    const cellW = (W - margin * 2 - colGap) / 2;
+    const maxImgH = 62, captH = 26, lineH = 3.5, maxCaptLines = 7;
+    const cellH = maxImgH + captH;
+    let pi = 0, isFirstPage = true, y = contentY + 4;
+
+    while (pi < photos.length) {
+      if (!isFirstPage) pdf.addPage();
+      isFirstPage = false;
+      let py = contentY + 4;
+      for (let row = 0; row < 2 && pi < photos.length; row++) {
+        for (let col = 0; col < 2 && pi < photos.length; col++) {
+          const ph = photos[pi++];
+          const url = urls[ph.id];
+          const cx = margin + col * (cellW + colGap);
+          if (url) {
+            try {
+              const tmp = new Image();
+              await new Promise(res => { tmp.onload = res; tmp.onerror = res; tmp.src = url; });
+              const aspect = (tmp.naturalWidth || 4) / (tmp.naturalHeight || 3);
+              let imgW = cellW, imgH = imgW / aspect;
+              if (imgH > maxImgH) { imgH = maxImgH; imgW = imgH * aspect; }
+              pdf.addImage(url, 'JPEG', cx + (cellW - imgW) / 2, py, imgW, imgH);
+            } catch { /* skip unloadable */ }
+          }
+          let ly = py + maxImgH + 4, used = 0;
+          for (const ln of _photoPdfCaption(ph, project)) {
+            if (used >= maxCaptLines) break;
+            if (ln.style === 'bold')      { pdf.setFont('helvetica', 'bold');   pdf.setFontSize(7.5); pdf.setTextColor(28, 28, 28); }
+            else if (ln.style === 'grey') { pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.5); pdf.setTextColor(110, 110, 110); }
+            else                          { pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(60, 60, 60); }
+            const wrapped = pdf.splitTextToSize(ln.text, cellW).slice(0, ln.style === 'note' ? 2 : 1);
+            for (const w of wrapped) {
+              if (used >= maxCaptLines) break;
+              pdf.text(w, cx + cellW / 2, ly, { align: 'center' });
+              ly += lineH; used++;
+            }
+          }
+        }
+        py += cellH + rowGap;
+      }
+      y = py;
+    }
+
+    if (voice.length === 0) return;
+    const crs = fbGeo.projectCrs(project);
+    const usableW = W - margin * 2;
+    if (y + 20 > bottom) { pdf.addPage(); y = margin + 6; }
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(28, 28, 28);
+    pdf.text('VOICE NOTES', margin, y + 3);
+    pdf.setDrawColor(180, 180, 180); pdf.setLineWidth(0.2);
+    pdf.line(margin, y + 5, W - margin, y + 5);
+    y += 10;
+    voice.forEach((v, i) => {
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5);
+      const descLines = (v.desc && v.desc.trim()) ? pdf.splitTextToSize(v.desc.trim(), usableW - 6).slice(0, 3) : [];
+      const pt = fbGeo.mediaPoint(v, project, 'voice');
+      const need = 4.5 + (pt ? 3.8 : 0) + descLines.length * 3.8 + 3;
+      if (y + need > bottom) { pdf.addPage(); y = margin + 6; }
+      let when = '';
+      try { if (v.createdAt) when = new Date(v.createdAt).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' }); } catch {}
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(28, 28, 28);
+      pdf.text(`${i + 1}.  ${v.title || 'Voice note'}`, margin, y);
+      pdf.setFont('helvetica', 'normal'); pdf.setTextColor(110, 110, 110);
+      pdf.text(`${fmtDur(v.dur)}${when ? '   ' + when : ''}`, W - margin, y, { align: 'right' });
+      y += 4.5;
+      pdf.setFontSize(7.5);
+      if (pt) {
+        const pos = (pt.N !== null && pt.E !== null) ? `N ${pt.text.n}   E ${pt.text.e}${pt.text.z ? '   Z ' + pt.text.z : ''}`
+                  : pt.lat !== null ? fbGeo.fmtLatLon(pt.lat, pt.lon) : '';
+        const how = !pt.phone ? 'Points page coordinates' : fbGeo.fmtAcc(pt.acc);
+        pdf.setTextColor(60, 60, 60);
+        pdf.text(`${pt.number ? 'Pt ' + pt.number + '   ' : ''}${pos}   (${how} · ${crs.short})`, margin + 6, y);
+        y += 3.8;
+      }
+      pdf.setTextColor(60, 60, 60);
+      descLines.forEach(ln => { pdf.text(ln, margin + 6, y); y += 3.8; });
+      y += 3;
+    });
+    if (y + 5 > bottom) { pdf.addPage(); y = margin + 6; }
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.5); pdf.setTextColor(140, 140, 140);
+    pdf.text('Audio recordings are kept in the FieldBook app and its .fieldbook export. They are not part of this PDF.', margin, y + 2);
+  }
+
   // Single-page photo PDF export (used by per-page export button)
-  async function exportPhotoPDF(page, photos, urlMap, toast) {
+  async function exportPhotoPDF(page, photos, urlMap, toast, project) {
     if (!window.jspdf) { toast({ message: 'PDF library not loaded.', type: 'error' }); return; }
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
@@ -7404,47 +7673,7 @@
     const F = _initPDFFonts();
     const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
     const urls = await resolvePhotoUrls(photos, urlMap);
-    if (!photos || photos.length === 0) {
-      pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
-      pdf.text('(No photos)', W / 2, contentY + 20, { align: 'center' });
-    } else {
-      // 2×2 grid layout — 4 photos per page
-      const colGap = 6, rowGap = 8;
-      const cellW = (W - margin * 2 - colGap) / 2;
-      const maxImgH = 62, captH = 10;
-      const cellH = maxImgH + captH;
-      let pi = 0, isFirstPage = true;
-      while (pi < photos.length) {
-        if (!isFirstPage) pdf.addPage();
-        isFirstPage = false;
-        let py = contentY + 4;
-        for (let row = 0; row < 2 && pi < photos.length; row++) {
-          for (let col = 0; col < 2 && pi < photos.length; col++) {
-            const ph = photos[pi++];
-            const url = urls[ph.id];
-            const cx = margin + col * (cellW + colGap);
-            if (url) {
-              try {
-                const tmp = new Image();
-                await new Promise(res => { tmp.onload = res; tmp.onerror = res; tmp.src = url; });
-                const aspect = (tmp.naturalWidth || 4) / (tmp.naturalHeight || 3);
-                let imgW = cellW, imgH = imgW / aspect;
-                if (imgH > maxImgH) { imgH = maxImgH; imgW = imgH * aspect; }
-                pdf.addImage(url, 'JPEG', cx + (cellW - imgW) / 2, py, imgW, imgH);
-              } catch { /* skip unloadable */ }
-            }
-            if (ph.note?.trim()) {
-              pdf.setFontSize(7.5); pdf.setTextColor(60, 60, 60);
-              const captLines = pdf.splitTextToSize(ph.note.trim(), cellW).slice(0, 2);
-              captLines.forEach((ln, li) => {
-                pdf.text(ln, cx + cellW / 2, py + maxImgH + 4 + li * 4.5, { align: 'center' });
-              });
-            }
-          }
-          py += cellH + rowGap;
-        }
-      }
-    }
+    await _pdfPhotoPageBody(pdf, page, photos, urls, project || { pages: [] }, W, H, margin, contentY);
     const title = page.title?.trim() || 'Photos';
     pdf.save(`${title}.pdf`);
     toast({ message: 'PDF exported.', type: 'success' });
@@ -7929,6 +8158,7 @@
     const [openTbMenu, setOpenTbMenu]   = useState(null); // 'insert' | 'formulas' | 'view' | null
     const [csvImportModal, setCsvImportModal] = useState(null); // null | { parsed, useHeader }
     const [gpsOpen, setGpsOpen]         = useState(false);  // GPS capture sheet (points pages)
+    const [srcFilter, setSrcFilter]     = useState('all');  // points pages: 'all' | a fbGeo.SOURCES key
     const [menuPos, setMenuPos]         = useState({ top: 0, left: 0 }); // fixed-position for open dropdown
     // DMS keyboard — global setting persisted in localStorage, OFF by default
     const [dmsKeyboard, setDmsKeyboard] = useState(() => {
@@ -7972,7 +8202,7 @@
     const toast = useToast();
 
     // Sync rows when page changes
-    useEffect(() => { setRows(page.rows || []); }, [page.id]);
+    useEffect(() => { setRows(page.rows || []); setSrcFilter('all'); }, [page.id]);
 
     // Reset drag-selection flag on global pointer-up (handles releases outside cells)
     useEffect(() => {
@@ -8060,6 +8290,14 @@
     const mapUri   = (mapPoint && mapPoint.lat !== null)
       ? fbGeo.geoUri(mapPoint.lat, mapPoint.lon, [mapPoint.number, mapPoint.desc].filter(Boolean).join(' '))
       : null;
+    // Point type of a row, and the View ▾ → Show filter built on it. Filtered
+    // rows are only hidden — indices, formulas and exports are unaffected.
+    const rowSrc    = r => (r.geo ? (r.geo.source || 'gps') : 'instrument');
+    const srcCounts = {};
+    if (page.type === 'points') rows.forEach(r => { const k = rowSrc(r); srcCounts[k] = (srcCounts[k] || 0) + 1; });
+    const rowHidden = r => page.type === 'points' && srcFilter !== 'all' && rowSrc(r) !== srcFilter;
+    const mediaPage = (mapRow && mapRow.geo && mapRow.geo.mediaPageId)
+      ? (DB.getProject(projectId)?.pages || []).find(pg => pg.id === mapRow.geo.mediaPageId) : null;
     const mapHint  = !mapCrs ? ''
       : !mapRow ? 'Select a point row first'
       : mapUri ? (mapPoint.phone ? `Pt ${mapPoint.number} · ${fbGeo.fmtAcc(mapPoint.acc)}` : `Pt ${mapPoint.number} · ${mapCrs.short}`)
@@ -9375,6 +9613,22 @@
                     🗺 Open in Map
                   </button>
                   <div style={{ fontSize: 10.5, color: '#9A908A', padding: '0 12px 6px' }}>{mapHint}</div>
+                  {mediaPage && (
+                    <button onClick={() => { setOpenTbMenu(null); navigate(`#/project/${projectId}/page/${mediaPage.id}`); }}>
+                      {fbGeo.SOURCES[rowSrc(mapRow)]?.icon} Go to {rowSrc(mapRow) === 'voice' ? 'voice note' : 'photo'}
+                    </button>
+                  )}
+                  <div className="dp-drop-sep" />
+                  <div className="dp-drop-section">Show points</div>
+                  <button onClick={() => { setSrcFilter('all'); setOpenTbMenu(null); }}>
+                    <span style={{ width: 14 }}>{srcFilter === 'all' ? '✓' : ''}</span> All ({rows.length})
+                  </button>
+                  {Object.keys(fbGeo.SOURCES).filter(k => srcCounts[k]).map(k => (
+                    <button key={k} onClick={() => { setSrcFilter(k); setOpenTbMenu(null); }}>
+                      <span style={{ width: 14 }}>{srcFilter === k ? '✓' : ''}</span>
+                      {fbGeo.SOURCES[k].icon} {fbGeo.SOURCES[k].label} ({srcCounts[k]})
+                    </button>
+                  ))}
                 </>
               )}
             </div>
@@ -9403,6 +9657,18 @@
           )}
 
         </div>
+
+        {/* ── Point-type filter is on — say so, hidden rows are easy to forget ── */}
+        {page.type === 'points' && srcFilter !== 'all' && (
+          <button onClick={() => setSrcFilter('all')}
+            className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0 w-full text-left"
+            style={{ background: '#EBE5D5', border: 'none', borderBottom: '1px solid #CEC5B0', cursor: 'pointer' }}>
+            <span className="flex-1 text-xs text-fb-text">
+              Showing {srcCounts[srcFilter] || 0} of {rows.length} — {fbGeo.SOURCES[srcFilter]?.icon} {fbGeo.SOURCES[srcFilter]?.label} only
+            </span>
+            <span className="text-xs font-semibold" style={{ color: '#3C5445' }}>Show all</span>
+          </button>
+        )}
 
         {/* ── Formula bar ── */}
         <div className="dp-formula-bar">
@@ -9577,7 +9843,7 @@
                   </td>
                 </tr>
               )}
-              {rows.map((row, ri) => (
+              {rows.map((row, ri) => rowHidden(row) ? null : (
                 <tr key={row.id} data-row-idx={ri}>
                   {/* Row number — draggable to reorder */}
                   <td className={`dp-row-num${activeCell && activeCell.rowIdx === ri ? ' active-row' : ''}${dragOverRow === ri && dragStartRow !== ri ? ' dp-drag-over-row' : ''}`}
@@ -10502,6 +10768,20 @@
   function deletePointPermanently(projectId, pointId) {
     const project = DB.getProject(projectId);
     if (!project) return;
+    // A photo / voice point: flag its record so opening the Photos page doesn't
+    // quietly create the point again. The record keeps its own position.
+    const gone = project.pages.flatMap(pg => (pg.type === 'points' && pg.rows) || []).find(r => r.id === pointId);
+    if (gone && gone.geo && gone.geo.mediaId) {
+      const mark = rec => (rec && rec.id === gone.geo.mediaId) ? { ...rec, noPoint: true } : rec;
+      project.pages.forEach(pg => {
+        if (pg.type !== 'photo') return;
+        const hit = (pg.photos || []).some(r => r && r.id === gone.geo.mediaId) || (pg.voiceNotes || []).some(r => r && r.id === gone.geo.mediaId);
+        if (hit) DB.updatePage(projectId, pg.id, {
+          photos: (pg.photos || []).map(mark),
+          ...(pg.voiceNotes ? { voiceNotes: pg.voiceNotes.map(mark) } : {}),
+        });
+      });
+    }
     project.pages.forEach(page => {
       if (page.type === 'points' && page.rows) {
         const next = page.rows.filter(r => r.id !== pointId);
