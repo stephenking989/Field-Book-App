@@ -64,6 +64,7 @@
     points: { color: '#0E7490', bg: '#E0F2FE' },
     notes:  { color: '#B45309', bg: '#FEF3C7' },
     gnss:   { color: '#BE185D', bg: '#FCE7F3' },
+    obstructions: { color: '#4D7C0F', bg: '#ECFCCB' },
   };
 
   // ── SKETCH PANELS (brown drafting-kit palette for the sketch inspector) ──

@@ -640,7 +640,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.175';
+  const APP_VERSION = '1.176';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1724,6 +1724,15 @@
         <line x1="12" y1="13" x2="6" y2="21"/>
         <line x1="12" y1="13" x2="18" y2="21"/>
         <line x1="12" y1="13" x2="12" y2="21" strokeWidth="1.4" opacity="0.5"/>
+      </svg>
+    ),
+    // Sky plot: horizon ring, north tick and an obstruction wedge — the Obstructions page type.
+    SkyPlot: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <line x1="12" y1="1" x2="12" y2="5"/>
+        <path d="M18.4 5.6 12 12l8.9-1.6"/>
+        <circle cx="12" cy="12" r="4.5" strokeWidth="1.4" opacity="0.5"/>
       </svg>
     ),
   };
@@ -4600,19 +4609,13 @@
     return ids;
   }
 
-  // Draw a GNSS Obs page: Observation Log (on the current PDF page, below its
-  // header), then Station Sketch and Site Obstruction Diagram on two new pages.
-  // Empty fields print as blank ruled lines so the sheets can be completed by
-  // hand. The caller footers all three sheets (_pdfNumberSheets).
-  async function _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY }) {
-    const g   = fbGnss.normalize(page.gnss, { projectName: proj.name || '' });
-    const res = fbGnss.solveHeights(g);
+  // Drawing helpers shared by the form-style PDF pages (GNSS Obs, Obstructions):
+  // section rules, labelled fields on ruled lines, fine print and table styles.
+  function _pdfFormKit(pdf, { W, margin, F }) {
     const L = margin, CW = W - margin * 2;
     const INK = [28, 28, 28], LBL = [100, 100, 100], RULE = [190, 190, 190], GD = [40, 40, 40];
     // Helvetica has no prime or minus glyphs — swap them for their plain forms.
     const safe = v => String(v ?? '').replace(/[′’]/g, "'").replace(/[″”]/g, '"').replace(/−/g, '-');
-    const f4 = v => fbGnss.fmt4(v);
-    const bottomMargin = margin + 14;
 
     function section(y, text) {
       pdf.setFontSize(7.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...GD);
@@ -4649,10 +4652,6 @@
       pdf.setFontSize(opts.size || 6.5); pdf.setFont('helvetica', opts.style || 'normal'); pdf.setTextColor(...(opts.color || LBL));
       pdf.text(str, x, y, opts.align ? { align: opts.align } : undefined);
     }
-    function nextPage(part) {
-      pdf.addPage();
-      return _pdfPageHeader(pdf, { ...page, title: _gnssPdfTitle(page, part), notes: '' }, meta, W, H, margin, F);
-    }
     // Largest rectangle of aspect iw:ih centred in a box.
     function fit(x, y, w, h, iw, ih) {
       const k = Math.min(w / iw, h / ih), fw = iw * k, fh = ih * k;
@@ -4672,7 +4671,28 @@
       if (v === null || !Number.isFinite(v)) return safe(t);
       return (Number.isInteger(v) ? String(v).padStart(pad, '0') : String(Math.round(v * 100) / 100)) + '°';
     };
-    const filled = g.obstructions.filter(o => ['name', 'desc', 'fromAz', 'fromEl', 'toAz', 'toEl', 'comments'].some(k => String(o[k] ?? '').trim()));
+    const unit = (v, u) => (String(v ?? '').trim() ? `${String(v).trim()}${u}` : '');
+    const wideMargin = { left: L, right: L, bottom: margin + 14 };
+    // Obstruction rows with anything entered in them.
+    const filledObstructions = list => list.filter(o => ['name', 'desc', 'fromAz', 'fromEl', 'toAz', 'toEl', 'comments'].some(k => String(o[k] ?? '').trim()));
+    return { L, CW, INK, LBL, RULE, GD, safe, section, field, fieldRow, fineText, fit, tableBase, padRows, angle, unit, wideMargin, filledObstructions };
+  }
+
+  // Draw a GNSS Obs page: Observation Log (on the current PDF page, below its
+  // header), then Station Sketch and Site Obstruction Diagram on two new pages.
+  // Empty fields print as blank ruled lines so the sheets can be completed by
+  // hand. The caller footers all three sheets (_pdfNumberSheets).
+  async function _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY }) {
+    const g   = fbGnss.normalize(page.gnss, { projectName: proj.name || '' });
+    const res = fbGnss.solveHeights(g);
+    const kit = _pdfFormKit(pdf, { W, margin, F });
+    const { L, CW, INK, LBL, RULE, GD, safe, section, fieldRow, fineText, fit, tableBase, padRows, angle, unit, wideMargin } = kit;
+    const f4 = v => fbGnss.fmt4(v);
+    function nextPage(part) {
+      pdf.addPage();
+      return _pdfPageHeader(pdf, { ...page, title: _gnssPdfTitle(page, part), notes: '' }, meta, W, H, margin, F);
+    }
+    const filled = kit.filledObstructions(g.obstructions);
     const obsNo = o => String(g.obstructions.indexOf(o) + 1);    // matches the number on the sky plot
     const refLetter = g.bearingRef === 'true' ? 'T' : 'M';
 
@@ -4697,7 +4717,6 @@
       : g.pos.source === 'manual' ? 'Entered by hand' : '';
     const duration = fbGnss.sessionDuration(g.startUT, g.stopUT);
     const method = g.method === 'Other' ? (g.methodOther.trim() ? `Other: ${g.methodOther.trim()}` : 'Other') : g.method;
-    const unit = (v, u) => (String(v ?? '').trim() ? `${String(v).trim()}${u}` : '');
     y = fieldRow(y, [
       ['Approx Lat', fbGnss.fmtLatLonDMS(g.pos.lat, 'lat'), true],
       ['Approx Long', fbGnss.fmtLatLonDMS(g.pos.lon, 'lon'), true],
@@ -4739,7 +4758,7 @@
       return Number.isFinite(v) ? f4(v) : safe(raw);
     };
     const stat = (set, part, key) => f4(res[set][part]?.[key]);
-    const tableMargin = { left: L, right: W - L - colW, bottom: bottomMargin };
+    const tableMargin = { left: L, right: W - L - colW, bottom: wideMargin.bottom };
     pdf.autoTable({
       ...tableBase, startY: y, margin: tableMargin, tableWidth: colW,
       head: [[{ content: '', rowSpan: 2 }, { content: 'Slant (m)', colSpan: 2 }, { content: 'Vertical (m)', colSpan: 2 }],
@@ -4860,7 +4879,6 @@
       y -= 3;
     }
 
-    const wideMargin = { left: L, right: L, bottom: bottomMargin };
     pdf.autoTable({
       ...tableBase, startY: y + 1, margin: wideMargin, tableWidth: CW,
       head: [['#', 'Obstruction', `Bearing (from – to, ${g.bearingRef === 'true' ? 'true' : 'magnetic'})`, 'Comments']],
@@ -4880,35 +4898,65 @@
     // ═══ Page 3 — Site Obstruction Diagram ══════════════════════════════════
     y = nextPage('Site Obstruction Diagram') + 2;
     y = fieldRow(y, [['Project Name', g.projectName], ['Station Number / Name', g.station], ['Observation Date (UT)', g.obsDate, true]]) + 3;
+    await _pdfSkyPlotBlock(pdf, kit, y, g, F);
+  }
+
+  // The Site Obstruction Diagram: sky plot, north-reference note and the
+  // numbered obstruction table. `d` carries obstructions, bearingRef,
+  // declination and elevMask — a GNSS page's data or a site page's.
+  async function _pdfSkyPlotBlock(pdf, kit, y, d, F) {
+    const { L, CW, INK, safe, fineText, tableBase, padRows, angle, unit, wideMargin } = kit;
+    const obsNo = o => String(d.obstructions.indexOf(o) + 1);    // matches the number on the sky plot
     const plotW = 132, plotH = plotW * 344 / 320, px = L + (CW - plotW) / 2;
-    const north = fbGnss.plotNorth({ ref: g.bearingRef, declination: g.declination });
+    const north = fbGnss.plotNorth({ ref: d.bearingRef, declination: d.declination });
     try {
-      const svg = fbGnss.buildSkyPlotSVG(g.obstructions, { print: true, ref: g.bearingRef, declination: g.declination, mask: g.elevMask, parse: gnAngle });
+      const svg = fbGnss.buildSkyPlotSVG(d.obstructions, { print: true, ref: d.bearingRef, declination: d.declination, mask: d.elevMask, parse: gnAngle });
       pdf.addImage(await _svgToPng(svg, 1280, 1376), 'PNG', px, y, plotW, plotH, undefined, 'FAST');
     } catch (err) {
       console.error('[pdf] sky plot failed:', err);
       fineText('(sky plot could not be rendered)', L + CW / 2, y + plotH / 2, { size: 8, align: 'center' });
     }
     y += plotH + 4;
-    const decl = fbGnss.num(g.declination);
-    const northLine = g.bearingRef === 'true'
+    const decl = fbGnss.num(d.declination);
+    const northLine = d.bearingRef === 'true'
       ? 'North reference: bearings entered and plotted as TRUE.'
       : north.shift ? `North reference: bearings entered as MAGNETIC, plotted to TRUE NORTH with declination ${decl > 0 ? '+' : ''}${decl}° (True = Magnetic + declination).`
       : 'North reference: bearings entered and plotted as MAGNETIC. Declination: not entered.';
     fineText(northLine, L + CW / 2, y, { size: 7.5, color: INK, align: 'center' });
-    const maskText = unit(g.elevMask, '°');
+    const maskText = unit(d.elevMask, '°');
     fineText(`Outer ring = horizon (0°), centre = zenith (90°).${maskText ? `  Dashed ring = elevation mask ${maskText}.` : ''}`, L + CW / 2, y + 4, { align: 'center' });
     y += 8;
     pdf.autoTable({
       ...tableBase, startY: y, margin: wideMargin, tableWidth: CW,
       head: [['#', 'Obstruction', 'Type / Description', 'From Az', 'Elev', 'To Az', 'Elev']],
-      body: padRows(filled.map(o => [obsNo(o), safe(o.name), safe(o.desc), angle(o.fromAz, 3), angle(o.fromEl, 1), angle(o.toAz, 3), angle(o.toEl, 1)]), 6, 7),
+      body: padRows(kit.filledObstructions(d.obstructions).map(o => [obsNo(o), safe(o.name), safe(o.desc), angle(o.fromAz, 3), angle(o.fromEl, 1), angle(o.toAz, 3), angle(o.toEl, 1)]), 6, 7),
       columnStyles: {
         0: { cellWidth: 9, halign: 'center' }, 1: { cellWidth: 44 },
         3: { cellWidth: 19, font: F.mono, halign: 'center' }, 4: { cellWidth: 16, font: F.mono, halign: 'center' },
         5: { cellWidth: 19, font: F.mono, halign: 'center' }, 6: { cellWidth: 16, font: F.mono, halign: 'center' },
       },
     });
+  }
+
+  // Header title of a stand-alone Obstructions page; untitled, it goes by its station.
+  function _sitePdfTitle(page) {
+    const stn = String(page.site?.station || '').trim();
+    return page.title?.trim() || (stn ? `${stn} — Site Obstructions` : 'Site Obstructions');
+  }
+
+  // Body of a stand-alone Obstructions page, below its header: the page's own
+  // fields, then the diagram and table exactly as page 3 of a GNSS Obs page.
+  async function _pdfSiteBody(pdf, page, { W, margin, F, contentY }) {
+    const s = fbGnss.normalizeSite(page.site);
+    const kit = _pdfFormKit(pdf, { W, margin, F });
+    const decl = fbGnss.num(s.declination);
+    let y = kit.fieldRow(contentY + 2, [['Station / Point Name', s.station], ['Date', s.date, true], ['Observer', s.observer]]);
+    y = kit.fieldRow(y, [
+      ['Bearings are', s.bearingRef === 'true' ? 'True' : 'Magnetic'],
+      ['Declination', Number.isFinite(decl) ? `${decl > 0 ? '+' : ''}${decl}°` : kit.unit(s.declination, '°'), true],
+      ['Elevation Mask', kit.unit(s.elevMask, '°'), true],
+    ]) + 3;
+    await _pdfSkyPlotBlock(pdf, kit, y, s, F);
   }
 
   // "Dates & times" block of a Title page: created and survey date, then the
@@ -5099,11 +5147,13 @@
                        photo:  { label: 'Photos', color: '#606060', bg: '#EEEEEE' },
                        points: { label: 'Points', color: '#606060', bg: '#EEEEEE' },
                        notes:  { label: 'Notes',  color: '#606060', bg: '#EEEEEE' },
-                       gnss:   { label: 'GNSS Obs' } }[page.type]
+                       gnss:   { label: 'GNSS Obs' },
+                       obstructions: { label: 'Obstructions' } }[page.type]
                    || { label: 'Data', color: '#606060', bg: '#EEEEEE' };
-        // An untitled GNSS page is listed by its station.
+        // An untitled GNSS or Obstructions page is listed by its station.
         const gnssStn = page.type === 'gnss' ? (page.gnss?.station || '').trim() : '';
-        const displayTitle = page.title?.trim() || (gnssStn ? `Stn ${gnssStn} — ${meta.label}` : '(Untitled)');
+        const displayTitle = page.title?.trim() || (gnssStn ? `Stn ${gnssStn} — ${meta.label}`
+          : page.type === 'obstructions' ? _sitePdfTitle(page) : '(Untitled)');
         tocEntries.push({ typeLabel: meta.label, title: displayTitle, sheet: sheetNo, day: dayOf[page.id] || null });
 
         if (page.type === 'sketch') {
@@ -5241,6 +5291,11 @@
           // ── GNSS OBS PAGE — observation log, station sketch, obstruction diagram ──
           const contentY = _pdfPageHeader(pdf, { ...page, title: _gnssPdfTitle(page, 'Observation Log'), notes: '' }, meta, W, H, margin, F);
           await _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY });
+
+        } else if (page.type === 'obstructions') {
+          // ── OBSTRUCTIONS PAGE — sky plot and obstruction table, one sheet ──
+          const contentY = _pdfPageHeader(pdf, { ...page, title: displayTitle }, meta, W, H, margin, F);
+          await _pdfSiteBody(pdf, page, { W, margin, F, contentY });
 
         } else if (page.type === 'notes') {
           // ── NOTES PAGE ──────────────────────────────────────────────────────────
@@ -5413,8 +5468,11 @@
         // Type badge — grey
         pdf.setFillColor(220, 220, 220);
         pdf.roundedRect(margin + 4, ty - 3.5, 16, 7, 1.5, 1.5, 'F');
+        const badge = entry.typeLabel.toUpperCase();
         pdf.setFontSize(6); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(80, 80, 80);
-        pdf.text(entry.typeLabel.toUpperCase(), margin + 12, ty + 0.5, { align: 'center' });
+        // A long label (OBSTRUCTIONS) is shrunk to stay inside the 16 mm badge.
+        pdf.setFontSize(Math.min(6, 6 * 14 / pdf.getTextWidth(badge)));
+        pdf.text(badge, margin + 12, ty + 0.5, { align: 'center' });
 
         // Title text
         pdf.setFontSize(10); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(44, 44, 44);
@@ -5478,6 +5536,7 @@
         photo:  { label: 'Photos', color: '#606060', bg: '#EEEEEE' },
         notes:  { label: 'Notes',  color: '#606060', bg: '#EEEEEE' },
         gnss:   { label: 'GNSS Obs' },
+        obstructions: { label: 'Obstructions' },
       };
       const meta = metaMap[page.type] || metaMap.data;
       const pdf  = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -5487,7 +5546,8 @@
         hour: '2-digit', minute: '2-digit', hour12: false,
       });
       // A GNSS page prints as three PDF pages; the first is its Observation Log.
-      const headPage = page.type === 'gnss' ? { ...page, title: _gnssPdfTitle(page, 'Observation Log'), notes: '' } : page;
+      const headPage = page.type === 'gnss' ? { ...page, title: _gnssPdfTitle(page, 'Observation Log'), notes: '' }
+        : page.type === 'obstructions' ? { ...page, title: _sitePdfTitle(page) } : page;
       const contentY = _pdfPageHeader(pdf, headPage, meta, W, H, margin, F);
 
       if (page.type === 'sketch') {
@@ -5592,6 +5652,8 @@
         await _pdfPhotoPageBody(pdf, page, pagePhotos, urls, proj, W, H, margin, contentY);
       } else if (page.type === 'gnss') {
         await _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY });
+      } else if (page.type === 'obstructions') {
+        await _pdfSiteBody(pdf, page, { W, margin, F, contentY });
       } else if (page.type === 'notes') {
         let rawHtml = page.notesHtml || '';
         rawHtml = rawHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n')
@@ -5702,6 +5764,7 @@
     points: { label: 'Points', ...FB_BRAND.PAGE_TYPES.points, Icon: () => <Ico.Pin />    },
     notes:  { label: 'Notes',  ...FB_BRAND.PAGE_TYPES.notes,  Icon: () => <Ico.Pencil /> },
     gnss:   { label: 'GNSS Obs', ...FB_BRAND.PAGE_TYPES.gnss, Icon: () => <Ico.Antenna /> },
+    obstructions: { label: 'Obstructions', ...FB_BRAND.PAGE_TYPES.obstructions, Icon: () => <Ico.SkyPlot /> },
   };
 
   function ProjectView({ projectId }) {
@@ -5829,6 +5892,14 @@
         }
         // Copied by value — the new page must not share objects with the old one.
         pageData = { type: 'gnss', gnss: fbGnss.emptyGnss({ projectName: project.name || '', ...JSON.parse(JSON.stringify(carry)) }) };
+      }
+      if (type === 'obstructions') {
+        // The observer, north reference, declination and mask rarely change
+        // between points, so they carry over from the last Obstructions page.
+        const prev = [...(project.pages || [])].reverse().find(p => p.type === 'obstructions' && p.site)?.site;
+        const carry = {};
+        if (prev) ['observer', 'bearingRef', 'declination', 'elevMask'].forEach(k => { if (prev[k] != null) carry[k] = prev[k]; });
+        pageData = { type: 'obstructions', site: fbGnss.emptySite({ date: todayLocalISO(), ...carry }) };
       }
       const page = DB.addPage(projectId, pageData, addAtIndex);
       if (page) { reload(); setAddStep(null); setAddAtIndex(null); navigate(`#/project/${projectId}/page/${page.id}`); }
@@ -6889,6 +6960,7 @@
       { id: 'photo',  Icon: Ico.Camera, label: 'Photos Page', desc: 'Site photos, equipment shots, and setup images with notes',               color: '#7C3AED' },
       { id: 'points', Icon: Ico.Pin,    label: 'Points Page', desc: 'PNEZD point list — links to sketch canvas for placing survey points',     color: '#0E7490' },
       { id: 'gnss',   Icon: () => <Ico.Antenna size={20} />, label: 'GNSS Obs Page', desc: 'Static observation log — antenna heights, sky plot and station sketch', color: TYPE_META.gnss.color },
+      { id: 'obstructions', Icon: () => <Ico.SkyPlot size={20} />, label: 'Obstructions Page', desc: 'Site obstruction table and sky plot for a station or point', color: TYPE_META.obstructions.color },
     ];
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -8517,6 +8589,7 @@
     if (type === 'notes')  return NotesPage;
     if (type === 'points') return DataPage;           // DataPage with locked PNEZD columns
     if (type === 'gnss')   return GnssPage;
+    if (type === 'obstructions') return ObstructionPage;
     return DataPage;
   }
 
@@ -12461,25 +12534,24 @@
     return <GnssPageBody key={props.page.id} {...props} />;
   }
 
-  function GnssPageBody({ page, projectId, project, onReload }) {
-    const [g, setG] = useState(() => fbGnss.normalize(page.gnss, { projectName: project?.name || '' }));
+  // The state of a form page whose data lives under one page field (`slot`:
+  // 'gnss', 'site'), plus its title. Edits are written 0.8 s after the last
+  // change, and at once when the page is left or the app is backgrounded, so
+  // nothing typed is lost. Always change the data through update(patch | fn) —
+  // it works from a ref, so async handlers never see stale state.
+  function useGnDraft({ page, projectId, onReload, slot, initial }) {
+    const [data, setData] = useState(initial);
     const [title, setTitleState] = useState(page.title || '');
     const [dirty, setDirty] = useState(false);
-    const [antOpen, setAntOpen] = useState(false);
-    const [gpsOpen, setGpsOpen] = useState(false);
-    const [showWork, setShowWork] = useState(false);
-    const [, setLibTick] = useState(0);   // re-read the antenna library after the sheet closes
-    const latest = useRef({ g, title });
+    const latest = useRef({ data, title });
     const pending = useRef(false);
     const timer = useRef(null);
 
-    // Edits are written 0.8 s after the last change, and at once when the page
-    // is left or the app is backgrounded, so nothing typed is lost.
     function flush() {
       clearTimeout(timer.current);
       if (!pending.current) return false;
       pending.current = false;
-      DB.updatePage(projectId, page.id, { gnss: latest.current.g, title: latest.current.title });
+      DB.updatePage(projectId, page.id, { [slot]: latest.current.data, title: latest.current.title });
       setDirty(false);
       return true;
     }
@@ -12490,14 +12562,13 @@
       timer.current = setTimeout(() => { flush(); onReload(); }, 800);
     }
     function update(patch) {
-      const prev = latest.current.g;
+      const prev = latest.current.data;
       const next = typeof patch === 'function' ? patch(prev) : { ...prev, ...patch };
-      latest.current.g = next;
-      setG(next);
+      latest.current.data = next;
+      setData(next);
       queueSave();
     }
     function setTitle(v) { latest.current.title = v; setTitleState(v); queueSave(); }
-    const field = k => ({ value: g[k], onChange: v => update({ [k]: v }) });
 
     useEffect(() => {
       const onHide = () => { if (document.visibilityState === 'hidden' && flush()) DB.flush(); };
@@ -12509,6 +12580,77 @@
         flush();
       };
     }, []);
+
+    return { data, title, dirty, update, setTitle, flush };
+  }
+
+  // The header strip of a form page: what it is, its title, date and save state.
+  function GnPageStrip({ kind, page, title, setTitle, dirty }) {
+    return (
+      <div className="page-header-strip px-4 py-2.5 flex items-center justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <p className={GN.lbl}>{kind} · P.{page.pageNumber}</p>
+          <input type="text" value={title} onChange={e => setTitle(e.target.value)} maxLength={60}
+            placeholder="Page title..." aria-label="Page title" />
+        </div>
+        <div className="flex-shrink-0 text-right">
+          <p className="text-xs font-data text-fb-ink-muted">{page.date}</p>
+          {dirty && <span className="text-[10px] text-fb-ink-muted italic">saving...</span>}
+        </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SITE OBSTRUCTION PAGE (type 'obstructions')
+  // The obstruction table and sky plot of the GNSS Obs page as a page of its
+  // own — a station recce with no static session. Its data is page.site
+  // (fbGnss.emptySite), which names the rows, bearing reference, declination and
+  // mask as a GNSS page does, so GnObstructions serves both unchanged.
+  // ─────────────────────────────────────────────────────────────────────────────
+  function ObstructionPage(props) {
+    return <ObstructionPageBody key={props.page.id} {...props} />;
+  }
+
+  function ObstructionPageBody({ page, projectId, onReload }) {
+    const { data: s, title, dirty, update, setTitle, flush } = useGnDraft({
+      page, projectId, onReload, slot: 'site', initial: () => fbGnss.normalizeSite(page.site),
+    });
+    const field = k => ({ value: s[k], onChange: v => update({ [k]: v }) });
+    const mask = fbGnss.num(s.elevMask);
+    const maskBad = !!s.elevMask.trim() && !(mask >= 0 && mask <= 90);
+
+    return (
+      <div className="bg-fb-page min-h-full" onBlur={() => { if (flush()) onReload(); }}>
+        <GnPageStrip kind="Site Obstructions" page={page} title={title} setTitle={setTitle} dirty={dirty} />
+        {/* paddingBottom lets the last fields scroll up above the keyboard */}
+        <div className="px-4" style={{ paddingBottom: '50vh' }}>
+          <GnSection title="Station">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+              <GnField label="Station / Point Name" wide {...field('station')} />
+              <GnField label="Date" mono type="date" {...field('date')} />
+              <GnField label="Observer" {...field('observer')} />
+              <GnField label="Elevation Mask" mono inputMode="decimal" unit="°" bad={maskBad} {...field('elevMask')}
+                hint="Drawn on the sky plot as a dashed ring." />
+            </div>
+          </GnSection>
+          <GnSection title="Site Obstructions">
+            <GnObstructions g={s} update={update} />
+          </GnSection>
+        </div>
+      </div>
+    );
+  }
+
+  function GnssPageBody({ page, projectId, project, onReload }) {
+    const { data: g, title, dirty, update, setTitle, flush } = useGnDraft({
+      page, projectId, onReload, slot: 'gnss', initial: () => fbGnss.normalize(page.gnss, { projectName: project?.name || '' }),
+    });
+    const [antOpen, setAntOpen] = useState(false);
+    const [gpsOpen, setGpsOpen] = useState(false);
+    const [showWork, setShowWork] = useState(false);
+    const [, setLibTick] = useState(0);   // re-read the antenna library after the sheet closes
+    const field = k => ({ value: g[k], onChange: v => update({ [k]: v }) });
 
     // ── Header ──
     const autoJulian = fbGnss.julianDay(g.obsDate);
@@ -12551,17 +12693,7 @@
     // straight after typing a value still sees it.
     return (
       <div className="bg-fb-page min-h-full" onBlur={() => { if (flush()) onReload(); }}>
-        <div className="page-header-strip px-4 py-2.5 flex items-center justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            <p className={GN.lbl}>GNSS Static Observation · P.{page.pageNumber}</p>
-            <input type="text" value={title} onChange={e => setTitle(e.target.value)} maxLength={60}
-              placeholder="Page title..." aria-label="Page title" />
-          </div>
-          <div className="flex-shrink-0 text-right">
-            <p className="text-xs font-data text-fb-ink-muted">{page.date}</p>
-            {dirty && <span className="text-[10px] text-fb-ink-muted italic">saving...</span>}
-          </div>
-        </div>
+        <GnPageStrip kind="GNSS Static Observation" page={page} title={title} setTitle={setTitle} dirty={dirty} />
 
         {/* paddingBottom lets the last fields scroll up above the keyboard */}
         <div className="px-4" style={{ paddingBottom: '50vh' }}>

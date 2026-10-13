@@ -242,13 +242,36 @@
   const text = v => String(v ?? '');
   const textRow = (row, keys) => { const out = { id: text(row.id) }; keys.forEach(k => { out[k] = text(row[k]); }); return out; };
   const OBSTRUCTION_KEYS = ['name', 'desc', 'fromAz', 'fromEl', 'toAz', 'toEl', 'comments'];
+  const obstructionRows = list => (Array.isArray(list) ? list : []).filter(Boolean).map(o => textRow(o, OBSTRUCTION_KEYS));
+
+  // ─── Stand-alone Site Obstruction page (page.site) ─────────────────────────
+  // The obstruction rows, bearing reference, declination and elevation mask of
+  // a GNSS page, under the same names — so the table, the sky plot and the PDF
+  // diagram are shared — with a short header of its own.
+  function emptySite(seed) {
+    return {
+      v: 1,
+      station: '', date: '', observer: '',
+      bearingRef: 'mag', declination: '', elevMask: '',
+      obstructions: [],
+      ...(seed || {}),
+    };
+  }
+  function normalizeSite(raw, seed) {
+    const s = { ...emptySite(seed), ...(raw || {}) };
+    ['station', 'date', 'observer', 'declination', 'elevMask'].forEach(k => { s[k] = text(s[k]); });
+    if (s.bearingRef !== 'true') s.bearingRef = 'mag';
+    s.obstructions = obstructionRows(s.obstructions);
+    return s;
+  }
+
   function normalize(raw, seed) {
     const base = emptyGnss(seed);
     const g = { ...base, ...(raw || {}) };
     TEXT_KEYS.forEach(k => { g[k] = text(g[k]); });
     g.slant = readingSet(g.slant);
     g.vert = readingSet(g.vert);
-    g.obstructions = (Array.isArray(g.obstructions) ? g.obstructions : []).filter(Boolean).map(o => textRow(o, OBSTRUCTION_KEYS));
+    g.obstructions = obstructionRows(g.obstructions);
     g.observations = (Array.isArray(g.observations) ? g.observations : []).filter(Boolean).map(o => textRow(o, ['time', 'text']));
     g.pos = { ...EMPTY_POS, ...(g.pos || {}) };
     g.pos.h = text(g.pos.h);
@@ -612,7 +635,7 @@
     parseLatLon, fmtLatLonDMS,
     getAntennas, getAntenna, saveAntenna, deleteAntenna, duplicateAntenna, isBuiltin,
     antennaSnapshot, snapshotDiffers,
-    emptyGnss, normalize,
+    emptyGnss, normalize, emptySite, normalizeSite,
     solveHeights, workingSteps,
   };
   root.fbGnss = api;
