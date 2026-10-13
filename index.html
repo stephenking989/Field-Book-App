@@ -40,6 +40,8 @@
   <script src="./geo.js"></script>
   <!-- GNSS static observation engine (antenna library, slant-height reduction, sky plot) -->
   <script src="./gnss.js"></script>
+  <!-- Sketch print areas: paper ratio, frame and print scale, labels (window.fbPrint) -->
+  <script src="./print.js"></script>
 
   <style>
     *, *::before, *::after { box-sizing: border-box; }
@@ -640,7 +642,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.177';
+  const APP_VERSION = '1.178';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -4455,6 +4457,70 @@
     return y;
   }
 
+  // ── SKETCH SHEETS ──────────────────────────────────────────────────────────
+
+  // The view a sketch shows where only one is wanted (a GNSS station sketch and
+  // its thumbnail): print area A when the sketch has one, else its saved view.
+  function _sketchView(sp) {
+    const a = fbPrint.primary(fbPrint.normalize(sp.printAreas));
+    return a ? fbPrint.frameRect(a) : (sp.viewBox || { x: 0, y: 0, w: 800, h: 600 });
+  }
+
+  // Header of one print area's sheet: "Sketch title — Area B", with the frame's
+  // scale in the title block. The notes band is left off — it would change the
+  // shape of the drawing area the frame was fitted to (fbPrint.PAPER).
+  function _pdfAreaHeader(pdf, page, area, meta, W, H, margin, F) {
+    const y = _pdfPageHeader(pdf, { ...page, title: `${page.title?.trim() || 'Sketch'} — Area ${area.label}`, notes: '' }, meta, W, H, margin, F);
+    const denom = fbPrint.frameScale(area, page.scaleDenom || 1, window._fbSketchUtils.PIXELS_PER_METER);
+    pdf.setFontSize(8); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(30, 30, 30);
+    pdf.text(`Scale ${fbPrint.scaleText(denom).replace('≈', 'approx. ')}`, W - margin - 4, margin + 7, { align: 'right' });   // Helvetica has no ≈
+    return y;
+  }
+
+  // Draw one sketch sheet below its header: the paper grid, the drawing cropped
+  // to `view` (the page's saved view, or a print area), then the north arrow,
+  // scale bar and imagery credit on top. `quiet` leaves an empty or failed
+  // drawing blank instead of saying so.
+  async function _pdfSketchSheet(pdf, page, view, imageMap, { W, H, margin, contentY, quiet }) {
+    // Grid covers full content area
+    if (page.showGrid !== false) _drawPdfGrid(pdf, W, H, margin, contentY);
+    const drawH = (H - margin - 14) - contentY;
+    const note = text => {
+      if (quiet) return;
+      pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
+      pdf.text(text, W/2, contentY + drawH/2, { align: 'center' });
+    };
+    const svgStr = buildSketchSVG(page.shapes || [], page.layers, view, page.scaleDenom, page.units, page.showDims !== false, true, imageMap);
+    if (!svgStr || !window.html2canvas) { note('(No drawing content)'); return; }
+    const availW = W - margin*2;
+    // Render at portrait proportions matching the PDF content area so the
+    // drawing fills the full page height without clipping or tiny strips
+    const pdfOutW = 1600;
+    const pdfOutH = Math.round(pdfOutW * drawH / availW);
+    // Rewrite the SVG's width/height to portrait proportions while keeping
+    // the viewBox so content scales correctly via SVG's own aspect-ratio handling
+    const svgForPDF = svgStr.replace(/width="\d+" height="\d+"/, `width="${pdfOutW}" height="${pdfOutH}"`);
+    const tmp = document.createElement('div');
+    tmp.style.cssText = `position:fixed;left:-9999px;top:-9999px;width:${pdfOutW}px;height:${pdfOutH}px;overflow:hidden;background:transparent;`;
+    tmp.innerHTML = svgForPDF;
+    document.body.appendChild(tmp);
+    try {
+      const canvas = await window.html2canvas(tmp, { scale: 1.2, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
+      document.body.removeChild(tmp);
+      // Place image filling the entire content area — use PNG to keep transparency so the grid shows through.
+      // 'FAST' enables jsPDF's Flate compression on both the RGB image and its alpha SMask; without it jsPDF
+      // stores the full 1920×2448 bitmap RAW (~14 MB) plus an uncompressed alpha mask (~5 MB) on EVERY export.
+      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH, undefined, 'FAST');
+      // North arrow and scale bar drawn directly in PDF (on top of sketch)
+      if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
+      if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin, view?.w, availW);
+      _pdfAerialCredit(pdf, page, margin + 2, contentY + drawH - 1.5);
+    } catch {
+      if (tmp.parentNode) document.body.removeChild(tmp);
+      note('(Sketch render failed)');
+    }
+  }
+
   // ── PDF SKETCH OVERLAY HELPERS ─────────────────────────────────────────────
 
   // Draw a 5mm graph-paper grid over the content area of a notebook page.
@@ -4849,8 +4915,8 @@
         else {
           const ids = sp.shapes.filter(s => s.type === 'image' && s.imageId).map(s => s.imageId);
           const imageMap = ids.length ? await photoDB.getMany(ids) : {};
-          const svg = buildSketchSVG(sp.shapes, sp.layers, sp.viewBox, sp.scaleDenom, sp.units, sp.showDims !== false, true, imageMap);
-          const vb = sp.viewBox || { w: 800, h: 600 };
+          const vb = _sketchView(sp);      // print area A when the sketch has one
+          const svg = buildSketchSVG(sp.shapes, sp.layers, vb, sp.scaleDenom, sp.units, sp.showDims !== false, true, imageMap);
           const r = mainFit(vb.w, vb.h);
           if (sp.showGrid !== false) {
             pdf.setDrawColor(200, 195, 185); pdf.setLineWidth(0.12);
@@ -5178,47 +5244,20 @@
         tocEntries.push({ typeLabel: meta.label, title: displayTitle, sheet: sheetNo, day: dayOf[page.id] || null });
 
         if (page.type === 'sketch') {
-          const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
-          // Grid covers full content area
-          if (page.showGrid !== false) _drawPdfGrid(pdf, W, H, margin, contentY);
-          const drawH = (H - margin - 14) - contentY;
-
-          // Generate SVG and render via html2canvas. Pre-resolve any IDB image refs.
+          // Pre-resolve any IDB image refs.
           const _skImgIds = (page.shapes || []).filter(s => s.type === 'image' && s.imageId).map(s => s.imageId);
           const _skImgMap = _skImgIds.length > 0 ? await photoDB.getMany(_skImgIds) : {};
-          const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units, page.showDims !== false, true, _skImgMap);
-          if (svgStr && window.html2canvas) {
-            const availW = W - margin*2;
-            // Render at portrait proportions matching the PDF content area so the
-            // drawing fills the full page height without clipping or tiny strips
-            const pdfOutW = 1600;
-            const pdfOutH = Math.round(pdfOutW * drawH / availW);
-            // Rewrite the SVG's width/height to portrait proportions while keeping
-            // the viewBox so content scales correctly via SVG's own aspect-ratio handling
-            const svgForPDF = svgStr.replace(/width="\d+" height="\d+"/, `width="${pdfOutW}" height="${pdfOutH}"`);
-            const tmp = document.createElement('div');
-            tmp.style.cssText = `position:fixed;left:-9999px;top:-9999px;width:${pdfOutW}px;height:${pdfOutH}px;overflow:hidden;background:transparent;`;
-            tmp.innerHTML = svgForPDF;
-            document.body.appendChild(tmp);
-            try {
-              const canvas = await window.html2canvas(tmp, { scale: 1.2, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
-              document.body.removeChild(tmp);
-              // Place image filling the entire content area — use PNG to keep transparency so the grid shows through.
-              // 'FAST' enables jsPDF's Flate compression on both the RGB image and its alpha SMask; without it jsPDF
-              // stores the full 1920×2448 bitmap RAW (~14 MB) plus an uncompressed alpha mask (~5 MB) on EVERY export.
-              pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH, undefined, 'FAST');
-              // North arrow and scale bar drawn directly in PDF (on top of sketch)
-              if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
-              if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin, page.viewBox?.w, availW);
-              _pdfAerialCredit(pdf, page, margin + 2, contentY + drawH - 1.5);
-            } catch {
-              if (tmp.parentNode) document.body.removeChild(tmp);
-              pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
-              pdf.text('(Sketch render failed)', W/2, contentY + drawH/2, { align: 'center' });
-            }
-          } else {
-            pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
-            pdf.text('(No drawing content)', W/2, contentY + drawH/2, { align: 'center' });
+          // A sketch with print areas prints one sheet per area, in label
+          // order. With none it prints the view it was left in, as it always has.
+          const areas = fbPrint.sorted(fbPrint.normalize(page.printAreas));
+          if (areas.length === 0) {
+            const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
+            await _pdfSketchSheet(pdf, page, page.viewBox, _skImgMap, { W, H, margin, contentY });
+          }
+          for (const [i, area] of areas.entries()) {
+            if (i > 0) pdf.addPage();
+            const contentY = _pdfAreaHeader(pdf, page, area, meta, W, H, margin, F);
+            await _pdfSketchSheet(pdf, page, fbPrint.frameRect(area), _skImgMap, { W, H, margin, contentY });
           }
 
         } else if (page.type === 'title') {
@@ -5570,36 +5609,18 @@
       // A GNSS page prints as three PDF pages; the first is its Observation Log.
       const headPage = page.type === 'gnss' ? { ...page, title: _gnssPdfTitle(page, 'Observation Log'), notes: '' }
         : page.type === 'obstructions' ? { ...page, title: _sitePdfTitle(page) } : page;
-      const contentY = _pdfPageHeader(pdf, headPage, meta, W, H, margin, F);
+      // A sketch with print areas opens on its first area (see the sketch branch).
+      const areas = page.type === 'sketch' ? fbPrint.sorted(fbPrint.normalize(page.printAreas)) : [];
+      const contentY = areas.length ? _pdfAreaHeader(pdf, page, areas[0], meta, W, H, margin, F)
+                                    : _pdfPageHeader(pdf, headPage, meta, W, H, margin, F);
 
       if (page.type === 'sketch') {
-        // Grid covers full content area
-        if (page.showGrid !== false) _drawPdfGrid(pdf, W, H, margin, contentY);
-        const drawH = (H - margin - 14) - contentY;
         const _skImgIds2 = (page.shapes || []).filter(s => s.type === 'image' && s.imageId).map(s => s.imageId);
         const _skImgMap2 = _skImgIds2.length > 0 ? await photoDB.getMany(_skImgIds2) : {};
-        const svgStr = buildSketchSVG(page.shapes || [], page.layers, page.viewBox, page.scaleDenom, page.units, page.showDims !== false, true, _skImgMap2);
-        if (svgStr && window.html2canvas) {
-          const availW = W - margin*2;
-          // Render at portrait proportions matching the PDF content area
-          const pdfOutW = 1600;
-          const pdfOutH = Math.round(pdfOutW * drawH / availW);
-          const svgForPDF = svgStr.replace(/width="\d+" height="\d+"/, `width="${pdfOutW}" height="${pdfOutH}"`);
-          const tmp = document.createElement('div');
-          tmp.style.cssText = `position:fixed;left:-9999px;top:-9999px;width:${pdfOutW}px;height:${pdfOutH}px;overflow:hidden;background:transparent;`;
-          tmp.innerHTML = svgForPDF;
-          document.body.appendChild(tmp);
-          try {
-            const canvas = await window.html2canvas(tmp, { scale: 1.2, useCORS: true, logging: false, width: pdfOutW, height: pdfOutH, backgroundColor: null });
-            document.body.removeChild(tmp);
-            // Fill the entire content area — use PNG to keep transparency so the grid shows through.
-            // 'FAST' = jsPDF Flate compression on the bitmap + alpha SMask (otherwise stored raw, ~18 MB/page).
-            pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, contentY, availW, drawH, undefined, 'FAST');
-            // North arrow and scale bar drawn directly in PDF (on top of sketch)
-            if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
-            if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin, page.viewBox?.w, availW);
-            _pdfAerialCredit(pdf, page, margin + 2, contentY + drawH - 1.5);
-          } catch (_) { document.body.removeChild(tmp); }
+        if (areas.length === 0) await _pdfSketchSheet(pdf, page, page.viewBox, _skImgMap2, { W, H, margin, contentY, quiet: true });
+        for (const [i, area] of areas.entries()) {
+          const y = i === 0 ? contentY : (pdf.addPage(), _pdfAreaHeader(pdf, page, area, meta, W, H, margin, F));
+          await _pdfSketchSheet(pdf, page, fbPrint.frameRect(area), _skImgMap2, { W, H, margin, contentY: y, quiet: true });
         }
       } else if (page.type === 'title') {
         // ── TITLE PAGE — professional cover sheet ──────────────────────────────
@@ -7245,7 +7266,11 @@
         <div
           className={`flex-1 screen-enter${(page.type === 'sketch' || page.type === 'photo') ? ' overflow-hidden flex flex-col' : ' overflow-y-auto'}`}
           onClick={() => showExportMenu && setShowExportMenu(false)}>
+          {/* A sketch is remounted for each page: its scale, units, north and view are
+              state read once from the page, so paging from one sketch straight to the
+              next would otherwise show — and save — the first sketch's scale on the second. */}
           <PageContent
+            key={page.type === 'sketch' ? page.id : undefined}
             page={page}
             projectId={projectId}
             project={project}
@@ -12142,7 +12167,7 @@
         const ids = (sketchPage.shapes || []).filter(s => s.type === 'image' && s.imageId).map(s => s.imageId);
         const imageMap = ids.length ? await photoDB.getMany(ids) : {};
         const out = (sketchPage.shapes || []).length
-          ? buildSketchSVG(sketchPage.shapes, sketchPage.layers, sketchPage.viewBox, sketchPage.scaleDenom, sketchPage.units,
+          ? buildSketchSVG(sketchPage.shapes, sketchPage.layers, _sketchView(sketchPage), sketchPage.scaleDenom, sketchPage.units,
                            sketchPage.showDims !== false, true, imageMap)
           : '';
         if (live) setSvg(out || '');

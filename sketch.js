@@ -171,6 +171,13 @@ const SketchIco = {
       <text x="13" y="8" fontSize="5" fill="currentColor" stroke="none" fontFamily="sans-serif" fontWeight="bold">R</text>
     </svg>
   ),
+  // Print area — the dashed frame of a page
+  PrintArea: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4.5" y="2.5" width="11" height="15" rx="1" strokeDasharray="2.6 2.2"/>
+      <line x1="7.5" y1="13.5" x2="12.5" y2="13.5" strokeWidth="1.2"/>
+    </svg>
+  ),
   // Image — rectangle with mountain scene
   Image: () => (
     <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -209,6 +216,8 @@ const TOOLS = [
   { id: 'dim-angle',   label: 'Angle',   icon: <SketchIco.DimAngle /> },
   { id: 'dim-bearing', label: 'Bearing', icon: <SketchIco.DimBearing /> },
   { id: 'dim-radius',  label: 'Radius',  icon: <SketchIco.DimRadius /> },
+  // Frames that each print as a PDF page — the only tool that can touch them
+  { id: 'print-area',  label: 'Print',   title: 'Print area', icon: <SketchIco.PrintArea /> },
   // Image is now in the Insert ▾ top-toolbar menu; no longer in the left toolbar
 ];
 
@@ -1523,6 +1532,26 @@ function LayerCard({ layer, onRename }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // The image is ground truth: it is held at the sketch's scale and can only be
 // slid and turned — never resized — to line it up with the linework.
+// PRINT AREA SCALE — the selected frame's print scale, to type over. It shows
+// what a drag left behind (rounded) and snaps the frame to the figure typed.
+function PrintScaleInput({ value, onCommit }) {
+  const [text, setText] = useState(null);           // the figure while it is being typed
+  const shown = value < 20 ? String(Math.round(value * 10) / 10) : String(Math.round(value));
+  function commit() {
+    const d = parseFloat(text);
+    if (text !== null && d > 0 && isFinite(d)) onCommit(d);
+    setText(null);
+  }
+  return (
+    <input type="text" inputMode="decimal" aria-label="Print scale" title="Print scale of this area — type a round figure to snap to it"
+      value={text !== null ? text : shown}
+      onChange={e => setText(e.target.value)} onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setText(null); }}
+      style={{ width: 56, height: 24, background: PT.inputBg, border: `1px solid ${PT.border}`, borderRadius: 3,
+        color: PT.text, fontFamily: FBF.sketch, fontSize: 11, padding: '0 4px', outline: 'none', boxSizing: 'border-box' }} />
+  );
+}
+
 const AERIAL_STEPS = [0.1, 1, 10];        // nudge distances, in the sketch's units
 
 function AerialPanel({ shape, visible, scaleDenom, units, aligning, onVisible, onOpacity, onNudge, onTurn, onAlign, onReplace, onRemove }) {
@@ -3230,6 +3259,17 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   // Two-point align in progress: { step: 1…4, a1, b1, a2 } — see pickAlignPoint.
   const [aerialAlign, setAerialAlign] = useState(null);
   const alignDownRef = useRef(null);                       // pointer-down of a possible align tap
+
+  // ── Print areas (frames that each print as a PDF page of their own) ───────
+  // Saved on the page beside the shapes (page.printAreas), never in them — so
+  // no drawing tool, selection, snap or export can treat a frame as linework.
+  // Only the Print area tool touches them. Geometry is in print.js (fbPrint).
+  const [printAreas, setPrintAreas] = useState(() => fbPrint.normalize(page.printAreas));
+  const [printSel, setPrintSel] = useState(null);          // id of the frame being edited
+  const [printDraft, setPrintDraft] = useState(null);      // a frame being drawn, before it is released
+  const [showPrintAreas, setShowPrintAreas] = useState(page.printAreasHidden !== true);
+  const printAreasRef = useRef(printAreas);
+  const printDragRef = useRef(null);                       // { mode, id, start, x, y, before, moved }
   const [rightPanelOpen,   setRightPanelOpen]   = useState(false);
   const [collapsedLayers,  setCollapsedLayers]  = useState(() => new Set((page.layers || []).map(l => l.id)));
   const [panelDrag, setPanelDrag]             = useState(null);
@@ -3490,6 +3530,12 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       ? page.layers : [{ id: 'l_1', name: 'Layer 1', visible: true }];
     setLayers(ls);
     setActiveLayerId(fbGnss.baseLayerId(ls));
+    const frames = fbPrint.normalize(page.printAreas);
+    printAreasRef.current = frames;
+    setPrintAreas(frames);
+    setPrintSel(null);
+    setPrintDraft(null);
+    setShowPrintAreas(page.printAreasHidden !== true);
     setSelectedIds([]);
     setShapesHistory({ past: [], future: [] });
     setMarquee(null);
@@ -4070,6 +4116,47 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     persist(fitted ? next : undefined, undefined, nextLayers);
   }, [shapes, scaleDenom, layers]);
 
+  // ── Print areas ─────────────────────────────────────────────────────────────
+  // `save: false` is a drag in progress; the release saves.
+  function putPrintAreas(next, save = true) {
+    printAreasRef.current = next;
+    setPrintAreas(next);
+    if (save) DB.updatePage(projectId, page.id, { printAreas: next });
+  }
+  function togglePrintAreas() {
+    const next = !showPrintAreas;
+    setShowPrintAreas(next);
+    DB.updatePage(projectId, page.id, { printAreasHidden: !next });
+  }
+  function addPrintArea(frame) {
+    const a = { id: fbPrint.newId(), label: fbPrint.nextLabel(printAreasRef.current), x: frame.x, y: frame.y, w: frame.w };
+    putPrintAreas([...printAreasRef.current, a]);
+    setPrintSel(a.id);
+    if (!showPrintAreas) togglePrintAreas();
+  }
+  // A frame is moved by its body and resized by a corner — always at the
+  // paper's ratio, with the opposite corner fixed.
+  function dragPrintArea(pt, e) {
+    const d = printDragRef.current;
+    if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;     // not a drag yet
+    d.moved = true;
+    const minW = 24 * viewBox.w / (svgSizeRef.current.w || viewBox.w);
+    if (d.mode === 'new') { setPrintDraft(fbPrint.fromDrag(d.start, pt, minW)); return; }
+    const orig = d.before.find(a => a.id === d.id);
+    if (!orig) return;
+    const next = d.mode === 'move' ? fbPrint.move(orig, pt.x - d.start.x, pt.y - d.start.y) : fbPrint.resize(orig, d.mode, pt, minW);
+    putPrintAreas(d.before.map(a => (a.id === d.id ? next : a)), false);
+  }
+  function endPrintDrag(pt) {
+    const d = printDragRef.current;
+    printDragRef.current = null;
+    setPrintDraft(null);
+    if (d.mode !== 'new') { if (d.moved) putPrintAreas(printAreasRef.current); return; }
+    const frame = d.moved ? fbPrint.fromDrag(d.start, pt, 24 * viewBox.w / (svgSizeRef.current.w || viewBox.w)) : null;
+    if (frame) addPrintArea(frame);
+    else if (!d.moved) setPrintSel(null);                                         // a tap on empty space lets go
+  }
+
   // ── Points layer management ─────────────────────────────────────────────────
   // Ensures the dedicated Points layer exists, creating it if needed.
   // Returns the POINTS_LAYER_ID so callers can assign shapes to it immediately.
@@ -4529,6 +4616,11 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       setMarquee(null);             // cancel any rubber-band marquee
       touchTapRef.current = null;   // cancel any deferred single-touch action
       alignDownRef.current = null;  // …and any aerial-align tap: this is a pinch
+      if (printDragRef.current) {   // …and a print-area drag, put back as it was
+        putPrintAreas(printDragRef.current.before, false);
+        printDragRef.current = null;
+        setPrintDraft(null);
+      }
       if (singleFingerPanRef.current?.timerId) clearTimeout(singleFingerPanRef.current.timerId);
       singleFingerPanRef.current = null; // cancel single-finger pan — this is now a pinch
       if (penNodeTimerRef.current) { clearTimeout(penNodeTimerRef.current); penNodeTimerRef.current = null; penNodeTimerRef._pending = null; }
@@ -4557,6 +4649,15 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     // While aligning, a tap only picks a point (on release, so a pinch can
     // still zoom) — no tool draws and nothing is selected.
     if (aerialAlign) { alignDownRef.current = { pt, x: e.clientX, y: e.clientY }; return; }
+
+    // ── Print area tool — the only place a frame can be picked up ────────────
+    if (tool === 'print-area') {
+      const on = showPrintAreas ? fbPrint.hit(printAreasRef.current, pt, 14 * ps, printSel) : null;
+      printDragRef.current = { mode: on ? (on.part === 'body' ? 'move' : on.part) : 'new', id: on ? on.id : null,
+                               start: pt, x: e.clientX, y: e.clientY, before: printAreasRef.current, moved: false };
+      if (on) setPrintSel(on.id);
+      return;
+    }
 
     // ── Single-finger pan / long-press box-select (select / node tool, touch) ─
     // Empty-canvas or locked-shape touch: node mode pans immediately; select mode
@@ -5375,6 +5476,9 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       activePtrsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     }
 
+    // ── Print area drag ───────────────────────────────────────────────────
+    if (printDragRef.current && activePtrsRef.current.size < 2) { dragPrintArea(screenToWorld(e), e); return; }
+
     // ── Two-finger pinch + pan ──────────────────────────────────────────────
     if (activePtrsRef.current.size >= 2 && lastPinchRef.current) {
       const pts  = [...activePtrsRef.current.values()];
@@ -5914,6 +6018,9 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       if (!wasMultiTouchRef.current && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10) pickAlignPoint(down.pt);
       return;
     }
+
+    // ── Print area drag: release ─────────────────────────────────────────────
+    if (printDragRef.current) { endPrintDrag(screenToWorld(e)); return; }
 
     // ── Single-finger pan / long-press box-select cleanup ────────────────────
     if (singleFingerPanRef.current) {
@@ -8086,6 +8193,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     point: 'crosshair',
     'dim-linear': 'crosshair', 'dim-angle': 'pointer',
     'dim-bearing': 'crosshair', 'dim-radius': 'pointer',
+    'print-area': 'default',
   };
 
   return (
@@ -9312,7 +9420,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                       setNodeSelectedId(null); setNodeSelectedIdx(null);
                     }
                   }}
-                  title={t.label}
+                  title={t.title || t.label}
                   style={{
                     width: 52, height: 46, flexShrink: 0,
                     display: 'flex', flexDirection: 'column', alignItems: 'center',
@@ -9487,6 +9595,31 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             </div>
           )}
 
+          {/* Print area tool — add a frame, set the selected one's scale, delete it */}
+          {tool === 'print-area' && !aerialAlign && (() => {
+            const sel = printAreas.find(a => a.id === printSel) || null;
+            const stripBtn = { height: 24, padding: '0 8px', flexShrink: 0, cursor: 'pointer', outline: 'none',
+              background: PT.bgAlt, border: `1px solid ${PT.border}`, color: PT.text, fontFamily: FBF.sketch, fontSize: 10 };
+            return (
+              <div style={{ position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 3,
+                display: 'flex', alignItems: 'center', gap: 6, maxWidth: '96%', padding: '5px 6px', whiteSpace: 'nowrap',
+                background: PT.bg, border: `1px solid ${PT.border}`, color: PT.text, fontFamily: FBF.sketch, fontSize: 11 }}>
+                <button onClick={() => addPrintArea(fbPrint.fitView(viewBox, 0.8))} style={stripBtn}>＋ Area</button>
+                {sel ? (
+                  <>
+                    <span style={{ fontWeight: 700 }}>{sel.label}</span>
+                    <span>1:</span>
+                    <PrintScaleInput key={sel.id} value={fbPrint.frameScale(sel, scaleDenom, PIXELS_PER_METER)}
+                      onCommit={d => putPrintAreas(printAreasRef.current.map(a => (a.id === sel.id ? fbPrint.setScale(a, d, scaleDenom, PIXELS_PER_METER) : a)))} />
+                    <button onClick={() => { putPrintAreas(printAreasRef.current.filter(a => a.id !== sel.id)); setPrintSel(null); }} style={stripBtn}>Delete</button>
+                  </>
+                ) : (
+                  <span style={{ color: PT.muted }}>{printAreas.length ? 'Tap a frame, or drag to draw one' : 'Drag to draw a print area'}</span>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Empty hint */}
           {shapes.length === 0 && !drawState && (
             <div style={{ position: 'absolute', top: '50%', left: '50%',
@@ -9544,6 +9677,25 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               if (!layer?.visible) return null;
               const lbl = renderDimLabel(s);
               return lbl ? <g key={`dim-${s.id}`}>{lbl}</g> : null;
+            })}
+
+            {/* Print areas — dashed frames above every layer; only the Print area tool can touch them */}
+            {showPrintAreas && [...printAreas, ...(printDraft ? [{ ...printDraft, id: '_draft', label: fbPrint.nextLabel(printAreas) }] : [])].map(a => {
+              const k = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+              const r = fbPrint.frameRect(a), editing = tool === 'print-area', sel = editing && a.id === printSel;
+              const tag = `${a.label}  ${fbPrint.scaleText(fbPrint.frameScale(a, scaleDenom, PIXELS_PER_METER))}`;
+              return (
+                <g key={a.id} data-print-area={a.label} opacity={editing ? 1 : 0.55} style={{ pointerEvents: 'none' }}>
+                  <rect x={r.x} y={r.y} width={r.w} height={r.h} fill={sel ? fbAlpha('info', 0.06) : 'none'}
+                    stroke={FBC.info} strokeWidth={(sel ? 2 : 1.3) * k} strokeDasharray={`${7 * k} ${4 * k}`} />
+                  <rect x={r.x} y={r.y - 16 * k} width={(tag.length * 6.7 + 10) * k} height={16 * k} fill={FBC.info} />
+                  <text x={r.x + 5 * k} y={r.y - 4.5 * k} fontSize={11 * k} fontFamily={FBF.sketch} fontWeight="700" fill="#fff" style={{ whiteSpace: 'pre' }}>{tag}</text>
+                  {sel && [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]].map(([hx, hy], i) => (
+                    <rect key={i} data-print-handle={i} x={hx - 5 * k} y={hy - 5 * k} width={10 * k} height={10 * k}
+                      fill="#fff" stroke={FBC.info} strokeWidth={1.6 * k} />
+                  ))}
+                </g>
+              );
             })}
 
             {/* Two-point align — the points picked so far */}
@@ -10018,6 +10170,21 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
               {/* Layer list — reversed so top of list = topmost render layer */}
               <div>
+                {printAreas.length > 0 && (
+                  <div data-print-layer="" title="Print areas are always on top. Only the Print area tool can move them."
+                    style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 6px 4px 18px', minHeight: 26, borderBottom: `1px dashed ${PT.border}` }}>
+                    <button onClick={togglePrintAreas} title={showPrintAreas ? 'Hide print areas' : 'Show print areas'}
+                      style={{ width: 18, height: 18, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: 'none', border: 'none', cursor: 'pointer', padding: 0, outline: 'none', color: showPrintAreas ? PT.text : PT.faint }}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                        {!showPrintAreas && <line x1="3" y1="3" x2="21" y2="21"/>}
+                      </svg>
+                    </button>
+                    <span style={{ flex: 1, fontSize: 11, color: showPrintAreas ? PT.text : PT.faint }}>Print areas</span>
+                    <span style={{ fontSize: 9, color: PT.muted }}>{printAreas.length}</span>
+                  </div>
+                )}
                 {[...userLayers].reverse().map((layer) => {
                   const isActive   = layer.id === activeLayerId;
                   const layerShapes = shapes.filter(s =>
