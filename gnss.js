@@ -206,15 +206,24 @@
       ...(seed || {}),
     };
   }
-  // Fill anything missing so a page saved by an older version still opens.
+  // Fill anything missing, and make every typed field text, so a page saved by
+  // an older version — or edited in a file — still opens.
+  const TEXT_KEYS = ['projectName', 'receiverModel', 'receiverSerial', 'receiverSoftware', 'antennaSerial', 'cableLength',
+    'section', 'sessionId', 'station', 'obsDate', 'julianDay', 'operators', 'fileName',
+    'interval', 'startUT', 'stopUT', 'elevMask', 'pdop', 'methodOther', 'tol', 'declination'];
+  const text = v => String(v ?? '');
+  const textRow = (row, keys) => { const out = { id: text(row.id) }; keys.forEach(k => { out[k] = text(row[k]); }); return out; };
+  const OBSTRUCTION_KEYS = ['name', 'desc', 'fromAz', 'fromEl', 'toAz', 'toEl', 'comments'];
   function normalize(raw, seed) {
     const base = emptyGnss(seed);
     const g = { ...base, ...(raw || {}) };
+    TEXT_KEYS.forEach(k => { g[k] = text(g[k]); });
     g.slant = readingSet(g.slant);
     g.vert = readingSet(g.vert);
-    g.obstructions = Array.isArray(g.obstructions) ? g.obstructions : [];
-    g.observations = Array.isArray(g.observations) ? g.observations : [];
+    g.obstructions = (Array.isArray(g.obstructions) ? g.obstructions : []).filter(Boolean).map(o => textRow(o, OBSTRUCTION_KEYS));
+    g.observations = (Array.isArray(g.observations) ? g.observations : []).filter(Boolean).map(o => textRow(o, ['time', 'text']));
     g.pos = { ...EMPTY_POS, ...(g.pos || {}) };
+    g.pos.h = text(g.pos.h);
     g.sketch = { ...base.sketch, ...(g.sketch || {}) };
     g.images = { ...base.images, ...(g.images || {}) };
     if (!METHODS.includes(g.method)) g.method = METHODS[0];

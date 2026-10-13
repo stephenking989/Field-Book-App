@@ -178,7 +178,6 @@
       color: var(--fb-heading);
       white-space: normal;
     }
-    .gn-table td.gn-text { font-family: var(--fb-font-hand); font-size: 18px; }
     .gn-table td.gn-derived { color: var(--fb-ink-muted); background: rgb(var(--fb-border-rgb) / 0.14); }
     .gn-table td > input {
       display: block;
@@ -197,7 +196,6 @@
     .gn-table td > input::placeholder { color: var(--fb-ink-faint); }
     .gn-table td > input:focus { background: rgb(var(--fb-accent-rgb) / 0.08); }
     .gn-table td > input.gn-bad { color: var(--fb-error); background: rgb(var(--fb-error-rgb) / 0.10); }
-    .gn-table tr.gn-on td { background: rgb(var(--fb-accent-rgb) / 0.14); }
 
     /* ── Red left-margin line (fieldbook look) ──────────────────── */
     .page-margin-rule {
@@ -642,7 +640,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.172';
+  const APP_VERSION = '1.173';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -5841,7 +5839,8 @@
            'cableLength', 'section', 'operators', 'interval', 'elevMask', 'method', 'methodOther',
            'bearingRef', 'declination', 'tol'].forEach(k => { if (prev[k] != null) carry[k] = prev[k]; });
         }
-        pageData = { type: 'gnss', gnss: fbGnss.emptyGnss({ projectName: project.name || '', ...carry }) };
+        // Copied by value — the new page must not share objects with the old one.
+        pageData = { type: 'gnss', gnss: fbGnss.emptyGnss({ projectName: project.name || '', ...JSON.parse(JSON.stringify(carry)) }) };
       }
       const page = DB.addPage(projectId, pageData, addAtIndex);
       if (page) { reload(); setAddStep(null); setAddAtIndex(null); navigate(`#/project/${projectId}/page/${page.id}`); }
@@ -12152,13 +12151,17 @@
       if (navigator.onLine === false) { setState('offline'); return; }
       setState('loading');
       const plan = fbGnss.tilePlan(lat, lon, zoom, SAT_W, SAT_H);
+      const total = plan.tiles.length;
       let done = 0, failed = 0;
-      const settle = () => {
-        if (!live || done + failed < plan.tiles.length) return;
+      // `giveUp` settles with whatever has arrived, so a stalled tile on a weak
+      // signal can't leave the sheet loading for ever.
+      const settle = giveUp => {
+        if (!live || (!giveUp && done + failed < total)) return;
         if (done === 0) { setState('failed'); return; }
         drawSatOverlay(ctx, plan.mpp, station);
-        setState(failed ? 'partial' : 'ready');
+        setState(done < total ? 'partial' : 'ready');
       };
+      const slow = setTimeout(() => settle(true), 20000);
       plan.tiles.forEach(t => {
         const img = new Image();
         img.crossOrigin = 'anonymous';   // without it the canvas is tainted and can't be saved
@@ -12166,7 +12169,7 @@
         img.onerror = () => { failed++; settle(); };
         img.src = t.url;
       });
-      return () => { live = false; };
+      return () => { live = false; clearTimeout(slow); };
     }, [zoom, attempt]);
 
     function save() {
@@ -12527,8 +12530,10 @@
       ['Correction from Antenna Reference Point (ARP) to L2 Phase Centre', ant.l2],
     ];
 
+    // Leaving a field writes at once, so tapping Export (or anything else)
+    // straight after typing a value still sees it.
     return (
-      <div className="bg-fb-page min-h-full">
+      <div className="bg-fb-page min-h-full" onBlur={() => { if (flush()) onReload(); }}>
         <div className="page-header-strip px-4 py-2.5 flex items-center justify-between gap-3">
           <div className="flex-1 min-w-0">
             <p className={GN.lbl}>GNSS Static Observation · P.{page.pageNumber}</p>
