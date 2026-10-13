@@ -74,6 +74,34 @@
     return { secs, text: `${h} h ${pad2(m)} m ${pad2(s)} s` };
   }
 
+  // ─── Clock times (local, HH:MM) — the Title page's start and stop ─────────
+  // "HH:MM", "H:MM", "HH:MM:SS" (seconds dropped) or number-pad digits
+  // ("805", "0805") → minutes since midnight, or null.
+  function parseHM(str) {
+    const t = String(str ?? '').trim();
+    const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(t) || /^(\d{1,2})(\d{2})$/.exec(t);
+    if (!m) return null;
+    const h = +m[1], mi = +m[2];
+    return h > 23 || mi > 59 ? null : h * 60 + mi;
+  }
+  function fmtHM(mins) {
+    if (!fin(mins)) return '';
+    return `${pad2(Math.floor(mins / 60) % 24)}:${pad2(mins % 60)}`;
+  }
+  function localTimeHM(date) {
+    const d = date || new Date();
+    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+  // Time worked between a start and a stop. Stop before start means the day
+  // ran through midnight (`overnight`), which is also what a mistyped time
+  // looks like — so callers say so.
+  function dayDuration(start, stop) {
+    const a = parseHM(start), b = parseHM(stop);
+    if (a === null || b === null) return null;
+    const mins = (b - a + 1440) % 1440, h = Math.floor(mins / 60);
+    return { mins, text: h ? `${h} h ${mins % 60} min` : `${mins} min`, overnight: b < a };
+  }
+
   // ─── Latitude / longitude ──────────────────────────────────────────────────
   // Stored as decimal degrees, shown as DMS.  Accepts "44 38 55.7 N",
   // "63°34'30.7\" W", "-63.5752" — one number is decimal degrees, two or three
@@ -580,6 +608,7 @@
     diagramValues, buildAntennaSVG, plotNorth, skyWedges, inWedge, wedgeElev, buildSkyPlotSVG,
     num, fmt4, fmtDiff,
     julianDay, utcDateISO, utcTimeHMS, parseHMS, fmtHMS, sessionDuration,
+    parseHM, fmtHM, localTimeHM, dayDuration,
     parseLatLon, fmtLatLonDMS,
     getAntennas, getAntenna, saveAntenna, deleteAntenna, duplicateAntenna, isBuiltin,
     antennaSnapshot, snapshotDiffers,

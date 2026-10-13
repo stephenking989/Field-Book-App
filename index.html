@@ -640,7 +640,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.174';
+  const APP_VERSION = '1.175';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -4911,6 +4911,36 @@
     });
   }
 
+  // "Dates & times" block of a Title page: created and survey date, then the
+  // day's start, stop and worked-out duration. A blank field prints as a dash.
+  // Shared by the whole-project and single-page exports. Returns the y below it.
+  function _pdfTitleDates(pdf, page, proj, ty, W, H, margin) {
+    const blockH = 30;
+    if (ty > H - margin - blockH - 2) return ty;
+    const GM = [120, 120, 120];
+    const dur = fbGnss.dayDuration(page.startTime, page.stopTime);
+    // 0805 saved before the field was left still prints as 08:05.
+    const clock = v => { const m = fbGnss.parseHM(v); return m === null ? String(v || '').trim() : fbGnss.fmtHM(m); };
+    pdf.setFillColor(...GM);
+    pdf.rect(margin + 2, ty, 2.5, blockH - 2, 'F');
+    pdf.setFontSize(6); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(100, 100, 100);
+    pdf.text('DATES & TIMES', margin + 8, ty + 5);
+    const usable = W - margin * 2 - 14;
+    const cell = (label, value, x, y) => {
+      pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...GM);
+      pdf.text(label + ':', x, y);
+      pdf.setFontSize(9); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(28, 28, 28);
+      pdf.text(value || '—', x, y + 5);
+    };
+    cell('Created',     fmtDateDMY(proj.createdAt), margin + 8, ty + 11);
+    cell('Survey Date', page.surveyDate ? fmtDateDMY(page.surveyDate) : '', margin + 10 + usable / 2, ty + 11);
+    [['Start', clock(page.startTime)], ['Stop', clock(page.stopTime)], ['Duration', dur ? dur.text : '']]
+      .forEach(([label, value], i) => cell(label, value, margin + 8 + i * usable / 3, ty + 23));
+    pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.25);
+    pdf.line(margin + 6, ty + blockH, W - margin - 4, ty + blockH);
+    return ty + blockH + 4;
+  }
+
   // Main project PDF export — called from ProjectView.
   // pageIds (optional array) limits the export to those pages; omitted = whole job.
   async function exportProjectPDF(projectId, toast, setExporting, pageIds) {
@@ -5183,30 +5213,8 @@
             ty += blockH + 4;
           }
 
-          // Dates block — created (read-only) + survey date (user-set)
-          (() => {
-            const createdStr  = fmtDateDMY(proj.createdAt);
-            const surveyStr   = page.surveyDate ? fmtDateDMY(page.surveyDate) : '';
-            if (!createdStr && !surveyStr) return;
-            if (ty > H - margin - 20) return;
-            const blockH = 18;
-            pdf.setFillColor(...GM2);
-            pdf.rect(margin + 2, ty, 2.5, blockH - 2, 'F');
-            pdf.setFontSize(6); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...GL2);
-            pdf.text('DATES', margin + 8, ty + 5);
-            const colW = (W - margin * 2 - 14) / 2;
-            [[  'Created',    createdStr || '—'],
-             ['Survey Date',  surveyStr  || '—']].forEach(([k, v], i) => {
-              const ix = margin + 8 + i * (colW + 2);
-              pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...GM2);
-              pdf.text(k + ':', ix, ty + 11);
-              pdf.setFont('helvetica', 'normal'); pdf.setTextColor(28, 28, 28); pdf.setFontSize(9);
-              pdf.text(v, ix, ty + 16);
-            });
-            pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.25);
-            pdf.line(margin + 6, ty + blockH, W - margin - 4, ty + blockH);
-            ty += blockH + 4;
-          })();
+          // Dates, start / stop time and duration
+          ty = _pdfTitleDates(pdf, page, proj, ty, W, H, margin);
           _titleField('Location',                   page.location);
           _titleField('Crew & Responsibilities',    page.crew);
           _titleField('Equipment (Make, Model, S/N)', page.equipment, { mono: true });
@@ -5566,29 +5574,8 @@
           ty += blockH + 4;
         }
 
-        // Dates block
-        (() => {
-          const createdStr = fmtDateDMY(proj.createdAt);
-          const surveyStr  = page.surveyDate ? fmtDateDMY(page.surveyDate) : '';
-          if (!createdStr && !surveyStr) return;
-          if (ty > H - margin - 20) return;
-          const blockH = 18;
-          pdf.setFillColor(...GM2);
-          pdf.rect(margin + 2, ty, 2.5, blockH - 2, 'F');
-          pdf.setFontSize(6); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...GL2);
-          pdf.text('DATES', margin + 8, ty + 5);
-          const colW = (W - margin * 2 - 14) / 2;
-          [['Created', createdStr || '—'], ['Survey Date', surveyStr || '—']].forEach(([k, v], i) => {
-            const ix = margin + 8 + i * (colW + 2);
-            pdf.setFontSize(6.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...GM2);
-            pdf.text(k + ':', ix, ty + 11);
-            pdf.setFont('helvetica', 'normal'); pdf.setTextColor(28, 28, 28); pdf.setFontSize(9);
-            pdf.text(v, ix, ty + 16);
-          });
-          pdf.setDrawColor(...BRD2); pdf.setLineWidth(0.25);
-          pdf.line(margin + 6, ty + blockH, W - margin - 4, ty + blockH);
-          ty += blockH + 4;
-        })();
+        // Dates, start / stop time and duration
+        ty = _pdfTitleDates(pdf, page, proj, ty, W, H, margin);
         _titleFieldSP('Location',                    page.location);
         _titleFieldSP('Crew & Responsibilities',     page.crew);
         _titleFieldSP('Equipment (Make, Model, S/N)', page.equipment, { mono: true });
@@ -11250,6 +11237,8 @@
       codeList:    page.codeList    || '',
       fileNames:   page.fileNames   || '',
       surveyDate:  page.surveyDate  || '',
+      startTime:   page.startTime   || '',
+      stopTime:    page.stopTime    || '',
     });
     const [dirty, setDirty] = useState(false);
     const timerRef = useRef(null);
@@ -11278,20 +11267,28 @@
         codeList:    page.codeList    || '',
         fileNames:   page.fileNames   || '',
         surveyDate:  page.surveyDate  || '',
+        startTime:   page.startTime   || '',
+        stopTime:    page.stopTime    || '',
       });
     }, [page.id]);
 
-    function handleChange(key, val) {
+    // `immediate` writes without the typing delay — used for a stamped "Now"
+    // time, which can't be retyped if the app is closed before the save.
+    function handleChange(key, val, immediate) {
       const updated = { ...form, [key]: val };
       setForm(updated);
-      setDirty(true);
       clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
+      const save = () => {
         DB.updatePage(projectId, page.id, updated);
         onReload();
         setDirty(false);
-      }, 800);
+      };
+      if (immediate) { save(); return; }
+      setDirty(true);
+      timerRef.current = setTimeout(save, 800);
     }
+    // Worked out from the two times, never stored.
+    const duration = fbGnss.dayDuration(form.startTime, form.stopTime);
 
     // Grows a textarea to fit its content, then keeps the cursor visible.
     function grow(el) {
@@ -11365,18 +11362,18 @@
               placeholder="Property address, legal description, project name..."
               className={taClass} rows={1} />
           </div>
-          {/* Dates */}
+          {/* Dates, start / stop time and duration */}
           <div className={secClass}>
-            <p className={lblClass}>Dates</p>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-0.5">
+            <p className={lblClass}>Dates &amp; Times</p>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-0.5">
               <div className="flex flex-col gap-0.5">
-                <span style={{ fontSize: 9, color: '#8B7355', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Created</span>
+                <span className={GN.lbl}>Created</span>
                 <span className="font-handwritten text-base text-fb-text" style={{ opacity: 0.7 }}>
                   {fmtDateDMY((project && project.createdAt) || page.createdAt) || '—'}
                 </span>
               </div>
               <div className="flex flex-col gap-0.5">
-                <span style={{ fontSize: 9, color: '#8B7355', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Survey Date</span>
+                <span className={GN.lbl}>Survey Date</span>
                 <input
                   type="date"
                   value={form.surveyDate}
@@ -11386,6 +11383,10 @@
                   style={{ border: 'none', borderBottom: '1px solid rgba(180,165,140,0.5)', padding: '1px 0' }}
                 />
               </div>
+              <TpTime label="Start time" value={form.startTime} onChange={(v, now) => handleChange('startTime', v, now)} />
+              <TpTime label="Stop time" value={form.stopTime} onChange={(v, now) => handleChange('stopTime', v, now)} />
+              <GnReadout wide label="Duration" value={duration ? duration.text : ''}
+                hint={duration && duration.overnight ? 'Stop is earlier than start — counted through midnight.' : undefined} />
             </div>
           </div>
           {/* Crew */}
@@ -11592,6 +11593,21 @@
       <GnField label={label} value={value} onChange={onChange} onBlur={tidy} mono bad={bad}
         inputMode="numeric" placeholder="HH:MM:SS"
         action={<button type="button" onClick={() => onChange(fbGnss.utcTimeHMS())} className={GN.chip}>Now</button>} />
+    );
+  }
+
+  // A local clock time (HH:MM, 24 h) — the Title page's start and stop. "Now"
+  // stamps the current time and is saved at once (the second onChange argument);
+  // 0805 typed on a number pad is tidied to 08:05 when the field is left.
+  function TpTime({ label, value, onChange }) {
+    const mins = fbGnss.parseHM(value);
+    function tidy() {
+      if (mins !== null && fbGnss.fmtHM(mins) !== value) onChange(fbGnss.fmtHM(mins));
+    }
+    return (
+      <GnField label={label} value={value} onChange={v => onChange(v)} onBlur={tidy} mono bad={!!value.trim() && mins === null}
+        inputMode="numeric" placeholder="HH:MM"
+        action={<button type="button" onClick={() => onChange(fbGnss.localTimeHM(), true)} className={GN.chip}>Now</button>} />
     );
   }
 
