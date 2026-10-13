@@ -640,7 +640,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.173';
+  const APP_VERSION = '1.174';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -4534,14 +4534,28 @@
 
   // ── GNSS OBS PAGE (3 PDF pages) ────────────────────────────────────────────
 
-  // The notebook footer drawn at the bottom of every content page.
-  function _pdfNotebookFooter(pdf, page, W, H, margin, exportTs) {
+  // The notebook footer at the bottom of a content sheet: "Page n of N".
+  function _pdfNotebookFooter(pdf, n, total, W, H, margin, exportTs) {
     pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.3);
     pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
     pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(110, 110, 110);
-    pdf.text(`P.${page.pageNumber}`, margin + 4, H - margin - 4);
+    pdf.text(`Page ${n} of ${total}`, margin + 4, H - margin - 4);
     pdf.setFont('helvetica', 'normal'); pdf.setTextColor(150, 150, 150);
     pdf.text(`Exported  ${exportTs}`, W - margin - 4, H - margin - 4, { align: 'right' });
+  }
+
+  // Footer every content sheet once the whole document exists. Numbers count
+  // the sheets of THIS PDF from `firstSheet` on — a GNSS page's three sheets and
+  // each overflow sheet of a table count one each — never the notebook's own
+  // page numbers, so an export of some pages reads as a complete document.
+  // Returns the number of content sheets.
+  function _pdfNumberSheets(pdf, firstSheet, W, H, margin, exportTs) {
+    const last = pdf.getNumberOfPages(), total = last - firstSheet + 1;
+    for (let s = firstSheet; s <= last; s++) {
+      pdf.setPage(s);
+      _pdfNotebookFooter(pdf, s - firstSheet + 1, total, W, H, margin, exportTs);
+    }
+    return total;
   }
 
   // Rasterise an SVG string to a PNG data URL — the same html2canvas route the
@@ -4589,8 +4603,8 @@
   // Draw a GNSS Obs page: Observation Log (on the current PDF page, below its
   // header), then Station Sketch and Site Obstruction Diagram on two new pages.
   // Empty fields print as blank ruled lines so the sheets can be completed by
-  // hand. The caller draws the footer of the last page.
-  async function _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY, exportTs }) {
+  // hand. The caller footers all three sheets (_pdfNumberSheets).
+  async function _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY }) {
     const g   = fbGnss.normalize(page.gnss, { projectName: proj.name || '' });
     const res = fbGnss.solveHeights(g);
     const L = margin, CW = W - margin * 2;
@@ -4636,7 +4650,6 @@
       pdf.text(str, x, y, opts.align ? { align: opts.align } : undefined);
     }
     function nextPage(part) {
-      _pdfNotebookFooter(pdf, page, W, H, margin, exportTs);
       pdf.addPage();
       return _pdfPageHeader(pdf, { ...page, title: _gnssPdfTitle(page, part), notes: '' }, meta, W, H, margin, F);
     }
@@ -5010,16 +5023,12 @@
       pdf.line(28, afterMetaY, W - 28, afterMetaY);
 
       // ── Page count + created date ─────────────────────────────────────────
-      const pageCount = exportPages.length < allPages.length
-        ? `${exportPages.length} of ${allPages.length}`
-        : String(allPages.length);
+      // The count is the number of content sheets in THIS PDF, which is only
+      // known once they are drawn — it is filled in after the content below.
       const createdStr = new Date(proj.createdAt).toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' });
       const infoY = afterMetaY + 10;
       pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(120, 120, 120);
       pdf.text('PAGES', mLeft, infoY);
-      pdf.setFontSize(11); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(20, 20, 20);
-      pdf.text(pageCount, mLeft, infoY + 7);
-      pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(120, 120, 120);
       pdf.text('CREATED', mRight, infoY);
       pdf.setFontSize(11); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(20, 20, 20);
       pdf.text(createdStr, mRight, infoY + 7);
@@ -5049,10 +5058,11 @@
 
       // ── CONTENT PAGES ─────────────────────────────────────────────────────
       const tocEntries = [];
+      const firstSheet = pdf.getNumberOfPages() + 1;   // cover and contents come before it
 
       for (const page of exportPages) {
         pdf.addPage();
-        const pdfPageNum = pdf.getNumberOfPages();
+        const sheetNo = pdf.getNumberOfPages() - firstSheet + 1;
         const meta = { data:   { label: 'Data',   color: '#606060', bg: '#EEEEEE' },
                        sketch: { label: 'Sketch', color: '#606060', bg: '#EEEEEE' },
                        title:  { label: 'Title',  color: '#606060', bg: '#EEEEEE' },
@@ -5063,8 +5073,8 @@
                    || { label: 'Data', color: '#606060', bg: '#EEEEEE' };
         // An untitled GNSS page is listed by its station.
         const gnssStn = page.type === 'gnss' ? (page.gnss?.station || '').trim() : '';
-        const displayTitle = page.title?.trim() || (gnssStn ? `Stn ${gnssStn} — ${meta.label}` : `P.${page.pageNumber} — ${meta.label}`);
-        tocEntries.push({ pageNum: page.pageNumber, typeLabel: meta.label, title: displayTitle, pdfPage: pdfPageNum, day: dayOf[page.id] || null });
+        const displayTitle = page.title?.trim() || (gnssStn ? `Stn ${gnssStn} — ${meta.label}` : '(Untitled)');
+        tocEntries.push({ typeLabel: meta.label, title: displayTitle, sheet: sheetNo, day: dayOf[page.id] || null });
 
         if (page.type === 'sketch') {
           const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
@@ -5222,7 +5232,7 @@
         } else if (page.type === 'gnss') {
           // ── GNSS OBS PAGE — observation log, station sketch, obstruction diagram ──
           const contentY = _pdfPageHeader(pdf, { ...page, title: _gnssPdfTitle(page, 'Observation Log'), notes: '' }, meta, W, H, margin, F);
-          await _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY, exportTs });
+          await _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY });
 
         } else if (page.type === 'notes') {
           // ── NOTES PAGE ──────────────────────────────────────────────────────────
@@ -5318,14 +5328,13 @@
           }
         }
 
-        // Notebook footer
-        pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.3);
-        pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
-        pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(110, 110, 110);
-        pdf.text(`P.${page.pageNumber}`, margin + 4, H - margin - 4);
-        pdf.setFont('helvetica', 'normal'); pdf.setTextColor(150, 150, 150);
-        pdf.text(`Exported  ${exportTs}`, W - margin - 4, H - margin - 4, { align: 'right' });
       }
+
+      // ── FOOTERS + COVER PAGE COUNT ────────────────────────────────────────
+      const sheetTotal = _pdfNumberSheets(pdf, firstSheet, W, H, margin, exportTs);
+      pdf.setPage(1);
+      pdf.setFontSize(11); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(20, 20, 20);
+      pdf.text(String(sheetTotal), mLeft, infoY + 7);
 
       // ── DRAW TOC on the reserved pages (2 …) ───────────────────────────────
       // Rows = one heading per day + one entry per exported page.
@@ -5362,7 +5371,8 @@
           pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
           pdf.setFontSize(6.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(110, 110, 110);
           pdf.text(proj.name, margin + 4, H - margin - 4);
-          pdf.text(String(tocPageNo), W - margin - 4, H - margin - 4, { align: 'right' });
+          // Front matter is numbered in roman numerals; "Page 1" is the first content sheet.
+          pdf.text(['i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x'][tocPageNo - 1] || '', W - margin - 4, H - margin - 4, { align: 'right' });
 
           ty = TOC_TOP;
         }
@@ -5398,18 +5408,14 @@
         pdf.setFontSize(6); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(80, 80, 80);
         pdf.text(entry.typeLabel.toUpperCase(), margin + 12, ty + 0.5, { align: 'center' });
 
-        // P.n label
-        pdf.setFontSize(7.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(40, 40, 40);
-        pdf.text(`P.${entry.pageNum}`, margin + 24, ty + 0.5);
-
         // Title text
         pdf.setFontSize(10); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(44, 44, 44);
-        const maxTitleW = W - margin*2 - 60;
+        const maxTitleW = W - margin*2 - 48;
         const titleLine = pdf.splitTextToSize(entry.title, maxTitleW)[0];
-        pdf.text(titleLine, margin + 36, ty + 0.5);
+        pdf.text(titleLine, margin + 24, ty + 0.5);
 
         // Leader dots
-        const titleEndX = margin + 36 + pdf.getTextWidth(titleLine) + 2;
+        const titleEndX = margin + 24 + pdf.getTextWidth(titleLine) + 2;
         const dotsEndX = W - margin - 16;
         if (titleEndX < dotsEndX) {
           pdf.setFontSize(7); pdf.setTextColor(180, 180, 180);
@@ -5417,9 +5423,9 @@
           while (dx < dotsEndX) { pdf.text('.', dx, ty + 0.5); dx += 2.4; }
         }
 
-        // PDF page number
+        // Page number — the same "Page n" its first sheet carries in the footer
         pdf.setFontSize(10); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(40, 40, 40);
-        pdf.text(String(entry.pdfPage), W - margin - 4, ty + 0.5, { align: 'right' });
+        pdf.text(String(entry.sheet), W - margin - 4, ty + 0.5, { align: 'right' });
 
         ty += TOC_ROW_H;
       });
@@ -5598,7 +5604,7 @@
         const urls = await resolvePhotoUrls(pagePhotos);
         await _pdfPhotoPageBody(pdf, page, pagePhotos, urls, proj, W, H, margin, contentY);
       } else if (page.type === 'gnss') {
-        await _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY, exportTs: exportTsSP });
+        await _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY });
       } else if (page.type === 'notes') {
         let rawHtml = page.notesHtml || '';
         rawHtml = rawHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n')
@@ -5664,13 +5670,8 @@
         }
       }
 
-      // Notebook footer — inside cream paper area
-      pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.3);
-      pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
-      pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(110, 110, 110);
-      pdf.text(`P.${page.pageNumber}`, margin + 4, H - margin - 4);
-      pdf.setFont('helvetica', 'normal'); pdf.setTextColor(150, 150, 150);
-      pdf.text(`Exported  ${exportTsSP}`, W - margin - 4, H - margin - 4, { align: 'right' });
+      // Notebook footer on every sheet of the page
+      _pdfNumberSheets(pdf, 1, W, H, margin, exportTsSP);
 
       const slug = (page.title?.trim() || `P${page.pageNumber}`).replace(/[^a-zA-Z0-9_-]/g, '_');
       const fname = `${proj.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_${slug}_${todayLocalISO()}.pdf`;
