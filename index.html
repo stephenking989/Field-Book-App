@@ -642,7 +642,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.171';
+  const APP_VERSION = '1.172';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -4534,6 +4534,372 @@
     pdf.text(u, bx + barW + 2, by + barH - 0.5, { align: 'left' });
   }
 
+  // ── GNSS OBS PAGE (3 PDF pages) ────────────────────────────────────────────
+
+  // The notebook footer drawn at the bottom of every content page.
+  function _pdfNotebookFooter(pdf, page, W, H, margin, exportTs) {
+    pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.3);
+    pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
+    pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(110, 110, 110);
+    pdf.text(`P.${page.pageNumber}`, margin + 4, H - margin - 4);
+    pdf.setFont('helvetica', 'normal'); pdf.setTextColor(150, 150, 150);
+    pdf.text(`Exported  ${exportTs}`, W - margin - 4, H - margin - 4, { align: 'right' });
+  }
+
+  // Rasterise an SVG string to a PNG data URL — the same html2canvas route the
+  // sketch pages take, so drawings print the way sketches do.
+  async function _svgToPng(svgStr, pxW, pxH) {
+    const sized = svgStr.replace(/width="[\d.]+" height="[\d.]+"/, `width="${pxW}" height="${pxH}"`);
+    const tmp = document.createElement('div');
+    tmp.style.cssText = `position:fixed;left:-9999px;top:-9999px;width:${pxW}px;height:${pxH}px;overflow:hidden;background:transparent;`;
+    tmp.innerHTML = sized;
+    document.body.appendChild(tmp);
+    try {
+      const canvas = await window.html2canvas(tmp, { scale: 1.2, useCORS: true, logging: false, width: pxW, height: pxH, backgroundColor: null });
+      return canvas.toDataURL('image/png');
+    } finally {
+      if (tmp.parentNode) document.body.removeChild(tmp);
+    }
+  }
+
+  function _imgSize(url) {
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload  = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+      img.onerror = () => resolve(null);
+      img.src = url;
+    });
+  }
+
+  // Title for one of a GNSS page's three PDF pages.
+  function _gnssPdfTitle(page, part) {
+    const stn = (page.gnss?.station || '').trim();
+    return `${page.title?.trim() || (stn ? `Stn ${stn}` : 'GNSS Observation')} — ${part}`;
+  }
+
+  // Sketch pages that print inside a GNSS page of this export (as its station
+  // sketch), and so are left out as pages of their own.
+  function _sketchesInsideGnss(pages) {
+    const ids = new Set();
+    pages.forEach(p => {
+      const sk = p.type === 'gnss' && p.gnss?.sketch;
+      if (sk && sk.source === 'linked' && sk.linkedSketchPageId && !sk.ownPage) ids.add(sk.linkedSketchPageId);
+    });
+    return ids;
+  }
+
+  // Draw a GNSS Obs page: Observation Log (on the current PDF page, below its
+  // header), then Station Sketch and Site Obstruction Diagram on two new pages.
+  // Empty fields print as blank ruled lines so the sheets can be completed by
+  // hand. The caller draws the footer of the last page.
+  async function _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY, exportTs }) {
+    const g   = fbGnss.normalize(page.gnss, { projectName: proj.name || '' });
+    const res = fbGnss.solveHeights(g);
+    const L = margin, CW = W - margin * 2;
+    const INK = [28, 28, 28], LBL = [100, 100, 100], RULE = [190, 190, 190], GD = [40, 40, 40];
+    // Helvetica has no prime or minus glyphs — swap them for their plain forms.
+    const safe = v => String(v ?? '').replace(/[′’]/g, "'").replace(/[″”]/g, '"').replace(/−/g, '-');
+    const f4 = v => fbGnss.fmt4(v);
+    const bottomMargin = margin + 14;
+
+    function section(y, text) {
+      pdf.setFontSize(7.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...GD);
+      pdf.text(text.toUpperCase(), L, y + 3);
+      pdf.setDrawColor(120, 120, 120); pdf.setLineWidth(0.4);
+      pdf.line(L, y + 4.5, L + CW, y + 4.5);
+      return y + 8;
+    }
+    // A label over a value on a ruled line.
+    function field(x, y, w, label, value, mono) {
+      pdf.setFontSize(5.8); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...LBL);
+      pdf.text(label.toUpperCase(), x, y + 2);
+      const v = safe(value).trim();
+      if (v) {
+        pdf.setFontSize(9.5); pdf.setFont(mono ? F.mono : 'helvetica', mono ? F.monoSt : 'normal'); pdf.setTextColor(...INK);
+        pdf.text(pdf.splitTextToSize(v, w - 1)[0], x, y + 6.3);
+      }
+      pdf.setDrawColor(...RULE); pdf.setLineWidth(0.25);
+      pdf.line(x, y + 7.5, x + w, y + 7.5);
+    }
+    const ROW = 9, GAP = 4;
+    // cells: [label, value, mono?, span?]
+    function fieldRow(y, cells) {
+      const n = cells.reduce((a, c) => a + (c[3] || 1), 0), unit = (CW - GAP * (n - 1)) / n;
+      let x = L;
+      cells.forEach(([label, value, mono, span = 1]) => {
+        const w = unit * span + GAP * (span - 1);
+        field(x, y, w, label, value, mono);
+        x += w + GAP;
+      });
+      return y + ROW;
+    }
+    function fineText(str, x, y, opts = {}) {
+      pdf.setFontSize(opts.size || 6.5); pdf.setFont('helvetica', opts.style || 'normal'); pdf.setTextColor(...(opts.color || LBL));
+      pdf.text(str, x, y, opts.align ? { align: opts.align } : undefined);
+    }
+    function nextPage(part) {
+      _pdfNotebookFooter(pdf, page, W, H, margin, exportTs);
+      pdf.addPage();
+      return _pdfPageHeader(pdf, { ...page, title: _gnssPdfTitle(page, part), notes: '' }, meta, W, H, margin, F);
+    }
+    // Largest rectangle of aspect iw:ih centred in a box.
+    function fit(x, y, w, h, iw, ih) {
+      const k = Math.min(w / iw, h / ih), fw = iw * k, fh = ih * k;
+      return { x: x + (w - fw) / 2, y: y + (h - fh) / 2, w: fw, h: fh };
+    }
+    const tableBase = {
+      theme: 'grid',
+      styles: { fontSize: 7.5, cellPadding: 0.9, minCellHeight: 4.8, lineColor: RULE, lineWidth: 0.2, textColor: INK, valign: 'middle' },
+      headStyles: { fillColor: GD, textColor: [255, 255, 255], font: 'helvetica', fontStyle: 'bold', halign: 'center', lineColor: GD },
+    };
+    // Rows of a table, padded with blank ruled rows up to `min`.
+    const padRows = (rows, min, cols) => rows.concat(Array.from({ length: Math.max(0, min - rows.length) }, () => Array(cols).fill('')));
+    const angle = (raw, pad) => {
+      const t = String(raw ?? '').trim();
+      if (!t) return '';
+      const v = gnAngle(t);
+      if (v === null || !Number.isFinite(v)) return safe(t);
+      return (Number.isInteger(v) ? String(v).padStart(pad, '0') : String(Math.round(v * 100) / 100)) + '°';
+    };
+    const filled = g.obstructions.filter(o => ['name', 'desc', 'fromAz', 'fromEl', 'toAz', 'toEl', 'comments'].some(k => String(o[k] ?? '').trim()));
+    const obsNo = o => String(g.obstructions.indexOf(o) + 1);    // matches the number on the sky plot
+    const refLetter = g.bearingRef === 'true' ? 'T' : 'M';
+
+    // ═══ Page 1 — Observation Log ═══════════════════════════════════════════
+    let y = section(contentY + 2, 'Project & Station');
+    const autoJulian = fbGnss.julianDay(g.obsDate);
+    const julian = g.julianManual ? g.julianDay : (autoJulian === null ? '' : String(autoJulian));
+    [
+      [['Project Name', g.projectName],                                   ['Project Section or Crew', g.section]],
+      [['Receiver Model', g.receiverModel],                               ['Session Identifier', g.sessionId, true]],
+      [['Receiver Serial No.', g.receiverSerial, true],                   ['Station Number / Name', g.station]],
+      [['Receiver Software', g.receiverSoftware],                         ['Observation Date (UT)', g.obsDate, true]],
+      [['Antenna Model', g.antenna?.name],                                ['Julian Day', julian, true]],
+      [['Antenna Serial No.', g.antennaSerial, true],                     ['Operator(s)', g.operators]],
+      [['Antenna Cable Length', g.cableLength.trim() ? `${g.cableLength.trim()} m` : '', true], ['Receiver File Name', g.fileName, true]],
+    ].forEach(pair => { y = fieldRow(y, pair); });
+
+    y = section(y + 1.5, 'Approx Position & Session');
+    const ht = fbGeo.orthoHeight(fbGnss.num(g.pos.h), g.pos.lat, g.pos.lon);
+    const posFrom = g.pos.source === 'phone'
+      ? `Phone GPS${Number.isFinite(g.pos.acc) ? ` ±${g.pos.acc < 10 ? g.pos.acc.toFixed(1) : Math.round(g.pos.acc)} m` : ''}`
+      : g.pos.source === 'manual' ? 'Entered by hand' : '';
+    const duration = fbGnss.sessionDuration(g.startUT, g.stopUT);
+    const method = g.method === 'Other' ? (g.methodOther.trim() ? `Other: ${g.methodOther.trim()}` : 'Other') : g.method;
+    const unit = (v, u) => (String(v ?? '').trim() ? `${String(v).trim()}${u}` : '');
+    y = fieldRow(y, [
+      ['Approx Lat', fbGnss.fmtLatLonDMS(g.pos.lat, 'lat'), true],
+      ['Approx Long', fbGnss.fmtLatLonDMS(g.pos.lon, 'lon'), true],
+      [ht.H === null ? 'Approx Ht — ellipsoidal (approx)' : 'Approx Ht — ellipsoidal', ht.h === null ? safe(g.pos.h) : `${ht.h.toFixed(1)} m`, true],
+      ['Ht — orthometric (CGVD2013)', ht.H === null ? '' : `${ht.H.toFixed(1)} m`, true],
+    ]);
+    y = fieldRow(y, [
+      ['Start Time (UT)', g.startUT, true], ['Stop Time (UT)', g.stopUT, true],
+      ['Session Length', duration ? duration.text : '', true], ['Recording Interval', unit(g.interval, ' s'), true],
+    ]);
+    y = fieldRow(y, [
+      ['Elev. Mask', unit(g.elevMask, '°'), true], ['PDOP', g.pdop, true],
+      ['Observation Method', method], ['Position From', posFrom],
+    ]);
+
+    y = section(y + 1.5, 'Antenna Height');
+    const top = y, drawW = 56, drawH = drawW * 330 / 240, colW = CW - drawW - 6;
+    const A = g.antenna || {};
+    const constLine = (label, value, mono) => {
+      pdf.setFontSize(7.2); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(...INK);
+      pdf.text(label, L, y + 3);
+      if (value) { pdf.setFont(mono ? F.mono : 'helvetica', mono ? F.monoSt : 'normal'); pdf.text(safe(value), L + colW, y + 3, { align: 'right' }); }
+      pdf.setDrawColor(...RULE); pdf.setLineWidth(0.2);
+      pdf.line(L, y + 4.2, L + colW, y + 4.2);
+      y += 4.5;
+    };
+    [['Radius from antenna centre to slant measure mark (R)', A.R],
+     ['Slant measure mark height above Antenna Reference Point (ARP) (d)', A.d],
+     ['Correction from Antenna Reference Point (ARP) to L1 Phase Centre', A.l1],
+     ['Correction from Antenna Reference Point (ARP) to L2 Phase Centre', A.l2],
+    ].forEach(([label, v]) => constLine(label, f4(v) ? `${f4(v)} m` : '', true));
+    constLine('Slant measure mark', A.slantMark || '');
+    fineText('3 measurements equally spaced around the antenna, at the beginning and again at the end of the session.', L, y + 2.8, { size: 6, style: 'italic' });
+    y += 4.5;
+
+    const READ = [['slant', 'before'], ['slant', 'after'], ['vert', 'before'], ['vert', 'after']];
+    const reading = (set, part, i) => {
+      const raw = String(g[set][part][i] ?? '').trim(), v = fbGnss.num(raw);
+      return Number.isFinite(v) ? f4(v) : safe(raw);
+    };
+    const stat = (set, part, key) => f4(res[set][part]?.[key]);
+    const tableMargin = { left: L, right: W - L - colW, bottom: bottomMargin };
+    pdf.autoTable({
+      ...tableBase, startY: y, margin: tableMargin, tableWidth: colW,
+      head: [[{ content: '', rowSpan: 2 }, { content: 'Slant (m)', colSpan: 2 }, { content: 'Vertical (m)', colSpan: 2 }],
+             ['Before', 'After', 'Before', 'After']],
+      body: [
+        ...[0, 1, 2].map(i => [String(i + 1), ...READ.map(([s, p]) => reading(s, p, i))]),
+        ['Avg',   ...READ.map(([s, p]) => stat(s, p, 'avg'))],
+        ['Range', ...READ.map(([s, p]) => stat(s, p, 'range'))],
+      ],
+      styles: { ...tableBase.styles, halign: 'center', font: F.mono },
+      columnStyles: { 0: { cellWidth: 14, font: 'helvetica', fontStyle: 'bold' } },
+    });
+    y = pdf.lastAutoTable.finalY + 2.5;
+    pdf.autoTable({
+      ...tableBase, startY: y, margin: tableMargin, tableWidth: colW,
+      head: [['Heights (m)', 'Slant', 'Vertical']],
+      body: [
+        ['Avg uncorrected slant to slant mark (S)',     f4(res.slantRes?.S),   ''],
+        ['Uncorrected vertical measurement to ARP (V)', '',                    f4(res.vertRes?.V)],
+        ['Z = sqrt(S² - R²)',                           f4(res.slantRes?.Z),   ''],
+        ['ARP   (slant: Z - d;  vertical: V)',          f4(res.slantRes?.ARP), f4(res.vertRes?.ARP)],
+        ['APC L1 = ARP + L1',                           f4(res.slantRes?.L1),  f4(res.vertRes?.L1)],
+        ['APC L2 = ARP + L2',                           f4(res.slantRes?.L2),  f4(res.vertRes?.L2)],
+      ],
+      styles: { ...tableBase.styles, halign: 'center', font: F.mono },
+      columnStyles: { 0: { halign: 'left', font: 'helvetica' }, 1: { cellWidth: 26 }, 2: { cellWidth: 26 } },
+    });
+    y = pdf.lastAutoTable.finalY + 3.2;
+    const checks = [];
+    if (res.diff !== null) checks.push(`Check: slant - vertical ARP = ${safe(fbGnss.fmtDiff(res.diff))} m`);
+    [['slant', 'Slant'], ['vert', 'Vertical']].forEach(([set, name]) => {
+      if (res[set].flag) checks.push(`${name} range ${f4(res[set].all.range)} m is over the ${f4(res.tol)} m tolerance (app default, not a COGS standard)`);
+    });
+    if (res.slantErr) checks.push(`Slant: ${res.slantErr}`);
+    if (res.vertErr) checks.push(`Vertical: ${res.vertErr}`);
+    checks.forEach(line => { fineText(safe(line), L, y, { color: INK }); y += 3.4; });
+
+    // Antenna height drawing, beside the tables
+    const dx = L + CW - drawW;
+    try {
+      const png = await _svgToPng(fbGnss.buildAntennaSVG(fbGnss.diagramValues(res), { print: true }), 720, 990);
+      pdf.addImage(png, 'PNG', dx, top, drawW, drawH, undefined, 'FAST');
+    } catch (err) {
+      console.error('[pdf] antenna drawing failed:', err);
+      fineText('(drawing could not be rendered)', dx + drawW / 2, top + drawH / 2, { align: 'center' });
+    }
+    pdf.setDrawColor(...RULE); pdf.setLineWidth(0.25);
+    pdf.rect(dx, top, drawW, drawH, 'S');
+    fineText('ANTENNA HEIGHT DRAWING', dx + drawW / 2, top + drawH + 3.2, { size: 5.8, style: 'bold', align: 'center' });
+
+    // ═══ Page 2 — Station Sketch ════════════════════════════════════════════
+    y = nextPage('Station Sketch') + 2;
+    y = fieldRow(y, [['Station Number / Name', g.station], ['Observation Date (UT)', g.obsDate, true], ['Session Identifier', g.sessionId, true]]) + 2;
+
+    const boxH = 118, pad = 1.5, sk = g.sketch;
+    let sat = null;
+    try { if (g.images.satellite?.photoRef) sat = await photoDB.get(g.images.satellite.photoRef); } catch {}
+    const inset = !!(sk.inset && (sk.source === 'linked' || sk.source === 'photo') && sat);
+    const insetW = 58, insetH = insetW * (g.images.satellite?.h || 3) / (g.images.satellite?.w || 4);
+    const mainW = inset ? CW - insetW - pad * 3 : CW - pad * 2;
+    const mainFit = (iw, ih) => fit(L + pad, y + pad, mainW, boxH - pad * 2, iw, ih);
+    let boxNote = '';
+    try {
+      if (sk.source === 'linked') {
+        const sp = (proj.pages || []).find(p => p.id === sk.linkedSketchPageId && p.type === 'sketch');
+        if (!sp) boxNote = '(no sketch page linked)';
+        else if (!(sp.shapes || []).length) boxNote = '(nothing drawn on the linked sketch)';
+        else {
+          const ids = sp.shapes.filter(s => s.type === 'image' && s.imageId).map(s => s.imageId);
+          const imageMap = ids.length ? await photoDB.getMany(ids) : {};
+          const svg = buildSketchSVG(sp.shapes, sp.layers, sp.viewBox, sp.scaleDenom, sp.units, sp.showDims !== false, true, imageMap);
+          const vb = sp.viewBox || { w: 800, h: 600 };
+          const r = mainFit(vb.w, vb.h);
+          if (sp.showGrid !== false) {
+            pdf.setDrawColor(200, 195, 185); pdf.setLineWidth(0.12);
+            for (let gx = r.x; gx <= r.x + r.w + 0.01; gx += 5) pdf.line(gx, r.y, gx, r.y + r.h);
+            for (let gy = r.y; gy <= r.y + r.h + 0.01; gy += 5) pdf.line(r.x, gy, r.x + r.w, gy);
+          }
+          pdf.addImage(await _svgToPng(svg, 1400, Math.round(1400 * vb.h / vb.w)), 'PNG', r.x, r.y, r.w, r.h, undefined, 'FAST');
+        }
+      } else if (sk.source === 'satellite') {
+        if (sat) { const r = mainFit(g.images.satellite.w || 4, g.images.satellite.h || 3); pdf.addImage(sat, 'JPEG', r.x, r.y, r.w, r.h, undefined, 'FAST'); }
+        else boxNote = '(no satellite image captured)';
+      } else if (sk.source === 'photo') {
+        const url = g.images.photo?.photoRef ? await photoDB.get(g.images.photo.photoRef) : null;
+        const size = url ? await _imgSize(url) : null;
+        if (size) { const r = mainFit(size.w, size.h); pdf.addImage(url, 'JPEG', r.x, r.y, r.w, r.h, undefined, 'FAST'); }
+        else boxNote = '(no photo added)';
+      }
+    } catch (err) {
+      console.error('[pdf] station sketch failed:', err);
+      boxNote = '(sketch could not be rendered)';
+    }
+    if (inset) {
+      const ix = L + CW - insetW - pad, iy = y + pad;
+      pdf.addImage(sat, 'JPEG', ix, iy, insetW, insetH, undefined, 'FAST');
+      pdf.setDrawColor(...GD); pdf.setLineWidth(0.3);
+      pdf.rect(ix, iy, insetW, insetH, 'S');
+      fineText('LOCATION', ix, iy + insetH + 3, { size: 5.8, style: 'bold' });
+    }
+    if (boxNote) fineText(boxNote, L + pad + mainW / 2, y + boxH / 2, { size: 8, align: 'center', color: [150, 150, 150] });
+    pdf.setDrawColor(...GD); pdf.setLineWidth(0.4);
+    pdf.rect(L, y, CW, boxH, 'S');
+    y += boxH + 4;
+
+    // Sketch notes — the text, or blank lines to write on
+    pdf.setFontSize(5.8); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...LBL);
+    pdf.text('SKETCH NOTES / TO REACH', L, y + 2);
+    y += 6.5;
+    const noteText = safe(sk.notes).trim();
+    if (noteText) {
+      pdf.setFontSize(9); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(...INK);
+      pdf.splitTextToSize(noteText, CW).slice(0, 6).forEach(line => { pdf.text(line, L, y); y += 4.4; });
+      y += 1;
+    } else {
+      pdf.setDrawColor(...RULE); pdf.setLineWidth(0.25);
+      for (let i = 0; i < 2; i++) { pdf.line(L, y, L + CW, y); y += 6.5; }
+      y -= 3;
+    }
+
+    const wideMargin = { left: L, right: L, bottom: bottomMargin };
+    pdf.autoTable({
+      ...tableBase, startY: y + 1, margin: wideMargin, tableWidth: CW,
+      head: [['#', 'Obstruction', `Bearing (from – to, ${g.bearingRef === 'true' ? 'true' : 'magnetic'})`, 'Comments']],
+      body: padRows(filled.map(o => {
+        const from = angle(o.fromAz, 3), to = angle(o.toAz, 3);
+        return [obsNo(o), safe(o.name), from || to ? `${from}${to ? ` – ${to}` : ''} ${refLetter}` : '', safe(o.comments)];
+      }), 4, 4),
+      columnStyles: { 0: { cellWidth: 9, halign: 'center' }, 1: { cellWidth: 48 }, 2: { cellWidth: 46, font: F.mono, halign: 'center' } },
+    });
+    pdf.autoTable({
+      ...tableBase, startY: pdf.lastAutoTable.finalY + 4, margin: wideMargin, tableWidth: CW,
+      head: [['Time (UT)', 'General and weather observations']],
+      body: padRows(g.observations.filter(o => String(o.time).trim() || String(o.text).trim()).map(o => [safe(o.time), safe(o.text)]), 4, 2),
+      columnStyles: { 0: { cellWidth: 26, font: F.mono, halign: 'center' } },
+    });
+
+    // ═══ Page 3 — Site Obstruction Diagram ══════════════════════════════════
+    y = nextPage('Site Obstruction Diagram') + 2;
+    y = fieldRow(y, [['Project Name', g.projectName], ['Station Number / Name', g.station], ['Observation Date (UT)', g.obsDate, true]]) + 3;
+    const plotW = 132, plotH = plotW * 344 / 320, px = L + (CW - plotW) / 2;
+    const north = fbGnss.plotNorth({ ref: g.bearingRef, declination: g.declination });
+    try {
+      const svg = fbGnss.buildSkyPlotSVG(g.obstructions, { print: true, ref: g.bearingRef, declination: g.declination, mask: g.elevMask, parse: gnAngle });
+      pdf.addImage(await _svgToPng(svg, 1280, 1376), 'PNG', px, y, plotW, plotH, undefined, 'FAST');
+    } catch (err) {
+      console.error('[pdf] sky plot failed:', err);
+      fineText('(sky plot could not be rendered)', L + CW / 2, y + plotH / 2, { size: 8, align: 'center' });
+    }
+    y += plotH + 4;
+    const decl = fbGnss.num(g.declination);
+    const northLine = g.bearingRef === 'true'
+      ? 'North reference: bearings entered and plotted as TRUE.'
+      : north.shift ? `North reference: bearings entered as MAGNETIC, plotted to TRUE NORTH with declination ${decl > 0 ? '+' : ''}${decl}° (True = Magnetic + declination).`
+      : 'North reference: bearings entered and plotted as MAGNETIC. Declination: not entered.';
+    fineText(northLine, L + CW / 2, y, { size: 7.5, color: INK, align: 'center' });
+    const maskText = unit(g.elevMask, '°');
+    fineText(`Outer ring = horizon (0°), centre = zenith (90°).${maskText ? `  Dashed ring = elevation mask ${maskText}.` : ''}`, L + CW / 2, y + 4, { align: 'center' });
+    y += 8;
+    pdf.autoTable({
+      ...tableBase, startY: y, margin: wideMargin, tableWidth: CW,
+      head: [['#', 'Obstruction', 'Type / Description', 'From Az', 'Elev', 'To Az', 'Elev']],
+      body: padRows(filled.map(o => [obsNo(o), safe(o.name), safe(o.desc), angle(o.fromAz, 3), angle(o.fromEl, 1), angle(o.toAz, 3), angle(o.toEl, 1)]), 6, 7),
+      columnStyles: {
+        0: { cellWidth: 9, halign: 'center' }, 1: { cellWidth: 44 },
+        3: { cellWidth: 19, font: F.mono, halign: 'center' }, 4: { cellWidth: 16, font: F.mono, halign: 'center' },
+        5: { cellWidth: 19, font: F.mono, halign: 'center' }, 6: { cellWidth: 16, font: F.mono, halign: 'center' },
+      },
+    });
+  }
+
   // Main project PDF export — called from ProjectView.
   // pageIds (optional array) limits the export to those pages; omitted = whole job.
   async function exportProjectPDF(projectId, toast, setExporting, pageIds) {
@@ -4545,7 +4911,11 @@
       if (!proj) { toast.error('Project not found'); return; }
       const allPages = proj.pages || [];
       const idSet = pageIds ? new Set(pageIds) : null;
-      const exportPages = idSet ? allPages.filter(p => idSet.has(p.id)) : allPages;
+      const pickedPages = idSet ? allPages.filter(p => idSet.has(p.id)) : allPages;
+      // A station sketch already prints inside its GNSS page, so it isn't repeated
+      // as a page of its own (unless that GNSS page says to export it too).
+      const insideGnss = _sketchesInsideGnss(pickedPages);
+      const exportPages = pickedPages.filter(p => !(p.type === 'sketch' && insideGnss.has(p.id)));
       // Day each page belongs to (its title page), for TOC headings + filename.
       const dayOf = {};
       groupPages(allPages).forEach(g => {
@@ -4690,9 +5060,12 @@
                        title:  { label: 'Title',  color: '#606060', bg: '#EEEEEE' },
                        photo:  { label: 'Photos', color: '#606060', bg: '#EEEEEE' },
                        points: { label: 'Points', color: '#606060', bg: '#EEEEEE' },
-                       notes:  { label: 'Notes',  color: '#606060', bg: '#EEEEEE' } }[page.type]
+                       notes:  { label: 'Notes',  color: '#606060', bg: '#EEEEEE' },
+                       gnss:   { label: 'GNSS Obs' } }[page.type]
                    || { label: 'Data', color: '#606060', bg: '#EEEEEE' };
-        const displayTitle = page.title?.trim() || `P.${page.pageNumber} — ${meta.label}`;
+        // An untitled GNSS page is listed by its station.
+        const gnssStn = page.type === 'gnss' ? (page.gnss?.station || '').trim() : '';
+        const displayTitle = page.title?.trim() || (gnssStn ? `Stn ${gnssStn} — ${meta.label}` : `P.${page.pageNumber} — ${meta.label}`);
         tocEntries.push({ pageNum: page.pageNumber, typeLabel: meta.label, title: displayTitle, pdfPage: pdfPageNum, day: dayOf[page.id] || null });
 
         if (page.type === 'sketch') {
@@ -4847,6 +5220,11 @@
           const pagePhotos = page.photos || [];
           const urls = await resolvePhotoUrls(pagePhotos);
           await _pdfPhotoPageBody(pdf, page, pagePhotos, urls, proj, W, H, margin, contentY);
+
+        } else if (page.type === 'gnss') {
+          // ── GNSS OBS PAGE — observation log, station sketch, obstruction diagram ──
+          const contentY = _pdfPageHeader(pdf, { ...page, title: _gnssPdfTitle(page, 'Observation Log'), notes: '' }, meta, W, H, margin, F);
+          await _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY, exportTs });
 
         } else if (page.type === 'notes') {
           // ── NOTES PAGE ──────────────────────────────────────────────────────────
@@ -5087,11 +5465,18 @@
         title:  { label: 'Title',  color: '#606060', bg: '#EEEEEE' },
         photo:  { label: 'Photos', color: '#606060', bg: '#EEEEEE' },
         notes:  { label: 'Notes',  color: '#606060', bg: '#EEEEEE' },
+        gnss:   { label: 'GNSS Obs' },
       };
       const meta = metaMap[page.type] || metaMap.data;
       const pdf  = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       const F    = _initPDFFonts();
-      const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
+      const exportTsSP = new Date().toLocaleString('en-CA', {
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      });
+      // A GNSS page prints as three PDF pages; the first is its Observation Log.
+      const headPage = page.type === 'gnss' ? { ...page, title: _gnssPdfTitle(page, 'Observation Log'), notes: '' } : page;
+      const contentY = _pdfPageHeader(pdf, headPage, meta, W, H, margin, F);
 
       if (page.type === 'sketch') {
         // Grid covers full content area
@@ -5214,6 +5599,8 @@
         const pagePhotos = page.photos || [];
         const urls = await resolvePhotoUrls(pagePhotos);
         await _pdfPhotoPageBody(pdf, page, pagePhotos, urls, proj, W, H, margin, contentY);
+      } else if (page.type === 'gnss') {
+        await _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY, exportTs: exportTsSP });
       } else if (page.type === 'notes') {
         let rawHtml = page.notesHtml || '';
         rawHtml = rawHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n')
@@ -5280,10 +5667,6 @@
       }
 
       // Notebook footer — inside cream paper area
-      const exportTsSP = new Date().toLocaleString('en-CA', {
-        year: 'numeric', month: 'short', day: 'numeric',
-        hour: '2-digit', minute: '2-digit', hour12: false,
-      });
       pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.3);
       pdf.line(margin + 4, H - margin - 10, W - margin - 4, H - margin - 10);
       pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(110, 110, 110);
@@ -6063,6 +6446,8 @@
       onExport(pages.filter(p => checked.has(p.id)).map(p => p.id), excludeMap);
     }
 
+    // Station sketches that will print inside a ticked GNSS page.
+    const insideGnss = _sketchesInsideGnss(pages.filter(p => checked.has(p.id)));
     const pageRow = (p, indent) => {
       const meta = TYPE_META[p.type] || TYPE_META.data;
       return (
@@ -6075,6 +6460,10 @@
           <span className="flex-1 min-w-0 text-sm text-fb-text truncate">{p.title?.trim() || 'Untitled'}</span>
           {p.pdfExclude && !checked.has(p.id) && (
             <span className="text-[9px] font-bold uppercase tracking-wider text-fb-muted flex-shrink-0">Left out</span>
+          )}
+          {p.type === 'sketch' && insideGnss.has(p.id) && checked.has(p.id) && (
+            <span title="Prints inside its GNSS Obs page, not as a page of its own"
+              className="text-[9px] font-bold uppercase tracking-wider text-fb-ink-muted flex-shrink-0">In GNSS page</span>
           )}
         </label>
       );
