@@ -517,8 +517,57 @@
     return out.join('');
   }
 
+  // ─── Station sketch images ─────────────────────────────────────────────────
+  // page.gnss.images holds up to two pictures, each { photoRef, … } keyed into
+  // photoDB: `satellite` (captured imagery) and `photo` (camera / gallery).
+  const IMAGE_SLOTS = ['satellite', 'photo'];
+  function pageImageRefs(pg) {
+    const imgs = pg && pg.gnss && pg.gnss.images;
+    if (!imgs) return [];
+    return IMAGE_SLOTS.map(k => imgs[k] && imgs[k].photoRef).filter(Boolean);
+  }
+
+  // Satellite imagery: Esri World Imagery, standard 256 px web-mercator tiles.
+  const SAT_TILE_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile';
+  const SAT_HOST = 'server.arcgisonline.com';
+  const SAT_ATTRIBUTION = 'Imagery: Esri, Maxar, Earthstar Geographics';
+  const SAT_ZOOM = { min: 14, max: 19, initial: 18 };
+  const TILE = 256;
+
+  // Position in tile units at a zoom level (fractional — the integer part is the tile).
+  function tileXY(lat, lon, z) {
+    const n = Math.pow(2, z), phi = lat * Math.PI / 180;
+    return { x: (lon + 180) / 360 * n, y: (1 - Math.asinh(Math.tan(phi)) / Math.PI) / 2 * n };
+  }
+  function metresPerPixel(lat, z) {
+    return 156543.03392804097 * Math.cos(lat * Math.PI / 180) / Math.pow(2, z);
+  }
+  // The tiles that cover a w × h canvas centred on the station, each with the
+  // canvas position (dx, dy) to draw it at.
+  function tilePlan(lat, lon, z, w, h) {
+    const c = tileXY(lat, lon, z), n = Math.pow(2, z);
+    const left = c.x * TILE - w / 2, top = c.y * TILE - h / 2;
+    const tiles = [];
+    for (let ty = Math.floor(top / TILE); ty * TILE < top + h; ty++) {
+      if (ty < 0 || ty >= n) continue;
+      for (let tx = Math.floor(left / TILE); tx * TILE < left + w; tx++) {
+        const x = ((tx % n) + n) % n;
+        tiles.push({ x, y: ty, url: `${SAT_TILE_URL}/${z}/${ty}/${x}`, dx: Math.round(tx * TILE - left), dy: Math.round(ty * TILE - top) });
+      }
+    }
+    return { tiles, mpp: metresPerPixel(lat, z) };
+  }
+  // Longest round distance (1, 2 or 5 × 10ⁿ m) whose bar fits in maxPx.
+  function niceScale(mpp, maxPx) {
+    const max = mpp * maxPx;
+    let best = 1;
+    for (let e = -1; e <= 6; e++) for (const m of [1, 2, 5]) { const v = m * Math.pow(10, e); if (v <= max) best = v; }
+    return { metres: best, px: best / mpp, label: best >= 1000 ? `${best / 1000} km` : `${best} m` };
+  }
+
   const api = {
     BUILTIN_ANTENNAS, DEFAULT_ANTENNA_ID, METHODS, DEFAULT_TOL,
+    IMAGE_SLOTS, pageImageRefs, SAT_HOST, SAT_ATTRIBUTION, SAT_ZOOM, tileXY, metresPerPixel, tilePlan, niceScale,
     diagramValues, buildAntennaSVG, plotNorth, skyWedges, inWedge, wedgeElev, buildSkyPlotSVG,
     num, fmt4, fmtDiff,
     julianDay, utcDateISO, utcTimeHMS, parseHMS, fmtHMS, sessionDuration,

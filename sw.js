@@ -4,7 +4,7 @@
 // Bump this string every time you deploy new code.
 // The activate handler deletes any cache with a different name, forcing
 // browsers and installed PWAs to discard stale files and re-fetch everything.
-const CACHE_NAME = 'fieldbook-v1.170';
+const CACHE_NAME = 'fieldbook-v1.171';
 
 // Core app shell files to pre-cache on install
 const APP_SHELL = [
@@ -66,6 +66,10 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
+  // Satellite map tiles (GNSS Obs page) go straight to the network and are
+  // never cached: every station asks for different tiles, so caching them
+  // would only grow the cache. The captured image is stored with the page.
+  if (url.hostname === 'server.arcgisonline.com') return;
   // For CDN requests (React, Tailwind, etc.) — network first, fall back to cache
   if (url.origin !== location.origin) {
     event.respondWith(

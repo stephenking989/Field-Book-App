@@ -642,7 +642,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.170';
+  const APP_VERSION = '1.171';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -795,6 +795,8 @@
           (pg.shapes || []).forEach(s => {
             if (s && s.imageId) live.add(s.imageId);
           });
+          // GNSS page station-sketch images (satellite capture, photo)
+          fbGnss.pageImageRefs(pg).forEach(ref => live.add(ref));
         });
       });
       const all = await keys();
@@ -1268,12 +1270,14 @@
       newProj.exportChain = [];
       delete newProj.archived;
       delete newProj.archivedAt;
+      const pageIds = {};
       newProj.pages = newProj.pages.map(pg => ({
         ...pg,
-        id: uid(),
+        id: (pageIds[pg.id] = uid()),
         rows:   (pg.rows   || []).map(r => ({ ...r, id: uid() })),
         shapes: (pg.shapes || []).map(s => ({ ...s, id: uid() })),
       }));
+      remapPageLinks(newProj.pages, pageIds);
       _saveProjectRaw(newProj);
       return newProj;
     },
@@ -1345,6 +1349,7 @@
       newPage.id = uid();
       newPage.title = (src.title?.trim() ? src.title.trim() + ' (Copy)' : '(Copy)');
       delete newPage.collapsed;
+      delete newPage.linkedTo;   // a copied station sketch is not the one its GNSS page prints
       if (newPage.rows)   newPage.rows   = newPage.rows.map(r => ({ ...r, id: uid() }));
       if (newPage.shapes) newPage.shapes = newPage.shapes.map(s => ({ ...s, id: uid() }));
       // Insert beside the source so the copy stays in the same day folder. A
@@ -2087,11 +2092,12 @@
       });
     }
 
-    // Collect all IDB keys: DataPage photoRefs + sketch imageIds
+    // Collect all IDB keys: DataPage photoRefs + sketch imageIds + GNSS page images
     const allRefs = [];
     pages.forEach(pg => {
       (pg.photos || []).forEach(ph => { if (ph && ph.photoRef) allRefs.push(ph.photoRef); });
       (pg.shapes || []).forEach(s  => { if (s  && s.imageId)   allRefs.push(s.imageId);   });
+      allRefs.push(...fbGnss.pageImageRefs(pg));
     });
     if (allRefs.length === 0) return clone;
     const map = await photoDB.getMany(allRefs);
@@ -2115,6 +2121,17 @@
             return { ...rest, dataUrl: map[imageId] };
           }
           return s;
+        });
+      }
+      // Inline GNSS page images (satellite capture, station photo)
+      const imgs = pg.gnss && pg.gnss.images;
+      if (imgs) {
+        fbGnss.IMAGE_SLOTS.forEach(slot => {
+          const im = imgs[slot];
+          if (im && im.photoRef && map[im.photoRef]) {
+            const { photoRef, ...rest } = im;
+            imgs[slot] = { ...rest, dataUrl: map[photoRef] };
+          }
         });
       }
     });
@@ -2179,6 +2196,22 @@
           }
         }
         pg.shapes = next;
+      }
+      // Extract GNSS page images back into photoDB under fresh refs
+      const imgs = pg.gnss && pg.gnss.images;
+      if (imgs) {
+        for (const slot of fbGnss.IMAGE_SLOTS) {
+          const im = imgs[slot];
+          if (!im || !im.dataUrl || im.photoRef) continue;
+          try {
+            const ref = photoDB.newRef();
+            await photoDB.put(ref, im.dataUrl);
+            const { dataUrl, ...rest } = im;
+            imgs[slot] = { ...rest, photoRef: ref };
+          } catch (err) {
+            console.error('GNSS image extract-on-import failed:', err);
+          }
+        }
       }
     }
     return projOrPage;
@@ -2247,6 +2280,7 @@
     // Generate fresh IDs so the imported project doesn't collide with existing ones
     let n = Date.now();
     const uid = () => String(++n);
+    const pageIds = {};
     const newProject = {
       ...srcProject,
       id:            uid(),
@@ -2254,10 +2288,11 @@
       exportChain:   [...chain, importRecord],
       pages: (srcProject.pages || []).map(pg => ({
         ...pg,
-        id:   uid(),
+        id:   (pageIds[pg.id] = uid()),
         rows: (pg.rows || []).map(r => ({ ...r, id: uid() })),
       })),
     };
+    remapPageLinks(newProject.pages, pageIds);
 
     // Move any inline photo dataUrls into photoDB so the project lives under
     // the new photoRef scheme after import.
@@ -2271,6 +2306,23 @@
   // PAGE TRANSFER HELPERS
   // ─────────────────────────────────────────────────────────────────────────────
 
+  // A GNSS page and its station sketch point at each other by page id
+  // (page.gnss.sketch.linkedSketchPageId ⇄ sketch page.linkedTo). When a whole
+  // project's pages are given new ids, carry those links across; a link whose
+  // other page isn't in `idMap` is cleared.
+  function remapPageLinks(pages, idMap) {
+    pages.forEach(pg => {
+      if (pg.linkedTo) {
+        if (idMap[pg.linkedTo]) pg.linkedTo = idMap[pg.linkedTo];
+        else delete pg.linkedTo;
+      }
+      const sk = pg.gnss && pg.gnss.sketch;
+      if (sk && sk.linkedSketchPageId) {
+        pg.gnss = { ...pg.gnss, sketch: { ...sk, linkedSketchPageId: idMap[sk.linkedSketchPageId] || '' } };
+      }
+    });
+  }
+
   // Deep-clone a page with all-new IDs (page, rows, shapes, photos, voice notes).
   // Does NOT modify pageChain — callers append chain records themselves.
   function freshPageIds(page) {
@@ -2278,6 +2330,8 @@
     const uid = () => 'p_' + (++n) + '_' + Math.random().toString(36).slice(2, 7);
     const cloned = JSON.parse(JSON.stringify(page));
     cloned.id = uid();
+    // The page is leaving its project, so page-to-page links can't follow it.
+    remapPageLinks([cloned], {});
     if (Array.isArray(cloned.rows)) {
       cloned.rows = cloned.rows.map(r => ({ ...r, id: uid() }));
     }
@@ -5253,6 +5307,24 @@
   // PROJECT VIEW
   // ─────────────────────────────────────────────────────────────────────────────
 
+  // View settings a new sketch page inherits from the most recent sketch page
+  // in the project, so it starts configured like the last one worked on. A
+  // project with no sketch pages yet gets the defaults (everything on, 1:1).
+  function sketchViewDefaults(project) {
+    const prevSketch = [...(project.pages || [])].reverse().find(p => p.type === 'sketch');
+    if (!prevSketch) return {};
+    return {
+      showGrid:      prevSketch.showGrid      !== false,
+      showDims:      prevSketch.showDims      !== false,
+      dimsOnDraw:    prevSketch.dimsOnDraw    !== false,
+      showValueCard: prevSketch.showValueCard !== false,
+      showScaleBar:  prevSketch.showScaleBar  !== false,
+      showNorthArrow:prevSketch.showNorthArrow !== false,
+      scaleDenom:    prevSketch.scaleDenom    || 1,
+      units:         prevSketch.units         || 'm',
+    };
+  }
+
   const TYPE_META = {
     data:   { label: 'Data',   ...FB_BRAND.PAGE_TYPES.data,   Icon: () => <Ico.Table />  },
     sketch: { label: 'Sketch', ...FB_BRAND.PAGE_TYPES.sketch, Icon: () => <Ico.Grid />   },
@@ -5318,23 +5390,7 @@
     function handleTypeSelect(type) {
       let pageData = { type };
       if (type === 'sketch') {
-        // Inherit view settings from the most recent sketch page in this project
-        // so new pages start with the same configuration as the last one worked on.
-        // A brand-new project has no prior sketch pages, so defaults (all true, 1:1) apply.
-        const prevSketch = [...(project.pages || [])].reverse().find(p => p.type === 'sketch');
-        if (prevSketch) {
-          pageData = {
-            type: 'sketch',
-            showGrid:      prevSketch.showGrid      !== false,
-            showDims:      prevSketch.showDims      !== false,
-            dimsOnDraw:    prevSketch.dimsOnDraw    !== false,
-            showValueCard: prevSketch.showValueCard !== false,
-            showScaleBar:  prevSketch.showScaleBar  !== false,
-            showNorthArrow:prevSketch.showNorthArrow !== false,
-            scaleDenom:    prevSketch.scaleDenom    || 1,
-            units:         prevSketch.units         || 'm',
-          };
-        }
+        pageData = { type: 'sketch', ...sketchViewDefaults(project) };
       }
       if (type === 'data') {
         // Each column now carries: id, label, colType ('text'|'num'|'dms'), width
@@ -6698,6 +6754,8 @@
     );
 
     const PageContent = getPageComponent(page.type);
+    // A station sketch opened from its GNSS page goes back to that page.
+    const sketchOwner = page.type === 'sketch' ? gnssOwnerOfSketch(project, page) : null;
 
     return (
       <div className="flex flex-col h-full" style={{ background: FBC.field }}>
@@ -6722,7 +6780,8 @@
             project={project}
             onReload={reload}
             onRegisterExports={page.type === 'data' || page.type === 'photo' ? registerExports : undefined}
-            onBack={page.type === 'sketch' ? () => navigate(`#/project/${projectId}`) : undefined}
+            onBack={page.type === 'sketch' ? () => navigate(sketchOwner
+              ? `#/project/${projectId}/page/${sketchOwner.id}` : `#/project/${projectId}`) : undefined}
             prevPageId={page.type === 'sketch' ? prevPage?.id : undefined}
             nextPageId={page.type === 'sketch' ? nextPage?.id : undefined}
             onDownload={page.type === 'sketch' ? handleExportPDF : undefined}
@@ -11524,6 +11583,470 @@
     );
   }
 
+  // ── Station sketch ───────────────────────────────────────────────────────────
+  // The GNSS page whose station sketch is this sketch page, if any.
+  function gnssOwnerOfSketch(project, sketchPage) {
+    const owners = (project.pages || []).filter(p => p.type === 'gnss' && p.gnss?.sketch?.linkedSketchPageId === sketchPage.id);
+    return owners.find(p => p.id === sketchPage.linkedTo) || owners[0] || null;
+  }
+
+  const GN_SKETCH_SOURCES = [['linked', 'Sketch'], ['satellite', 'Satellite'], ['photo', 'Photo'], ['blank', 'Blank']];
+  // Grow a textarea to fit what's typed. An empty one keeps its `rows` height —
+  // a wrapped placeholder would otherwise be measured as content.
+  const gnGrow = el => {
+    if (!el) return;
+    el.style.height = 'auto';
+    if (el.value) el.style.height = el.scrollHeight + 'px';
+  };
+  const gnUT = iso => (iso ? iso.slice(0, 16).replace('T', ' ') + ' UT' : '');
+
+  // An ON / OFF setting on the page (DESIGN.md → Toggle row).
+  function GnToggle({ on, onChange, title, help }) {
+    return (
+      <button type="button" onClick={() => onChange(!on)} aria-pressed={on}
+        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left bg-fb-page-alt border border-fb-border active:opacity-80">
+        <span className="flex-1 min-w-0">
+          <span className="block text-sm text-fb-ink">{title}</span>
+          {help && <span className="block text-xs text-fb-ink-muted leading-snug">{help}</span>}
+        </span>
+        <span className={`text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0 ${on ? 'bg-fb-accent text-white' : 'bg-fb-border text-fb-ink'}`}>{on ? 'ON' : 'OFF'}</span>
+      </button>
+    );
+  }
+
+  // A picture kept in photoDB, drawn at the width it is given.
+  function GnImage({ photoRef, alt }) {
+    const [url, setUrl] = useState(null);
+    const [missing, setMissing] = useState(false);
+    useEffect(() => {
+      let live = true;
+      setUrl(null); setMissing(false);
+      photoDB.get(photoRef)
+        .then(u => { if (live) { if (u) setUrl(u); else setMissing(true); } })
+        .catch(() => { if (live) setMissing(true); });
+      return () => { live = false; };
+    }, [photoRef]);
+    if (missing) return <p className="text-sm text-fb-ink-muted py-6 text-center bg-fb-page-alt">This image isn't stored on this device.</p>;
+    if (!url) return <div className="bg-fb-page-alt" style={{ aspectRatio: '4 / 3' }} />;
+    return <img src={url} alt={alt} className="block w-full h-auto" />;
+  }
+
+  // Live thumbnail of a sketch page, drawn by the builder the PDF export uses.
+  function GnSketchThumb({ sketchPage }) {
+    const [svg, setSvg] = useState(null);
+    useEffect(() => {
+      let live = true;
+      (async () => {
+        const ids = (sketchPage.shapes || []).filter(s => s.type === 'image' && s.imageId).map(s => s.imageId);
+        const imageMap = ids.length ? await photoDB.getMany(ids) : {};
+        const out = (sketchPage.shapes || []).length
+          ? buildSketchSVG(sketchPage.shapes, sketchPage.layers, sketchPage.viewBox, sketchPage.scaleDenom, sketchPage.units,
+                           sketchPage.showDims !== false, true, imageMap)
+          : '';
+        if (live) setSvg(out || '');
+      })();
+      return () => { live = false; };
+    }, [sketchPage]);
+    if (svg === null) return <div className="bg-fb-field" style={{ aspectRatio: '4 / 3' }} />;
+    return svg
+      ? <GnDrawing svg={svg} className="bg-fb-field" />
+      : <p className="text-sm text-fb-ink-muted py-10 text-center bg-fb-field">Nothing drawn on this sketch yet.</p>;
+  }
+
+  // Sheet listing the project's sketch pages, to link one as the station sketch.
+  function SketchPickerSheet({ project, currentId, onPick, onClose }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const sketches = (project.pages || []).filter(p => p.type === 'sketch');
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-fb-ink mb-4">Link a sketch page</h2>
+          {sketches.length === 0
+            ? <p className="text-sm text-fb-ink-muted py-6 mb-3 text-center rounded-xl bg-fb-page-alt">No sketch pages in this project yet.</p>
+            : (
+              <div className="space-y-1.5 mb-3">
+                {sketches.map(p => (
+                  <button key={p.id} onClick={() => onPick(p)}
+                    className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left border active:opacity-80 ${p.id === currentId
+                      ? 'bg-fb-accent-pale border-fb-accent' : 'bg-fb-page-alt border-fb-border'}`}>
+                    <span className="font-data text-sm text-fb-ink w-10 flex-shrink-0">P.{p.pageNumber}</span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm text-fb-ink truncate">{p.title?.trim() || 'Untitled sketch'}</span>
+                      <span className="block text-xs text-fb-ink-muted font-data">{p.date}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          <button onClick={onClose}
+            className="w-full py-3 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Burn the station pin, north arrow, scale bar and attribution into a
+  // stitched satellite image. White linework over a black casing reads on any
+  // ground cover. Web-mercator imagery is north up.
+  const SAT_W = 1024, SAT_H = 768;
+  function drawSatOverlay(ctx, mpp, station) {
+    const cx = SAT_W / 2, cy = SAT_H / 2;
+    const cased = path => {
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 8; path(); ctx.stroke();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 3.5; path(); ctx.stroke();
+    };
+    const label = (str, x, y, size, align) => {
+      ctx.font = `700 ${size}px sans-serif`;
+      ctx.textAlign = align; ctx.textBaseline = 'middle';
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 6; ctx.strokeText(str, x, y);
+      ctx.fillStyle = '#fff'; ctx.fillText(str, x, y);
+    };
+    ctx.save();
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    // Station pin — a ring with cross-hairs, open at the centre so the mark shows
+    cased(() => { ctx.beginPath(); ctx.arc(cx, cy, 17, 0, Math.PI * 2); });
+    cased(() => {
+      ctx.beginPath();
+      [[0, -34, 0, -9], [0, 9, 0, 34], [-34, 0, -9, 0], [9, 0, 34, 0]].forEach(([a, b, c, d]) => {
+        ctx.moveTo(cx + a, cy + b); ctx.lineTo(cx + c, cy + d);
+      });
+    });
+    if (station) label(station, cx + 28, cy - 30, 26, 'left');
+    // North arrow, top right
+    const nx = SAT_W - 54, ny = 44;
+    cased(() => {
+      ctx.beginPath();
+      ctx.moveTo(nx, ny + 78); ctx.lineTo(nx, ny + 24);
+      ctx.moveTo(nx - 15, ny + 48); ctx.lineTo(nx, ny + 22); ctx.lineTo(nx + 15, ny + 48);
+    });
+    label('N', nx, ny, 30, 'center');
+    // Scale bar, bottom left
+    const bar = fbGnss.niceScale(mpp, 240), bx = 30, by = SAT_H - 34;
+    cased(() => {
+      ctx.beginPath();
+      ctx.moveTo(bx, by - 12); ctx.lineTo(bx, by); ctx.lineTo(bx + bar.px, by); ctx.lineTo(bx + bar.px, by - 12);
+    });
+    label(bar.label, bx + bar.px / 2, by - 26, 22, 'center');
+    // Attribution, bottom right
+    ctx.font = '400 17px sans-serif';
+    const aw = ctx.measureText(fbGnss.SAT_ATTRIBUTION).width;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(SAT_W - aw - 22, SAT_H - 30, aw + 22, 30);
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    ctx.fillText(fbGnss.SAT_ATTRIBUTION, SAT_W - 11, SAT_H - 15);
+    ctx.restore();
+  }
+
+  // Sheet that fetches satellite imagery around the station, stitches it on a
+  // canvas centred on the mark and hands back a JPEG. It needs a signal now;
+  // the saved image then works offline and in the PDF.
+  function SatelliteCaptureSheet({ lat, lon, station, onSave, onClose }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const canvasRef = useRef(null);
+    const { min, max, initial } = fbGnss.SAT_ZOOM;
+    const [zoom, setZoom] = useState(initial);
+    const [state, setState] = useState('loading');   // 'loading' | 'ready' | 'partial' | 'failed' | 'offline'
+    const [saveErr, setSaveErr] = useState(null);
+    const [attempt, setAttempt] = useState(0);
+
+    useEffect(() => {
+      const ctx = canvasRef.current.getContext('2d');
+      let live = true;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, SAT_W, SAT_H);
+      setSaveErr(null);
+      if (navigator.onLine === false) { setState('offline'); return; }
+      setState('loading');
+      const plan = fbGnss.tilePlan(lat, lon, zoom, SAT_W, SAT_H);
+      let done = 0, failed = 0;
+      const settle = () => {
+        if (!live || done + failed < plan.tiles.length) return;
+        if (done === 0) { setState('failed'); return; }
+        drawSatOverlay(ctx, plan.mpp, station);
+        setState(failed ? 'partial' : 'ready');
+      };
+      plan.tiles.forEach(t => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';   // without it the canvas is tainted and can't be saved
+        img.onload = () => { if (live) { ctx.drawImage(img, t.dx, t.dy); done++; settle(); } };
+        img.onerror = () => { failed++; settle(); };
+        img.src = t.url;
+      });
+      return () => { live = false; };
+    }, [zoom, attempt]);
+
+    function save() {
+      let dataUrl;
+      try {
+        dataUrl = canvasRef.current.toDataURL('image/jpeg', 0.82);
+      } catch (err) {
+        console.error('[satellite] canvas export blocked:', err);
+        setSaveErr('The browser blocked saving this imagery (cross-origin canvas), so nothing was saved. Use a photo or a linked sketch for this station.');
+        return;
+      }
+      onSave(dataUrl, { zoom, lat, lon, mpp: fbGnss.metresPerPixel(lat, zoom), w: SAT_W, h: SAT_H, capturedAt: new Date().toISOString() });
+    }
+
+    const across = Math.round(fbGnss.metresPerPixel(lat, zoom) * SAT_W / 10) * 10;
+    const chip = 'flex-1 h-11 rounded-lg text-sm font-semibold border bg-fb-page-alt border-fb-border text-fb-heading active:bg-fb-page-deep disabled:text-fb-ink-faint';
+    const canSave = state === 'ready' || state === 'partial';
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Satellite image</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted font-data">Zoom {zoom} · {across} m across</span>
+          </div>
+          <canvas ref={canvasRef} width={SAT_W} height={SAT_H} aria-label="Satellite image preview"
+            className="block w-full h-auto rounded-xl border border-fb-border mb-3" />
+          {state === 'loading' && <p className="text-xs text-fb-ink-muted text-center mb-3">Loading imagery…</p>}
+          {state === 'offline' && <Notice tone="error" className="mb-3">You're offline. Satellite imagery needs a signal when it's captured — once saved, it works offline.</Notice>}
+          {state === 'failed' && <Notice tone="error" className="mb-3">The imagery didn't load. Check your signal, then try again.</Notice>}
+          {state === 'partial' && <Notice className="mb-3">Some of the imagery didn't load, so part of the picture is blank. Try again for a complete image.</Notice>}
+          {saveErr && <Notice tone="error" className="mb-3">{saveErr}</Notice>}
+          <div className="flex gap-2 mb-3">
+            <button onClick={() => setZoom(z => Math.max(min, z - 1))} disabled={zoom <= min} className={chip}>Zoom out</button>
+            <button onClick={() => setZoom(z => Math.min(max, z + 1))} disabled={zoom >= max} className={chip}>Zoom in</button>
+            {state !== 'ready' && state !== 'loading' && (
+              <button onClick={() => setAttempt(a => a + 1)} className={chip}>Try again</button>
+            )}
+          </div>
+          <button onClick={save} disabled={!canSave}
+            className="w-full py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
+            Use this image
+          </button>
+          <p className="text-[11px] text-fb-ink-muted text-center mt-3 leading-snug">
+            {fbGnss.SAT_ATTRIBUTION}. Centred on the approx position — the pin is only as good as that fix.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // The station sketch box: a linked sketch page, a satellite image, a photo,
+  // or a blank box for sketching on the printout. `saveNow` writes pending
+  // edits at once (before leaving the page, and after storing a new image).
+  function GnStationSketch({ g, update, saveNow, page, projectId, project }) {
+    const toast = useToast();
+    const [picker, setPicker] = useState(false);
+    const [satOpen, setSatOpen] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [fileKey, setFileKey] = useState(0);
+    const fileRef = useRef(null);
+    const sk = g.sketch, imgs = g.images;
+    const setSketch = patch => update(prev => ({ ...prev, sketch: { ...prev.sketch, ...patch } }));
+    const setImage = (slot, rec) => { update(prev => ({ ...prev, images: { ...prev.images, [slot]: rec } })); saveNow(); };
+    const linked = (project?.pages || []).find(p => p.id === sk.linkedSketchPageId && p.type === 'sketch') || null;
+    const hasPos = Number.isFinite(g.pos.lat) && Number.isFinite(g.pos.lon);
+
+    function linkSketch(sketchPage) {
+      if (linked && linked.id !== sketchPage.id && linked.linkedTo === page.id) {
+        DB.updatePage(projectId, linked.id, { linkedTo: undefined });
+      }
+      DB.updatePage(projectId, sketchPage.id, { linkedTo: page.id });
+      setSketch({ source: 'linked', linkedSketchPageId: sketchPage.id });
+      setPicker(false);
+      saveNow();
+    }
+    function createSketch() {
+      saveNow();   // the project is about to change — write this page first
+      const stn = g.station.trim();
+      const at = (project.pages || []).findIndex(p => p.id === page.id) + 1;
+      const made = DB.addPage(projectId, {
+        type: 'sketch', title: stn ? `Stn ${stn} — Sketch` : 'Station Sketch', linkedTo: page.id, ...sketchViewDefaults(project),
+      }, at);
+      if (!made) return;
+      setSketch({ source: 'linked', linkedSketchPageId: made.id });
+      saveNow();
+      navigate(`#/project/${projectId}/page/${made.id}`);
+    }
+    function openSketch() {
+      saveNow();
+      navigate(`#/project/${projectId}/page/${linked.id}`);
+    }
+    async function onPhotoFile(e) {
+      const file = e.target.files && e.target.files[0];
+      setFileKey(k => k + 1);   // a fresh input, so picking the same file again still fires
+      if (!file) return;
+      setBusy(true);
+      try {
+        const ref = photoDB.newRef();
+        await photoDB.put(ref, await compressImage(file, 1600, 0.7));
+        setImage('photo', { photoRef: ref, capturedAt: new Date().toISOString() });
+      } catch (err) {
+        console.error('[gnss] station photo import failed:', err);
+        toast.error('That photo could not be imported');
+      } finally {
+        setBusy(false);
+      }
+    }
+    async function saveSatellite(dataUrl, meta) {
+      try {
+        const ref = photoDB.newRef();
+        await photoDB.put(ref, dataUrl);
+        setImage('satellite', { photoRef: ref, ...meta });
+        setSatOpen(false);
+        toast.success('Satellite image saved');
+      } catch (err) {
+        console.error('[gnss] satellite image save failed:', err);
+        toast.error('The image could not be saved');
+      }
+    }
+
+    // The satellite image, or the way to get one. Used as the main picture and as the inset.
+    const satellite = small => (
+      imgs.satellite ? (
+        <div className={small ? 'max-w-[240px]' : ''}>
+          <div className="border border-fb-border overflow-hidden">
+            <GnImage photoRef={imgs.satellite.photoRef} alt="Satellite image of the station" />
+          </div>
+          <p className={GN.note + ' font-data mt-1'}>Zoom {imgs.satellite.zoom} · {gnUT(imgs.satellite.capturedAt)}</p>
+          <div className="flex flex-wrap gap-2 mt-2">
+            <button type="button" onClick={() => setSatOpen(true)} disabled={!hasPos} className={GN.chip}><Ico.Map size={14} /> Retake</button>
+            <button type="button" onClick={() => setImage('satellite', null)} className={GN.chip + ' text-fb-error'}><Ico.Trash /> Remove</button>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl bg-fb-page-alt px-4 py-5 text-center">
+          <p className="text-sm text-fb-ink-muted mb-3">
+            {hasPos ? 'No satellite image yet. Capturing one needs a signal.' : 'Enter the approx position first — the image is centred on it.'}
+          </p>
+          <button type="button" onClick={() => setSatOpen(true)} disabled={!hasPos}
+            className={GN.chip + ' disabled:text-fb-ink-faint'}><Ico.Map size={14} /> Get satellite image</button>
+        </div>
+      )
+    );
+
+    return (
+      <>
+        <GnSegmented label="Station sketch source" options={GN_SKETCH_SOURCES} value={sk.source} onChange={v => setSketch({ source: v })} />
+        <div className="mt-3">
+          {sk.source === 'linked' && (linked ? (
+            <>
+              <div className="border border-fb-border overflow-hidden"><GnSketchThumb sketchPage={linked} /></div>
+              <p className={GN.note + ' mt-1'}><span className="font-data">P.{linked.pageNumber}</span> · {linked.title?.trim() || 'Untitled sketch'}</p>
+              <div className="flex flex-wrap gap-2 mt-2 mb-2">
+                <button type="button" onClick={openSketch} className={GN.chip}><Ico.Grid /> Open sketch</button>
+                <button type="button" onClick={() => setPicker(true)} className={GN.chip}><Ico.Link size={14} /> Change</button>
+              </div>
+              <GnToggle on={!!sk.ownPage} onChange={v => setSketch({ ownPage: v })} title="Also export as its own page"
+                help="The sketch prints inside this page, so a project PDF leaves its own page out unless this is on." />
+            </>
+          ) : (
+            <div className="rounded-xl bg-fb-page-alt px-4 py-5 text-center">
+              <p className="text-sm text-fb-ink-muted mb-3">
+                {sk.linkedSketchPageId ? 'The linked sketch page is no longer in this project.' : 'No sketch page linked yet.'}
+              </p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <button type="button" onClick={createSketch} className={GN.chip}>＋ Create station sketch</button>
+                <button type="button" onClick={() => setPicker(true)} className={GN.chip}>
+                  <Ico.Link size={14} /> {sk.linkedSketchPageId ? 'Relink' : 'Link a sketch page'}
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {sk.source === 'satellite' && satellite(false)}
+
+          {sk.source === 'photo' && (
+            <>
+              {/* No capture attribute: Android backgrounds the app for a direct camera
+                  launch and can kill it before the photo comes back. The system chooser
+                  offers camera or gallery and keeps the app alive. */}
+              <input key={fileKey} ref={fileRef} type="file" accept="image/*" onChange={onPhotoFile} className="hidden" />
+              {imgs.photo ? (
+                <>
+                  <div className="border border-fb-border overflow-hidden"><GnImage photoRef={imgs.photo.photoRef} alt="Station sketch photo" /></div>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <button type="button" onClick={() => fileRef.current?.click()} disabled={busy} className={GN.chip}>
+                      <Ico.Camera size={14} /> {busy ? 'Importing…' : 'Replace'}
+                    </button>
+                    <button type="button" onClick={() => setImage('photo', null)} className={GN.chip + ' text-fb-error'}><Ico.Trash /> Remove</button>
+                  </div>
+                </>
+              ) : (
+                <div className="rounded-xl bg-fb-page-alt px-4 py-5 text-center">
+                  <p className="text-sm text-fb-ink-muted mb-3">Take or choose a photo — a paper sketch, the station, the setup.</p>
+                  <button type="button" onClick={() => fileRef.current?.click()} disabled={busy} className={GN.chip}>
+                    <Ico.Camera size={14} /> {busy ? 'Importing…' : 'Add photo'}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {sk.source === 'blank' && (
+            <p className="text-sm text-fb-ink-muted py-8 text-center border border-dashed border-fb-border">
+              An empty box prints in the PDF, for sketching by hand on the printout.
+            </p>
+          )}
+        </div>
+
+        {(sk.source === 'linked' || sk.source === 'photo') && (
+          <div className="mt-3">
+            <GnToggle on={!!sk.inset} onChange={v => setSketch({ inset: v })} title="Location map inset"
+              help="Prints the satellite image as a small inset beside the sketch." />
+            {sk.inset && <div className="mt-2">{satellite(true)}</div>}
+          </div>
+        )}
+
+        <p className={GN.lbl + ' mt-4'}>Sketch notes / to reach</p>
+        <textarea ref={gnGrow} onInput={e => gnGrow(e.target)} rows={2} aria-label="Sketch notes / to reach"
+          value={sk.notes} onChange={e => setSketch({ notes: e.target.value })}
+          placeholder="Access, parking, how to find the mark..."
+          className={`w-full bg-transparent outline-none resize-none overflow-hidden border-b leading-relaxed placeholder:text-fb-ink-faint ${GN.hand} ${GN.ok}`} />
+
+        {picker && <SketchPickerSheet project={project} currentId={sk.linkedSketchPageId} onPick={linkSketch} onClose={() => setPicker(false)} />}
+        {satOpen && hasPos && (
+          <SatelliteCaptureSheet lat={g.pos.lat} lon={g.pos.lon} station={g.station.trim()}
+            onSave={saveSatellite} onClose={() => setSatOpen(false)} />
+        )}
+      </>
+    );
+  }
+
+  // ── General and weather observations ─────────────────────────────────────────
+  function GnObservations({ g, update }) {
+    const rows = g.observations;
+    const setRow = (id, patch) => update(prev => ({ ...prev, observations: prev.observations.map(o => (o.id === id ? { ...o, ...patch } : o)) }));
+    const addRow = () => update(prev => ({ ...prev,
+      observations: [...prev.observations, { id: gnNewId('gw_'), time: fbGnss.utcTimeHMS(), text: '' }] }));
+    const removeRow = id => update(prev => ({ ...prev, observations: prev.observations.filter(o => o.id !== id) }));
+    return (
+      <>
+        {rows.length === 0 && (
+          <p className="text-sm text-fb-ink-muted py-4 mb-2 text-center rounded-xl bg-fb-page-alt">No observations recorded.</p>
+        )}
+        {rows.map(o => (
+          <div key={o.id} className="py-2 border-b border-fb-border/60">
+            <div className="flex items-end gap-2">
+              <div className="flex-1 min-w-0">
+                <GnTime label="Time (UT)" value={o.time} onChange={v => setRow(o.id, { time: v })} />
+              </div>
+              <button type="button" onClick={() => removeRow(o.id)} title="Remove this observation"
+                className="w-11 h-11 flex-shrink-0 flex items-center justify-center rounded-lg text-fb-error active:bg-fb-page-deep">
+                <Ico.Trash />
+              </button>
+            </div>
+            <p className={GN.lbl + ' mt-1.5'}>Comments</p>
+            <textarea ref={gnGrow} onInput={e => gnGrow(e.target)} rows={1} aria-label="Observation comments"
+              value={o.text} onChange={e => setRow(o.id, { text: e.target.value })}
+              placeholder="Cloud, wind, temperature..."
+              className={`w-full bg-transparent outline-none resize-none overflow-hidden border-b leading-relaxed placeholder:text-fb-ink-faint ${GN.hand} ${GN.ok}`} />
+          </div>
+        ))}
+        <button type="button" onClick={addRow} className={GN.chip + ' mt-3'}>＋ Add observation</button>
+        <p className={GN.note + ' mt-2'}>A new row is stamped with the current UT time.</p>
+      </>
+    );
+  }
+
   // Remount per page so a pending save always lands on the page it belongs to.
   function GnssPage(props) {
     return <GnssPageBody key={props.page.id} {...props} />;
@@ -11548,13 +12071,14 @@
       if (!pending.current) return false;
       pending.current = false;
       DB.updatePage(projectId, page.id, { gnss: latest.current.g, title: latest.current.title });
+      setDirty(false);
       return true;
     }
     function queueSave() {
       pending.current = true;
       setDirty(true);
       clearTimeout(timer.current);
-      timer.current = setTimeout(() => { flush(); setDirty(false); onReload(); }, 800);
+      timer.current = setTimeout(() => { flush(); onReload(); }, 800);
     }
     function update(patch) {
       const prev = latest.current.g;
@@ -11777,6 +12301,14 @@
 
           <GnSection title="Site Obstructions">
             <GnObstructions g={g} update={update} />
+          </GnSection>
+
+          <GnSection title="Station Sketch">
+            <GnStationSketch g={g} update={update} saveNow={flush} page={page} projectId={projectId} project={project} />
+          </GnSection>
+
+          <GnSection title="General & Weather Observations">
+            <GnObservations g={g} update={update} />
           </GnSection>
         </div>
 
