@@ -38,6 +38,8 @@
   <!-- Coordinate engine (CRS registry, grid/lat-lon, geoid, point index) -->
   <script src="./geoid-ns.js"></script>
   <script src="./geo.js"></script>
+  <!-- GNSS static observation engine (antenna library, slant-height reduction, sky plot) -->
+  <script src="./gnss.js"></script>
 
   <style>
     *, *::before, *::after { box-sizing: border-box; }
@@ -135,6 +137,67 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+
+    /* ── GNSS Obs page tables (paper; 44px cells for gloves) ─────── */
+    .gn-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .gn-table th {
+      padding: 6px 3px 4px;
+      border-bottom: 2px solid var(--fb-accent);
+      border-right: 1px solid rgb(var(--fb-rule-tan-rgb) / 0.50);
+      font-family: var(--fb-font-print);
+      font-weight: 600;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      text-align: center;
+      color: var(--fb-heading);
+    }
+    .gn-table td {
+      height: 44px;
+      padding: 0;
+      border-bottom: 1px solid rgb(var(--fb-rule-tan-rgb) / 0.55);
+      border-right: 1px solid rgb(var(--fb-rule-tan-rgb) / 0.38);
+      font-family: var(--fb-font-mono);
+      font-size: 16px;
+      text-align: center;
+      color: var(--fb-ink);
+      vertical-align: middle;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .gn-table th:last-child, .gn-table td:last-child { border-right: none; }
+    .gn-table .gn-key {
+      padding: 4px 6px 4px 0;
+      font-family: var(--fb-font-print);
+      font-weight: 600;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      line-height: 1.25;
+      text-align: left;
+      color: var(--fb-heading);
+      white-space: normal;
+    }
+    .gn-table td.gn-text { font-family: var(--fb-font-hand); font-size: 18px; }
+    .gn-table td.gn-derived { color: var(--fb-ink-muted); background: rgb(var(--fb-border-rgb) / 0.14); }
+    .gn-table td > input {
+      display: block;
+      width: 100%;
+      height: 44px;
+      padding: 0 3px;
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      outline: none;
+      font: inherit;
+      text-align: inherit;
+      color: inherit;
+      -webkit-appearance: none;
+    }
+    .gn-table td > input::placeholder { color: var(--fb-ink-faint); }
+    .gn-table td > input:focus { background: rgb(var(--fb-accent-rgb) / 0.08); }
+    .gn-table td > input.gn-bad { color: var(--fb-error); background: rgb(var(--fb-error-rgb) / 0.10); }
+    .gn-table tr.gn-on td { background: rgb(var(--fb-accent-rgb) / 0.14); }
 
     /* ── Red left-margin line (fieldbook look) ──────────────────── */
     .page-margin-rule {
@@ -579,7 +642,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.168';
+  const APP_VERSION = '1.169';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1649,6 +1712,17 @@
         <line x1="8" y1="17" x2="13" y2="17"/>
       </svg>
     ),
+    // GNSS antenna on a tripod — the GNSS Obs page type.
+    Antenna: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M7 8a5 5 0 0 1 10 0"/>
+        <line x1="4" y1="8" x2="20" y2="8"/>
+        <line x1="12" y1="8" x2="12" y2="13"/>
+        <line x1="12" y1="13" x2="6" y2="21"/>
+        <line x1="12" y1="13" x2="18" y2="21"/>
+        <line x1="12" y1="13" x2="12" y2="21" strokeWidth="1.4" opacity="0.5"/>
+      </svg>
+    ),
   };
 
   // Caution / error notice box (DESIGN.md → Notices).
@@ -2585,8 +2659,11 @@
 
   // Bottom sheet that records an averaged phone-GPS fix. Pure UI: it hands
   // { number, desc, geo } to onSave and the caller decides where it is stored.
+  // mode 'position' drops the point number / description and just returns the
+  // fix — used where a position is wanted but no point is created (GNSS Obs page).
   const GPS_AVG_CHOICES = [5, 10, 30, 60];
-  function GpsCaptureSheet({ projectId, source = 'gps', heading = 'GPS Point', onSave, onClose }) {
+  function GpsCaptureSheet({ projectId, source = 'gps', heading = 'GPS Point', mode = 'point', onSave, onClose }) {
+    const isPoint = mode === 'point';
     const project = DB.getProject(projectId);
     const crs = fbGeo.projectCrs(project);
     const [fix, setFix]         = useState(null);   // latest live fix
@@ -2729,24 +2806,26 @@
                   ? 'No height from this fix.'
                   : <>Ellipsoid ht (phone) {fbGeo.fmtElev(ht.h)} m
                       {ht.H !== null && <> · geoid N {ht.N.toFixed(1)} m · H {fbGeo.fmtElev(ht.H)} m (CGG2013a)</>}
-                      {' · '}{fbGeo.useZ(project) && ht.H !== null ? 'Z = H' : 'Z left blank'}</>}
+                      {isPoint && <>{' · '}{fbGeo.useZ(project) && ht.H !== null ? 'Z = H' : 'Z left blank'}</>}</>}
               </p>
             </div>
           )}
 
-          <div className="flex gap-2 mb-3">
-            <div className="w-[110px]">
-              <p className={lbl + ' mb-1.5'}>Pt #</p>
-              <input type="text" inputMode="numeric" value={number} onChange={e => setNumber(e.target.value)}
-                className={fieldCls + ' font-data'} />
+          {isPoint && (
+            <div className="flex gap-2 mb-3">
+              <div className="w-[110px]">
+                <p className={lbl + ' mb-1.5'}>Pt #</p>
+                <input type="text" inputMode="numeric" value={number} onChange={e => setNumber(e.target.value)}
+                  className={fieldCls + ' font-data'} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className={lbl + ' mb-1.5'}>Description</p>
+                <input type="text" value={desc} onChange={e => setDesc(e.target.value)} placeholder="IP fd, culvert, gate…"
+                  className={fieldCls} />
+              </div>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className={lbl + ' mb-1.5'}>Description</p>
-              <input type="text" value={desc} onChange={e => setDesc(e.target.value)} placeholder="IP fd, culvert, gate…"
-                className={fieldCls} />
-            </div>
-          </div>
-          {duplicate && <Notice className="mb-3">Point {numTrim} already exists in this project.</Notice>}
+          )}
+          {isPoint && duplicate && <Notice className="mb-3">Point {numTrim} already exists in this project.</Notice>}
 
           {phase !== 'averaging' && (
             <div className="flex items-center gap-1.5 mb-3">
@@ -2770,7 +2849,7 @@
               </button>
               <button onClick={save}
                 className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80">
-                {duplicate ? 'Save anyway' : 'Save point'}
+                {!isPoint ? 'Use this position' : duplicate ? 'Save anyway' : 'Save point'}
               </button>
             </div>
           ) : (
@@ -5181,6 +5260,7 @@
     photo:  { label: 'Photos', ...FB_BRAND.PAGE_TYPES.photo,  Icon: () => <Ico.Camera /> },
     points: { label: 'Points', ...FB_BRAND.PAGE_TYPES.points, Icon: () => <Ico.Pin />    },
     notes:  { label: 'Notes',  ...FB_BRAND.PAGE_TYPES.notes,  Icon: () => <Ico.Pencil /> },
+    gnss:   { label: 'GNSS Obs', ...FB_BRAND.PAGE_TYPES.gnss, Icon: () => <Ico.Antenna /> },
   };
 
   function ProjectView({ projectId }) {
@@ -5310,6 +5390,19 @@
         // Rows start empty — they are added automatically when points are placed
         // on the sketch canvas (one row per placed point).
         pageData = { type: 'points', columns: cols, rows: [] };
+      }
+      if (type === 'gnss') {
+        // Receiver, antenna and session settings rarely change between
+        // stations, so they carry over from the last GNSS page in the project.
+        // Station, times, readings, obstructions and sketch start blank.
+        const prev = [...(project.pages || [])].reverse().find(p => p.type === 'gnss' && p.gnss)?.gnss;
+        const carry = {};
+        if (prev) {
+          ['receiverModel', 'receiverSerial', 'receiverSoftware', 'antennaId', 'antenna', 'antennaSerial',
+           'cableLength', 'section', 'operators', 'interval', 'elevMask', 'method', 'methodOther',
+           'bearingRef', 'declination', 'tol'].forEach(k => { if (prev[k] != null) carry[k] = prev[k]; });
+        }
+        pageData = { type: 'gnss', gnss: fbGnss.emptyGnss({ projectName: project.name || '', ...carry }) };
       }
       const page = DB.addPage(projectId, pageData, addAtIndex);
       if (page) { reload(); setAddStep(null); setAddAtIndex(null); navigate(`#/project/${projectId}/page/${page.id}`); }
@@ -6363,6 +6456,7 @@
       { id: 'title',  Icon: Ico.File,   label: 'Title Page',  desc: 'Job info, equipment, datum settings, crew and summary',                   color: '#D97706' },
       { id: 'photo',  Icon: Ico.Camera, label: 'Photos Page', desc: 'Site photos, equipment shots, and setup images with notes',               color: '#7C3AED' },
       { id: 'points', Icon: Ico.Pin,    label: 'Points Page', desc: 'PNEZD point list — links to sketch canvas for placing survey points',     color: '#0E7490' },
+      { id: 'gnss',   Icon: () => <Ico.Antenna size={20} />, label: 'GNSS Obs Page', desc: 'Static observation log — antenna heights, sky plot and station sketch', color: TYPE_META.gnss.color },
     ];
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -7987,6 +8081,7 @@
     if (type === 'photo')  return PhotoPage;
     if (type === 'notes')  return NotesPage;
     if (type === 'points') return DataPage;           // DataPage with locked PNEZD columns
+    if (type === 'gnss')   return GnssPage;
     return DataPage;
   }
 
@@ -10938,6 +11033,637 @@
               className={taClass} rows={1} />
           </div>
         </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // GNSS STATIC OBSERVATION PAGE
+  // A scrollable form filled in during a static GNSS session. All of its data
+  // lives under page.gnss (see fbGnss.emptyGnss in gnss.js), so duplicate, copy,
+  // page export and backup carry it with the page. gnss.js does the arithmetic.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Paper-surface class recipes for this page (DESIGN.md → GNSS Obs page).
+  const GN = {
+    lbl:  'font-heading text-[10px] font-semibold uppercase tracking-[0.09em] text-fb-heading',
+    sec:  'font-heading text-[15px] font-semibold uppercase tracking-[0.05em] text-fb-heading',
+    line: 'w-full min-w-0 h-10 bg-transparent outline-none border-b rounded-none placeholder:text-fb-ink-faint',
+    ok:   'border-fb-border focus:border-fb-accent text-fb-ink',
+    bad:  'border-fb-error text-fb-error',
+    hand: 'font-handwritten text-lg',
+    mono: 'font-data text-base',
+    chip: 'h-11 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap flex-shrink-0 bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep',
+    note: 'text-xs text-fb-ink-muted leading-snug',
+  };
+
+  function GnSection({ title, aside, children }) {
+    return (
+      <section className="py-3 border-b border-fb-border">
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <h3 className={GN.sec}>{title}</h3>
+          {aside}
+        </div>
+        {children}
+      </section>
+    );
+  }
+
+  // One labelled entry on the page: handwriting by default, `mono` for numbers
+  // and codes. `bad` marks an entry that didn't parse.
+  function GnField({ label, value, onChange, mono, wide, unit, action, hint, bad, ...input }) {
+    return (
+      <div className={`min-w-0 ${wide ? 'col-span-2' : ''}`}>
+        <p className={GN.lbl}>{label}</p>
+        <div className="flex items-end gap-2">
+          <input type="text" autoComplete="off" aria-label={label} value={value}
+            onChange={e => onChange(e.target.value)}
+            className={`${GN.line} ${mono ? GN.mono : GN.hand} ${bad ? GN.bad : GN.ok}`} {...input} />
+          {unit && <span className="font-data text-xs text-fb-ink-muted pb-2.5 flex-shrink-0">{unit}</span>}
+          {action}
+        </div>
+        {hint && <p className={GN.note + ' mt-1'}>{hint}</p>}
+      </div>
+    );
+  }
+
+  // A value the page works out — shown like an entry but not editable.
+  function GnReadout({ label, value, wide, mono = true, hint }) {
+    return (
+      <div className={`min-w-0 ${wide ? 'col-span-2' : ''}`}>
+        <p className={GN.lbl}>{label}</p>
+        <p className={`h-10 flex items-center border-b border-fb-border text-fb-ink truncate ${mono ? GN.mono : GN.hand}`}>{value || '—'}</p>
+        {hint && <p className={GN.note + ' mt-1'}>{hint}</p>}
+      </div>
+    );
+  }
+
+  // Latitude or longitude: stored as decimal degrees, shown as DMS. Typing is
+  // free-form ("44 38 55.7 N", "-63.5752") and is parsed when the field is left.
+  function GnLatLon({ label, kind, value, onCommit, placeholder }) {
+    const [text, setText] = useState(() => fbGnss.fmtLatLonDMS(value, kind));
+    const [bad, setBad] = useState(false);
+    const focused = useRef(false);
+    const edited = useRef(false);     // leaving the field untouched must not count as a manual entry
+    useEffect(() => {
+      if (!focused.current) { setText(fbGnss.fmtLatLonDMS(value, kind)); setBad(false); }
+    }, [value]);
+
+    function commit() {
+      focused.current = false;
+      if (!edited.current) return;
+      edited.current = false;
+      if (!text.trim()) { setBad(false); onCommit(null); return; }
+      const dd = fbGnss.parseLatLon(text);
+      if (dd === null || Math.abs(dd) > (kind === 'lon' ? 180 : 90)) { setBad(true); return; }
+      setBad(false);
+      setText(fbGnss.fmtLatLonDMS(dd, kind));
+      onCommit(dd);
+    }
+    return (
+      <div className="min-w-0">
+        <p className={GN.lbl}>{label}</p>
+        <input type="text" autoComplete="off" aria-label={label} value={text} placeholder={placeholder}
+          onFocus={() => { focused.current = true; }} onBlur={commit}
+          onChange={e => { edited.current = true; setText(e.target.value); }}
+          className={`${GN.line} ${GN.mono} ${bad ? GN.bad : GN.ok}`} />
+        {bad && <p className="text-xs font-semibold text-fb-error mt-1">Not a valid {kind === 'lon' ? 'longitude' : 'latitude'}.</p>}
+      </div>
+    );
+  }
+
+  // A UT time (HH:MM:SS). "Now" stamps the current UTC time; 140322 typed on a
+  // number pad is tidied to 14:03:22 when the field is left.
+  function GnTime({ label, value, onChange }) {
+    const bad = !!value.trim() && fbGnss.parseHMS(value) === null;
+    function tidy() {
+      const secs = fbGnss.parseHMS(value);
+      if (secs !== null) onChange(fbGnss.fmtHMS(secs));
+    }
+    return (
+      <GnField label={label} value={value} onChange={onChange} onBlur={tidy} mono bad={bad}
+        inputMode="numeric" placeholder="HH:MM:SS"
+        action={<button type="button" onClick={() => onChange(fbGnss.utcTimeHMS())} className={GN.chip}>Now</button>} />
+    );
+  }
+
+  // ── Antenna library sheet ────────────────────────────────────────────────────
+  const ANT_FORM_FIELDS = [
+    ['R',  'R — radius, antenna centre to slant mark (m)'],
+    ['d',  'd — slant mark above ARP (m), negative if below'],
+    ['l1', 'L1 — ARP to L1 phase centre (m)'],
+    ['l2', 'L2 — ARP to L2 phase centre (m)'],
+  ];
+  function antennaLine(a) {
+    return ['R', 'd', 'l1', 'l2'].map(k => `${k === 'l1' ? 'L1' : k === 'l2' ? 'L2' : k} ${fbGnss.fmt4(a[k]) || '—'}`).join(' · ');
+  }
+
+  // Pick the antenna model for a page and manage the saved models (add, edit,
+  // duplicate, delete). The library is shared by every project.
+  function AntennaLibrarySheet({ currentId, onPick, onClose }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const toast = useToast();
+    const [list, setList] = useState(() => fbGnss.getAntennas());
+    const [sel, setSel] = useState(currentId || fbGnss.DEFAULT_ANTENNA_ID);
+    const [form, setForm] = useState(null);   // the model being added or edited, as text fields
+    const refresh = () => setList(fbGnss.getAntennas());
+    const chosen = list.find(a => a.id === sel) || null;
+
+    const fieldCls = 'w-full px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint';
+    const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
+    const chip = 'h-9 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep';
+
+    function edit(a) {
+      setForm({ id: a.id, name: a.name, slantMark: a.slantMark || '', notes: a.notes || '',
+                R: fbGnss.fmt4(a.R), d: fbGnss.fmt4(a.d), l1: fbGnss.fmt4(a.l1), l2: fbGnss.fmt4(a.l2) });
+    }
+    function duplicate(a) {
+      const copy = fbGnss.duplicateAntenna(a.id);
+      refresh();
+      if (copy) { setSel(copy.id); toast.success(`${copy.name} added`); }
+    }
+    function remove(a) {
+      if (!window.confirm(`Delete antenna "${a.name}"? Pages that already use it keep their own copy of the values.`)) return;
+      fbGnss.deleteAntenna(a.id);
+      refresh();
+      setSel(currentId && currentId !== a.id ? currentId : fbGnss.DEFAULT_ANTENNA_ID);
+      toast.success(`${a.name} deleted`);
+    }
+
+    if (form) {
+      const n = k => fbGnss.num(form[k]);
+      const numOk = k => Number.isFinite(n(k));
+      const errs = {
+        R:  form.R.trim()  && !(numOk('R') && n('R') > 0),
+        d:  form.d.trim()  && !numOk('d'),
+        l1: form.l1.trim() && !numOk('l1'),
+        l2: form.l2.trim() && !numOk('l2'),
+      };
+      const valid = form.name.trim() && numOk('R') && n('R') > 0 && numOk('d') && !errs.l1 && !errs.l2;
+      const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+      function save() {
+        const saved = fbGnss.saveAntenna(form);
+        refresh();
+        setSel(saved.id);
+        setForm(null);
+        toast.success(`${saved.name} saved`);
+      }
+      return (
+        <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+          <div ref={trapRef} className="modal-sheet">
+            <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+            <h2 className="text-xl font-bold text-fb-ink mb-4">{form.id ? 'Edit antenna' : 'New antenna'}</h2>
+            <p className={lbl}>Model name</p>
+            <input type="text" value={form.name} onChange={e => set('name', e.target.value)} placeholder="e.g. Zephyr 3 Base"
+              className={fieldCls + ' mb-3'} />
+            {ANT_FORM_FIELDS.map(([k, label]) => (
+              <div key={k} className="mb-3">
+                <p className={lbl}>{label}</p>
+                <input type="text" inputMode={k === 'd' ? 'text' : 'decimal'} value={form[k]} onChange={e => set(k, e.target.value)}
+                  placeholder="0.0000" autoComplete="off"
+                  className={`${fieldCls} font-data ${errs[k] ? 'border-fb-error' : ''}`} />
+              </div>
+            ))}
+            <p className={lbl}>Slant measure mark</p>
+            <input type="text" value={form.slantMark} onChange={e => set('slantMark', e.target.value)} placeholder="e.g. White line"
+              className={fieldCls + ' mb-3'} />
+            <p className={lbl}>Notes</p>
+            <input type="text" value={form.notes} onChange={e => set('notes', e.target.value)} placeholder="Source of the values, calibration…"
+              className={fieldCls + ' mb-5'} />
+            <div className="flex gap-2">
+              <button onClick={() => setForm(null)}
+                className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">
+                Cancel
+              </button>
+              <button onClick={save} disabled={!valid}
+                className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
+                Save antenna
+              </button>
+            </div>
+            <p className="text-[11px] text-fb-ink-muted text-center mt-3 leading-snug">
+              Take R, d and the phase centre corrections from the antenna's spec sheet or calibration.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Antennas</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted">Shared by all projects</span>
+          </div>
+          <div className="space-y-1.5 mb-3">
+            {list.map(a => {
+              const on = a.id === sel;
+              return (
+                <div key={a.id}>
+                  <button onClick={() => setSel(a.id)} role="radio" aria-checked={on}
+                    className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left border active:opacity-80 ${on
+                      ? 'bg-fb-accent-pale border-fb-accent' : 'bg-fb-page-alt border-fb-border'}`}>
+                    <span className={`w-[18px] h-[18px] rounded-full border-2 border-fb-accent flex-shrink-0 ${on ? 'bg-fb-accent' : ''}`} />
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm font-semibold text-fb-ink truncate">
+                        {a.name}{a.builtin && <span className="font-normal text-fb-ink-muted"> · built in</span>}
+                      </span>
+                      <span className="block text-xs text-fb-ink-muted font-data">{antennaLine(a)}</span>
+                      {a.slantMark && <span className="block text-xs text-fb-ink-muted">Slant mark: {a.slantMark}</span>}
+                    </span>
+                  </button>
+                  {on && (
+                    <div className="flex gap-1.5 mt-1.5 ml-[30px]">
+                      {!a.builtin && <button onClick={() => edit(a)} className={chip}>Edit</button>}
+                      <button onClick={() => duplicate(a)} className={chip}>Duplicate</button>
+                      {!a.builtin && <button onClick={() => remove(a)} className={chip + ' text-fb-error'}><Ico.Trash /> Delete</button>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <button onClick={() => setForm({ name: '', R: '', d: '', l1: '', l2: '', slantMark: '', notes: '' })}
+            className="w-full py-3 px-5 mb-3 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep">
+            Add antenna
+          </button>
+          <button onClick={() => chosen && onPick(chosen)} disabled={!chosen}
+            className="w-full py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
+            {chosen ? `Use ${chosen.name}` : 'Use antenna'}
+          </button>
+          <p className="text-[11px] text-fb-ink-muted text-center mt-3 leading-snug">
+            Built-in models are read-only — duplicate one to change its values. A page keeps its own copy of the constants it used.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Antenna height readings ──────────────────────────────────────────────────
+  const GN_READ_COLS = [['slant', 'before'], ['slant', 'after'], ['vert', 'before'], ['vert', 'after']];
+
+  // S̄ / V̄ are written with a combining macron, which the mono font draws as a
+  // loose "¯" after the letter — draw the bar with an overline instead.
+  function gnBar(text) {
+    return String(text).split(/([SV])\u0304/).map((part, i) =>
+      i % 2 ? <span key={i} className="overline">{part}</span> : part);
+  }
+
+  // The before / after reading grid with its averages, and the reduced heights.
+  function GnHeights({ g, res, onReading }) {
+    const cellBad = raw => {
+      if (!String(raw).trim()) return false;
+      const v = fbGnss.num(raw);
+      return !Number.isFinite(v) || v <= 0;
+    };
+    const stat = (set, part, key) => fbGnss.fmt4(res[set][part]?.[key]) || '';
+    // [label, slant value, vertical value] — `false` leaves a cell that doesn't apply blank.
+    const rows = [
+      ['Avg uncorrected slant to slant mark  S̄', res.slantRes?.S, false],
+      ['Uncorrected vertical measurement to ARP  V̄', false, res.vertRes?.V],
+      ['Z = √(S̄² − R²)', res.slantRes?.Z, false],
+      ['ARP', res.slantRes?.ARP, res.vertRes?.ARP],
+      ['APC L1 = ARP + L1', res.slantRes?.L1, res.vertRes?.L1],
+      ['APC L2 = ARP + L2', res.slantRes?.L2, res.vertRes?.L2],
+    ];
+    const cell = v => (v === false ? '' : fbGnss.fmt4(v) || '—');
+    const summary = (set, name, sym) => {
+      const st = res[set];
+      if (!st.all) return null;
+      return (
+        <p className={`font-data text-[13px] ${st.flag ? 'text-fb-warn font-semibold' : 'text-fb-ink-muted'}`}>
+          {name} {gnBar(sym)} {fbGnss.fmt4(st.all.avg)} · n {st.all.n} · range {fbGnss.fmt4(st.all.range)}
+          {st.flag && ` — over the ${fbGnss.fmt4(res.tol)} m tolerance`}
+        </p>
+      );
+    };
+
+    return (
+      <>
+        <table className="gn-table mb-2">
+          <colgroup><col style={{ width: 30 }} /><col /><col /><col /><col /></colgroup>
+          <thead>
+            <tr>
+              <th rowSpan={2}></th>
+              <th colSpan={2}>Slant (m)</th>
+              <th colSpan={2}>Vertical (m)</th>
+            </tr>
+            <tr><th>Before</th><th>After</th><th>Before</th><th>After</th></tr>
+          </thead>
+          <tbody>
+            {[0, 1, 2].map(i => (
+              <tr key={i}>
+                <td className="gn-key">{i + 1}</td>
+                {GN_READ_COLS.map(([set, part]) => (
+                  <td key={set + part}>
+                    <input type="text" inputMode="decimal" autoComplete="off" placeholder="0.0000"
+                      aria-label={`${set === 'slant' ? 'Slant' : 'Vertical'} ${part} ${i + 1}`}
+                      value={g[set][part][i]} onChange={e => onReading(set, part, i, e.target.value)}
+                      className={cellBad(g[set][part][i]) ? 'gn-bad' : ''} />
+                  </td>
+                ))}
+              </tr>
+            ))}
+            <tr>
+              <td className="gn-key">Avg</td>
+              {GN_READ_COLS.map(([set, part]) => <td key={set + part} className="gn-derived">{stat(set, part, 'avg')}</td>)}
+            </tr>
+            <tr>
+              <td className="gn-key">Rng</td>
+              {GN_READ_COLS.map(([set, part]) => <td key={set + part} className="gn-derived">{stat(set, part, 'range')}</td>)}
+            </tr>
+          </tbody>
+        </table>
+        <div className="mb-3">
+          {summary('slant', 'Slant', 'S̄')}
+          {summary('vert', 'Vertical', 'V̄')}
+        </div>
+
+        {res.slantErr && <Notice tone="error" className="mb-3">Slant: {res.slantErr}</Notice>}
+        {res.vertErr && <Notice tone="error" className="mb-3">Vertical: {res.vertErr}</Notice>}
+
+        <table className="gn-table">
+          <colgroup><col /><col style={{ width: '27%' }} /><col style={{ width: '27%' }} /></colgroup>
+          <thead><tr><th className="gn-key">Heights (m)</th><th>Slant</th><th>Vertical</th></tr></thead>
+          <tbody>
+            {rows.map(([label, s, v]) => (
+              <tr key={label}>
+                <td className="gn-key">{gnBar(label)}</td>
+                <td>{cell(s)}</td>
+                <td>{cell(v)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {res.diff !== null && (
+          <p className="font-data text-[13px] text-fb-ink-muted mt-2">
+            Check: slant − vertical ARP = {fbGnss.fmtDiff(res.diff)} m
+          </p>
+        )}
+      </>
+    );
+  }
+
+  // Remount per page so a pending save always lands on the page it belongs to.
+  function GnssPage(props) {
+    return <GnssPageBody key={props.page.id} {...props} />;
+  }
+
+  function GnssPageBody({ page, projectId, project, onReload }) {
+    const [g, setG] = useState(() => fbGnss.normalize(page.gnss, { projectName: project?.name || '' }));
+    const [title, setTitleState] = useState(page.title || '');
+    const [dirty, setDirty] = useState(false);
+    const [antOpen, setAntOpen] = useState(false);
+    const [gpsOpen, setGpsOpen] = useState(false);
+    const [showWork, setShowWork] = useState(false);
+    const [, setLibTick] = useState(0);   // re-read the antenna library after the sheet closes
+    const latest = useRef({ g, title });
+    const pending = useRef(false);
+    const timer = useRef(null);
+
+    // Edits are written 0.8 s after the last change, and at once when the page
+    // is left or the app is backgrounded, so nothing typed is lost.
+    function flush() {
+      clearTimeout(timer.current);
+      if (!pending.current) return false;
+      pending.current = false;
+      DB.updatePage(projectId, page.id, { gnss: latest.current.g, title: latest.current.title });
+      return true;
+    }
+    function queueSave() {
+      pending.current = true;
+      setDirty(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => { flush(); setDirty(false); onReload(); }, 800);
+    }
+    function update(patch) {
+      const prev = latest.current.g;
+      const next = typeof patch === 'function' ? patch(prev) : { ...prev, ...patch };
+      latest.current.g = next;
+      setG(next);
+      queueSave();
+    }
+    function setTitle(v) { latest.current.title = v; setTitleState(v); queueSave(); }
+    const field = k => ({ value: g[k], onChange: v => update({ [k]: v }) });
+
+    useEffect(() => {
+      const onHide = () => { if (document.visibilityState === 'hidden' && flush()) DB.flush(); };
+      document.addEventListener('visibilitychange', onHide);
+      window.addEventListener('pagehide', onHide);
+      return () => {
+        document.removeEventListener('visibilitychange', onHide);
+        window.removeEventListener('pagehide', onHide);
+        flush();
+      };
+    }, []);
+
+    // ── Header ──
+    const autoJulian = fbGnss.julianDay(g.obsDate);
+    const julian = g.julianManual ? g.julianDay : (autoJulian === null ? '' : String(autoJulian));
+
+    // ── Approx position ──
+    const pos = g.pos;
+    const setPos = patch => update(prev => ({ ...prev, pos: { ...prev.pos, ...patch, source: 'manual', acc: null, ts: '' } }));
+    const ht = fbGeo.orthoHeight(fbGnss.num(pos.h), pos.lat, pos.lon);
+    const htBad = !!String(pos.h).trim() && !Number.isFinite(fbGnss.num(pos.h));
+    function applyPhoneFix({ geo }) {
+      update(prev => ({ ...prev, pos: {
+        lat: geo.lat, lon: geo.lon, h: geo.h === null ? '' : geo.h.toFixed(1),
+        acc: geo.acc, source: 'phone', ts: geo.ts,
+      } }));
+      setGpsOpen(false);
+    }
+
+    // ── Session ──
+    const duration = fbGnss.sessionDuration(g.startUT, g.stopUT);
+
+    // ── Antenna ──
+    const libAnt = fbGnss.getAntenna(g.antennaId);
+    const antDiffers = fbGnss.snapshotDiffers(g.antenna, libAnt);
+    const applyAntenna = a => update({ antennaId: a.id, antenna: fbGnss.antennaSnapshot(a) });
+    const ant = g.antenna || {};
+    const res = fbGnss.solveHeights(g);
+    const steps = fbGnss.workingSteps(res);
+    function setReading(set, part, i, v) {
+      update(prev => ({ ...prev, [set]: { ...prev[set], [part]: prev[set][part].map((x, j) => (j === i ? v : x)) } }));
+    }
+    const constants = [
+      ['Radius from antenna centre to slant measure mark (R)', ant.R],
+      ['Slant measure mark height above Antenna Reference Point (ARP) (d)', ant.d],
+      ['Correction from Antenna Reference Point (ARP) to L1 Phase Centre', ant.l1],
+      ['Correction from Antenna Reference Point (ARP) to L2 Phase Centre', ant.l2],
+    ];
+
+    return (
+      <div className="bg-fb-page min-h-full">
+        <div className="page-header-strip px-4 py-2.5 flex items-center justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <p className={GN.lbl}>GNSS Static Observation · P.{page.pageNumber}</p>
+            <input type="text" value={title} onChange={e => setTitle(e.target.value)} maxLength={60}
+              placeholder="Page title..." aria-label="Page title" />
+          </div>
+          <div className="flex-shrink-0 text-right">
+            <p className="text-xs font-data text-fb-ink-muted">{page.date}</p>
+            {dirty && <span className="text-[10px] text-fb-ink-muted italic">saving...</span>}
+          </div>
+        </div>
+
+        {/* paddingBottom lets the last fields scroll up above the keyboard */}
+        <div className="px-4" style={{ paddingBottom: '50vh' }}>
+
+          <GnSection title="Project & Station">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+              <GnField label="Project Name" wide {...field('projectName')} />
+              <GnField label="Project Section or Crew" wide {...field('section')} />
+              <GnField label="Station Number / Name" {...field('station')} />
+              <GnField label="Session Identifier" mono {...field('sessionId')} />
+              <GnField label="Observation Date (UT)" mono type="date" {...field('obsDate')} />
+              <GnField label="Julian Day" mono inputMode="numeric" value={julian} readOnly={!g.julianManual}
+                onChange={v => update({ julianDay: v })}
+                action={<button type="button" className={GN.chip}
+                  onClick={() => update(g.julianManual ? { julianManual: false, julianDay: '' } : { julianManual: true, julianDay: julian })}>
+                  {g.julianManual ? 'Auto' : 'Edit'}
+                </button>}
+                hint={g.julianManual ? `Typed by hand${autoJulian === null ? '' : ` — the date gives ${autoJulian}`}.` : 'Day of year, from the date.'} />
+              <GnField label="Operator(s)" wide {...field('operators')} />
+            </div>
+          </GnSection>
+
+          <GnSection title="Receiver & Antenna">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+              <GnField label="Receiver Model" {...field('receiverModel')} />
+              <GnField label="Receiver Serial No." mono {...field('receiverSerial')} />
+              <GnField label="Receiver Software" {...field('receiverSoftware')} />
+              <GnField label="Receiver File Name" mono {...field('fileName')} />
+              <div className="col-span-2 min-w-0">
+                <p className={GN.lbl}>Antenna Model</p>
+                <div className="flex items-end gap-2">
+                  <p className={`flex-1 min-w-0 h-10 flex items-center border-b border-fb-border text-fb-ink truncate ${GN.hand}`}>
+                    {ant.name || '—'}
+                  </p>
+                  <button type="button" onClick={() => setAntOpen(true)} className={GN.chip}><Ico.Antenna size={14} /> Antennas</button>
+                </div>
+              </div>
+              <GnField label="Antenna Serial No." mono {...field('antennaSerial')} />
+              <GnField label="Antenna Cable Length" mono inputMode="decimal" unit="m" {...field('cableLength')} />
+            </div>
+          </GnSection>
+
+          <GnSection title="Approx Position"
+            aside={<button type="button" onClick={() => setGpsOpen(true)} className={GN.chip}><Ico.Pin size={14} /> Use my location</button>}>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+              <GnLatLon label="Approx Lat" kind="lat" value={pos.lat} onCommit={v => setPos({ lat: v })} placeholder="44 38 55.7 N" />
+              <GnLatLon label="Approx Long" kind="lon" value={pos.lon} onCommit={v => setPos({ lon: v })} placeholder="63 34 30.7 W" />
+              <GnField label="Approx Ht — ellipsoidal" mono inputMode="decimal" unit="m" bad={htBad}
+                value={pos.h} onChange={v => setPos({ h: v })} />
+              <GnReadout label="Ht — orthometric"
+                value={ht.H === null ? '' : `${ht.H.toFixed(1)} m`}
+                hint={ht.H === null ? '' : `CGVD2013, geoid N ${ht.N.toFixed(1)} m`} />
+            </div>
+            <p className={GN.note + ' mt-2'}>
+              {pos.source === 'phone'
+                ? <>Phone GPS{Number.isFinite(pos.acc) && <>, <span className="font-data">±{pos.acc < 10 ? pos.acc.toFixed(1) : Math.round(pos.acc)} m</span></>}
+                    {pos.ts && <> · <span className="font-data">{pos.ts.slice(0, 16).replace('T', ' ')} UT</span></>}. </>
+                : pos.source === 'manual' ? 'Entered by hand. ' : ''}
+              {ht.h !== null && ht.H === null && 'Height is ellipsoidal (approx) — no geoid model for this position.'}
+              {ht.h !== null && ht.H !== null && 'Phone height is ellipsoidal; the orthometric height takes off the CGG2013a geoid.'}
+            </p>
+          </GnSection>
+
+          <GnSection title="Session">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+              <GnTime label="Start Time (UT)" value={g.startUT} onChange={v => update({ startUT: v })} />
+              <GnTime label="Stop Time (UT)" value={g.stopUT} onChange={v => update({ stopUT: v })} />
+              <GnReadout label="Session Length" value={duration ? duration.text : ''} />
+              <GnField label="Recording Interval" mono inputMode="decimal" unit="s" {...field('interval')} />
+              <GnField label="Elev. Mask" mono inputMode="decimal" unit="°" {...field('elevMask')} />
+              <GnField label="PDOP" mono inputMode="decimal" {...field('pdop')} />
+              <div className="col-span-2 min-w-0">
+                <p className={GN.lbl}>Observation Method</p>
+                <div className="flex items-end gap-3">
+                  <select aria-label="Observation Method" value={g.method} onChange={e => update({ method: e.target.value })}
+                    className={`${GN.line} ${GN.hand} ${GN.ok} ${g.method === 'Other' ? 'w-28 flex-shrink-0' : ''}`}>
+                    {fbGnss.METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  {g.method === 'Other' && (
+                    <input type="text" aria-label="Other observation method" placeholder="Describe the method"
+                      value={g.methodOther} onChange={e => update({ methodOther: e.target.value })}
+                      className={`${GN.line} ${GN.hand} ${GN.ok}`} />
+                  )}
+                </div>
+              </div>
+            </div>
+          </GnSection>
+
+          <GnSection title="Antenna Height">
+            <p className={GN.note + ' mb-3'}>
+              3 measurements equally spaced around the antenna, at the beginning and again at the end of the session.
+            </p>
+
+            <div className="mb-3">
+              {constants.map(([label, v]) => (
+                <div key={label} className="flex items-baseline justify-between gap-3 py-1 border-b border-fb-border/60">
+                  <span className={GN.lbl + ' leading-snug'}>{label}</span>
+                  <span className="font-data text-base text-fb-ink flex-shrink-0">{fbGnss.fmt4(v) ? `${fbGnss.fmt4(v)} m` : '—'}</span>
+                </div>
+              ))}
+              <div className="flex items-baseline justify-between gap-3 py-1">
+                <span className={GN.lbl}>Slant measure mark</span>
+                <span className={`${GN.hand} text-fb-ink flex-shrink-0`}>{ant.slantMark || '—'}</span>
+              </div>
+            </div>
+            {antDiffers && (
+              <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-xl bg-fb-warn-pale border border-fb-warn-line">
+                <span className="text-fb-warn flex-shrink-0"><Ico.Warn /></span>
+                <span className="flex-1 text-xs text-fb-ink leading-snug">Constants differ from the library entry for <b>{libAnt.name}</b>.</span>
+                <button type="button" onClick={() => applyAntenna(libAnt)}
+                  className="text-xs font-semibold px-3 py-2 rounded-lg text-white bg-fb-accent active:opacity-80 flex-shrink-0">
+                  Use current values
+                </button>
+              </div>
+            )}
+
+            <GnHeights g={g} res={res} onReading={setReading} />
+
+            <div className="flex items-end gap-2 mt-3">
+              <div className="w-32 flex-shrink-0">
+                <GnField label="Range tolerance" mono inputMode="decimal" unit="m" placeholder={fbGnss.fmt4(fbGnss.DEFAULT_TOL).slice(0, 5)}
+                  {...field('tol')} />
+              </div>
+              <p className={GN.note + ' pb-1.5'}>App default {fbGnss.DEFAULT_TOL} m — not a COGS standard. A range above it is flagged.</p>
+            </div>
+
+            {steps.length > 0 && (
+              <div className="mt-3">
+                <button type="button" onClick={() => setShowWork(v => !v)} aria-expanded={showWork} className={GN.chip}>
+                  {showWork ? '▾' : '▸'} Working
+                </button>
+                {showWork && (
+                  <div className="mt-2">
+                    {steps.map((s, i) => (
+                      <div key={i} className="py-1.5 border-b border-fb-border/60">
+                        <p className={GN.lbl}>{s.t}</p>
+                        <p className={`font-data text-[13px] break-words ${s.check ? 'text-fb-warn' : 'text-fb-ink'}`}>{gnBar(s.e)}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </GnSection>
+        </div>
+
+        {antOpen && (
+          <AntennaLibrarySheet currentId={g.antennaId}
+            onPick={a => { applyAntenna(a); setAntOpen(false); setLibTick(t => t + 1); }}
+            onClose={() => { setAntOpen(false); setLibTick(t => t + 1); }} />
+        )}
+        {gpsOpen && (
+          <GpsCaptureSheet projectId={projectId} mode="position" heading="Approx Position"
+            onSave={applyPhoneFix} onClose={() => setGpsOpen(false)} />
+        )}
       </div>
     );
   }
