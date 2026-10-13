@@ -642,7 +642,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.169';
+  const APP_VERSION = '1.170';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -11406,6 +11406,124 @@
     );
   }
 
+  // One-of-N choice drawn as segmented tabs (DESIGN.md → Segmented tabs).
+  function GnSegmented({ options, value, onChange, label }) {
+    return (
+      <div role="radiogroup" aria-label={label} className="flex gap-1 p-1 rounded-xl bg-fb-page-alt">
+        {options.map(([id, text]) => (
+          <button key={id} type="button" role="radio" aria-checked={value === id} onClick={() => onChange(id)}
+            className={`flex-1 min-w-0 h-9 px-2 rounded-lg text-sm font-semibold truncate transition-all ${value === id
+              ? 'bg-fb-field text-fb-heading shadow-sm' : 'text-fb-ink-faint'}`}>
+            {text}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  // A drawing built by gnss.js as an SVG string, scaled to the width it is given.
+  function GnDrawing({ svg, className = '', onClick }) {
+    return <div onClick={onClick} className={`mx-auto [&>svg]:block [&>svg]:w-full [&>svg]:h-auto ${className}`}
+      dangerouslySetInnerHTML={{ __html: svg }} />;
+  }
+
+  // ── Site obstructions ────────────────────────────────────────────────────────
+  // Azimuths and elevations: a plain number is decimal degrees; anything with
+  // separators ("45 30", "45-30-15", 45°30') goes through the DMS parser.
+  function gnAngle(raw) {
+    const t = String(raw ?? '').trim().replace(/−/g, '-');
+    if (!t) return null;
+    if (/^-?\d+(\.\d+)?$/.test(t)) return parseFloat(t);
+    return parseDMSInput(t);
+  }
+  const GN_OBS_ANGLES = [['fromAz', 'From Az', 360], ['fromEl', 'From Elev', 90], ['toAz', 'To Az', 360], ['toEl', 'To Elev', 90]];
+  const gnNewId = prefix => prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+  // The obstruction table and the sky plot it feeds. Tapping a wedge marks its
+  // row, and working in a row marks its wedge.
+  function GnObstructions({ g, update }) {
+    const [hot, setHot] = useState(null);
+    const rows = g.obstructions;
+    const setRow = (id, patch) => update(prev => ({ ...prev, obstructions: prev.obstructions.map(o => (o.id === id ? { ...o, ...patch } : o)) }));
+    const addRow = () => {
+      const id = gnNewId('ob_');
+      update(prev => ({ ...prev, obstructions: [...prev.obstructions, { id, name: '', desc: '', fromAz: '', fromEl: '', toAz: '', toEl: '', comments: '' }] }));
+      setHot(id);
+    };
+    const removeRow = id => update(prev => ({ ...prev, obstructions: prev.obstructions.filter(o => o.id !== id) }));
+    const angleBad = (raw, max) => {
+      if (!String(raw).trim()) return false;
+      const v = gnAngle(raw);
+      return v === null || !Number.isFinite(v) || v < 0 || v > max;
+    };
+    function onPlotTap(e) {
+      const hit = e.target.closest('[data-obs]');
+      const id = hit ? hit.getAttribute('data-obs') : null;
+      setHot(id);
+      if (id) document.getElementById('gn-obs-' + id)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    const north = fbGnss.plotNorth({ ref: g.bearingRef, declination: g.declination });
+    const declBad = !!String(g.declination).trim() && !Number.isFinite(fbGnss.num(g.declination));
+    const svg = fbGnss.buildSkyPlotSVG(rows, { ref: g.bearingRef, declination: g.declination, mask: g.elevMask, parse: gnAngle, highlight: hot });
+
+    return (
+      <>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2 items-end mb-2">
+          <div className="min-w-0">
+            <p className={GN.lbl + ' mb-1'}>Bearings are</p>
+            <GnSegmented label="Bearing reference" options={[['mag', 'Magnetic'], ['true', 'True']]}
+              value={g.bearingRef} onChange={v => update({ bearingRef: v })} />
+          </div>
+          <GnField label="Declination" mono unit="°" placeholder="e.g. −16.5" bad={declBad}
+            value={g.declination} onChange={v => update({ declination: v })} />
+        </div>
+        <p className={GN.note + ' mb-3'}>
+          {g.bearingRef === 'true' ? 'Bearings are plotted as entered.'
+            : north.shift ? 'The plot turns magnetic bearings to true: True = Magnetic + declination (west is negative).'
+            : 'West declination is negative. With none entered, the plot is drawn to magnetic north.'}
+        </p>
+
+        {rows.length === 0 && (
+          <p className="text-sm text-fb-ink-muted py-4 mb-2 text-center rounded-xl bg-fb-page-alt">No obstructions recorded.</p>
+        )}
+        {rows.map((o, i) => (
+          <div key={o.id} id={'gn-obs-' + o.id} onFocus={() => setHot(o.id)}
+            className={`-mx-2 px-2 py-2 border-b border-fb-border/60 ${hot === o.id ? 'bg-fb-accent/10' : ''}`}>
+            <div className="flex items-end gap-2">
+              <button type="button" onClick={() => setHot(hot === o.id ? null : o.id)} title="Show on the sky plot"
+                className={`w-9 h-10 flex-shrink-0 rounded-lg font-data text-base border ${hot === o.id
+                  ? 'bg-fb-cover border-fb-cover text-white' : 'bg-fb-page-alt border-fb-border text-fb-heading'}`}>
+                {i + 1}
+              </button>
+              <div className="flex-1 min-w-0 grid grid-cols-2 gap-x-2">
+                <GnField label="Obstruction" placeholder="Tree line" value={o.name} onChange={v => setRow(o.id, { name: v })} />
+                <GnField label="Type / Description" placeholder="Spruce, 12 m" value={o.desc} onChange={v => setRow(o.id, { desc: v })} />
+              </div>
+              <button type="button" onClick={() => removeRow(o.id)} title="Remove this obstruction"
+                className="w-11 h-11 flex-shrink-0 flex items-center justify-center rounded-lg text-fb-error active:bg-fb-page-deep">
+                <Ico.Trash />
+              </button>
+            </div>
+            <div className="grid grid-cols-4 gap-x-2 mt-1.5 pl-11">
+              {GN_OBS_ANGLES.map(([k, label, max]) => (
+                <GnField key={k} label={label} mono inputMode="decimal" placeholder="°" bad={angleBad(o[k], max)}
+                  value={o[k]} onChange={v => setRow(o.id, { [k]: v })} />
+              ))}
+            </div>
+            <div className="mt-1.5 pl-11">
+              <GnField label="Comments" value={o.comments} onChange={v => setRow(o.id, { comments: v })} />
+            </div>
+          </div>
+        ))}
+        <button type="button" onClick={addRow} className={GN.chip + ' mt-3'}>＋ Add obstruction</button>
+
+        <p className={GN.lbl + ' mt-4 mb-1'}>Site Obstruction Diagram</p>
+        <GnDrawing svg={svg} onClick={onPlotTap} className="max-w-[360px] cursor-pointer" />
+        <p className={GN.note + ' text-center'}>Outer ring is the horizon, centre is the zenith. Tap a wedge to find its row.</p>
+      </>
+    );
+  }
+
   // Remount per page so a pending save always lands on the page it belongs to.
   function GnssPage(props) {
     return <GnssPageBody key={props.page.id} {...props} />;
@@ -11652,6 +11770,13 @@
                 )}
               </div>
             )}
+
+            <p className={GN.lbl + ' mt-4 mb-1'}>Antenna Height Drawing</p>
+            <GnDrawing svg={fbGnss.buildAntennaSVG(fbGnss.diagramValues(res))} className="max-w-[270px]" />
+          </GnSection>
+
+          <GnSection title="Site Obstructions">
+            <GnObstructions g={g} update={update} />
           </GnSection>
         </div>
 

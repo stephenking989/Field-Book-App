@@ -5,6 +5,7 @@
 //   • antenna library  — saved antenna models, shared by every project
 //   • slant-height reduction — the COGS static observation form's arithmetic
 //   • Julian day and UT session times
+//   • the antenna height drawing and the obstruction sky plot, as SVG strings
 //
 // Page data lives under page.gnss (see emptyGnss). Readings are stored as the
 // text the surveyor typed; numbers are parsed here, at compute time.
@@ -303,8 +304,222 @@
     return steps;
   }
 
+  // ─── Drawings ──────────────────────────────────────────────────────────────
+  // Both drawings are built as SVG strings so the page and the PDF export use
+  // one renderer. On screen the colours come from the brand (FBC / fbAlpha);
+  // with { print: true } everything is black on white, greys made by opacity.
+  const esc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const r2 = v => String(Math.round(v * 100) / 100);
+
+  function palette(print) {
+    const C = root.FBC;
+    if (print || !C) {
+      return { print: true, ink: '#000', soft: '#000', softOp: 0.5, faintOp: 0.28, dim: '#000', hot: '#000', dot: '#000',
+               body: '#fff', paper: '#fff', sky: '#fff', font: 'Helvetica, Arial, sans-serif' };
+    }
+    return { print: false, ink: C.ink, soft: C.inkMuted, softOp: 1, faintOp: 0.5, dim: C.heading, hot: C.info, dot: C.accent,
+             body: C.pageDeep, paper: C.page, sky: C.field, font: (root.FBF && root.FBF.mono) || 'monospace' };
+  }
+  // Text with a paper-coloured halo so it stays readable over lines and fills.
+  function haloText(c, x, y, str, o) {
+    const a = o || {};
+    return `<text x="${r2(x)}" y="${r2(y)}" font-family="${c.font}" font-size="${a.size || 11}" font-weight="${a.weight || 700}"` +
+      ` fill="${a.fill || c.ink}" text-anchor="${a.anchor || 'middle'}"${a.base ? ` dominant-baseline="${a.base}"` : ''}` +
+      `${a.rot != null ? ` transform="rotate(${a.rot} ${r2(x)} ${r2(y)})"` : ''}${a.cls ? ` class="${a.cls}"` : ''}` +
+      ` stroke="${c.paper}" stroke-width="${a.halo != null ? a.halo : 3}" stroke-linejoin="round" paint-order="stroke" pointer-events="none">${esc(str)}</text>`;
+  }
+
+  // ── Antenna height drawing ─────────────────────────────────────────────────
+  // Label values for the drawing, from a solveHeights result. The slant method
+  // gives S, Z and the ARP height; vertical readings alone give only the ARP.
+  function diagramValues(r) {
+    const s = r.slantRes, v = r.vertRes, a = r.ant || {};
+    return {
+      S: s ? s.S : null, Z: s ? s.Z : null, ARP: s ? s.ARP : v ? v.ARP : null,
+      R: fin(a.R) ? a.R : null, d: fin(a.d) ? a.d : null,
+    };
+  }
+
+  // Tripod over the mark, antenna with its ARP, the slant measure mark (SHMP)
+  // on the ground-plane edge and the L1/L2 phase centres on the axis.
+  // Dimensions: S (mark → SHMP), R (centre → SHMP), Z (vertical, mark → SHMP
+  // level), d (SHMP level → ARP), ARP height (mark → ARP). Each label shows its
+  // value when there is one and the bare symbol when there isn't.
+  function buildAntennaSVG(values, opts) {
+    const v = values || {}, c = palette(opts && opts.print);
+    const arrow = 'gnArrow' + (c.print ? 'P' : 'S');
+    const lab = (sym, val) => (fin(val) ? `${sym} ${f(val)}` : sym);
+    const ends = `marker-start="url(#${arrow})" marker-end="url(#${arrow})"`;
+    const dimLine = (x1, y1, x2, y2) => `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c.dim}" stroke-width="1.3" ${ends}/>`;
+    const ext = (x1, y1, x2, y2) => `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c.dim}" stroke-opacity="${c.print ? 0.6 : 0.8}" stroke-width="0.8" stroke-dasharray="2 2"/>`;
+    const small = (x, y, str, anchor) => `<text x="${x}" y="${y}" font-family="${c.font}" font-size="8.5" fill="${c.soft}" fill-opacity="${c.print ? 0.75 : 1}" text-anchor="${anchor || 'start'}">${esc(str)}</text>`;
+    return [
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 330" width="240" height="330" role="img" aria-label="Antenna on a tripod over the mark, showing slant height S, radius R, vertical Z, offset d and the ARP height">`,
+      `<defs><marker id="${arrow}" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 1 L9 5 L0 9 Z" fill="${c.dim}"/></marker></defs>`,
+      // ground and tripod
+      `<line x1="5" y1="300" x2="235" y2="300" stroke="${c.soft}" stroke-opacity="${c.softOp}" stroke-width="2"/>`,
+      `<g stroke="${c.soft}" stroke-opacity="${c.softOp}" stroke-linecap="round">`,
+      `<line x1="80" y1="120" x2="30" y2="300" stroke-width="3"/><line x1="80" y1="120" x2="130" y2="300" stroke-width="3"/>`,
+      `<line x1="80" y1="120" x2="80" y2="296" stroke-width="2" stroke-opacity="${c.faintOp}"/></g>`,
+      // tribrach, antenna stem, ground plane and dome
+      `<g fill="${c.body}" stroke="${c.soft}" stroke-opacity="${c.softOp}" stroke-width="1.2" stroke-linejoin="round">`,
+      `<rect x="68" y="108" width="24" height="12" rx="2"/><rect x="76" y="88" width="8" height="20"/>`,
+      `<path d="M38 78 L122 78 L114 88 L46 88 Z"/><path d="M50 78 Q80 46 110 78 Z"/></g>`,
+      // R — antenna centre to the slant mark
+      ext(80, 46, 80, 78), ext(122, 46, 122, 76), dimLine(80, 50, 122, 50),
+      haloText(c, 101, 42, lab('R', v.R)),
+      // S — the taped slant, mark to slant mark
+      `<line x1="80" y1="300" x2="122" y2="78" stroke="${c.hot}" stroke-width="2"/>`,
+      haloText(c, 117, 192, lab('S', v.S), { rot: -79.3, fill: c.hot, size: 12 }),
+      // Z — vertical, mark to the level of the slant mark
+      ext(125, 78, 206, 78), dimLine(165, 78, 165, 300),
+      haloText(c, 160, 189, lab('Z', v.Z), { rot: -90 }),
+      // d — slant mark level to the ARP
+      ext(84, 108, 206, 108), dimLine(200, 78, 200, 108),
+      haloText(c, 200, 70, lab('d', v.d)),
+      // ARP height — mark to the ARP
+      ext(42, 108, 76, 108), dimLine(48, 108, 48, 300),
+      haloText(c, 43, 204, lab('ARP', v.ARP), { rot: -90 }),
+      // points
+      `<circle cx="80" cy="300" r="3.5" fill="${c.ink}"/>`, small(80, 318, 'mark', 'middle'),
+      `<circle cx="80" cy="108" r="3" fill="${c.dot}"/>`,
+      `<circle cx="122" cy="78" r="3" fill="${c.hot}"/>`, small(127, 90, 'SHMP'),
+      `<circle cx="80" cy="66" r="2.3" fill="${c.soft}"/>`, small(75, 68.5, 'L1', 'end'),
+      `<circle cx="80" cy="73" r="2.3" fill="${c.soft}"/>`, small(85, 75.5, 'L2'),
+      `</svg>`,
+    ].join('');
+  }
+
+  // ── Obstructions and the sky plot ──────────────────────────────────────────
+  // An obstruction row: { id, name, desc, fromAz, fromEl, toAz, toEl, comments }
+  // — angles as typed. It covers the sky clockwise from From Az to To Az, from
+  // the horizon up to an elevation that runs evenly from From Elev to To Elev.
+  const norm360 = a => ((a % 360) + 360) % 360;
+  const THIN = 3;                     // degrees drawn for an obstruction with one bearing
+  const signed = v => (v < 0 ? '−' : '+') + Math.abs(v);
+
+  // Which north the plot is drawn to. Magnetic bearings are turned to true when
+  // a declination is given: True = Magnetic + declination (west negative).
+  function plotNorth(opts) {
+    const o = opts || {}, decl = num(o.declination);
+    if (o.ref === 'true') return { shift: 0, top: 'N', label: 'TRUE NORTH', note: 'bearings entered as true' };
+    if (fin(decl)) return { shift: decl, top: 'N', label: 'TRUE NORTH', note: `magnetic bearings + declination ${signed(decl)}°` };
+    return { shift: 0, top: 'MN', label: 'MAGNETIC NORTH', note: 'no declination applied' };
+  }
+
+  // Rows as plot wedges: [{ id, n, az1, sweep, el1, el2 }] — az1 is where the
+  // wedge starts on the plot's north, sweep how far it runs clockwise.
+  // opts.parse turns a typed angle into degrees (the app passes parseDMSInput).
+  function skyWedges(rows, opts) {
+    const o = opts || {}, parse = o.parse || num, shift = plotNorth(o).shift;
+    const ang = raw => {
+      const t = String(raw ?? '').trim().replace(/−/g, '-');
+      const x = t ? parse(t) : null;
+      return fin(x) ? x : null;
+    };
+    const clampEl = e => Math.max(0, Math.min(90, e));
+    const out = [];
+    (rows || []).forEach((row, i) => {
+      if (!row) return;
+      const a1 = ang(row.fromAz), a2 = ang(row.toAz);
+      let e1 = ang(row.fromEl), e2 = ang(row.toEl);
+      if (e1 === null) e1 = e2;
+      if (e2 === null) e2 = e1;
+      const start = a1 !== null ? a1 : a2;
+      if (start === null || e1 === null) return;
+      e1 = clampEl(e1); e2 = clampEl(e2);
+      if (e1 === 0 && e2 === 0) return;                 // nothing above the horizon
+      let az1 = norm360(start + shift);
+      let sweep = a1 !== null && a2 !== null ? norm360(a2 - a1) : 0;
+      if (sweep === 0) { az1 = norm360(az1 - THIN / 2); sweep = THIN; }
+      out.push({ id: row.id, n: i + 1, az1, sweep, el1: e1, el2: e2 });
+    });
+    return out;
+  }
+  const wedgeOffset = (w, az) => norm360(az - w.az1);
+  function inWedge(w, az) { return wedgeOffset(w, az) <= w.sweep; }
+  function wedgeElev(w, az) {
+    return w.el1 + (w.el2 - w.el1) * Math.min(1, wedgeOffset(w, az) / w.sweep);
+  }
+
+  // Polar plot, north up: the outer ring is the horizon (0°), the centre the
+  // zenith (90°). opts: { print, ref: 'mag'|'true', declination, mask, parse,
+  // highlight: obstruction id }. Each wedge carries data-obs="<id>".
+  function buildSkyPlotSVG(rows, opts) {
+    const o = opts || {}, c = palette(o.print), north = plotNorth(o);
+    const W = 320, H = 344, cx = 160, cy = 162, R = 128;
+    const rad = el => R * (90 - el) / 90;
+    const xy = (az, el, r) => {
+      const a = az * Math.PI / 180, rr = r != null ? r : rad(el);
+      return [cx + rr * Math.sin(a), cy - rr * Math.cos(a)];
+    };
+    const p = (az, el) => xy(az, el).map(r2).join(' ');
+    const out = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Sky plot of site obstructions, ${north.label.toLowerCase()} up">`];
+    if (c.print) {
+      out.push(`<defs><pattern id="gnHatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">` +
+        `<rect width="5" height="5" fill="#fff"/><line x1="0" y1="0" x2="0" y2="5" stroke="#000" stroke-opacity="0.6" stroke-width="1.5"/></pattern></defs>`);
+    }
+    out.push(`<circle cx="${cx}" cy="${cy}" r="${R}" fill="${c.sky}"/>`);
+
+    // Obstruction wedges, under the grid so the rings stay readable.
+    const wedges = skyWedges(rows, o);
+    wedges.forEach(w => {
+      const steps = Math.max(2, Math.ceil(w.sweep / 2));
+      const outer = [], inner = [];
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps, az = w.az1 + w.sweep * t;
+        outer.push(p(az, 0));
+        inner.push(p(az, w.el1 + (w.el2 - w.el1) * t));
+      }
+      const on = o.highlight != null && o.highlight === w.id;
+      const fill = c.print ? 'url(#gnHatch)' : root.fbAlpha('accent', on ? 0.62 : 0.3);
+      out.push(`<path d="M${outer.join(' L')} L${inner.reverse().join(' L')} Z" data-obs="${esc(w.id)}"${on ? ' data-on="1"' : ''}` +
+        ` fill="${fill}" stroke="${c.print ? '#000' : c.dot}" stroke-width="${on ? 2.4 : 1.1}" stroke-linejoin="round"/>`);
+    });
+
+    // Elevation rings every 15° (30° and 60° solid and labelled) and radials every 30°.
+    for (let az = 0; az < 360; az += 30) {
+      const [x, y] = xy(az, 0);
+      out.push(`<line x1="${cx}" y1="${cy}" x2="${r2(x)}" y2="${r2(y)}" stroke="${c.soft}" stroke-opacity="${c.faintOp}" stroke-width="0.6" pointer-events="none"/>`);
+    }
+    [15, 30, 45, 60, 75].forEach(el => {
+      const solid = el % 30 === 0;
+      out.push(`<circle cx="${cx}" cy="${cy}" r="${r2(rad(el))}" fill="none" stroke="${c.soft}" stroke-opacity="${solid ? c.softOp : c.faintOp}"` +
+        ` stroke-width="${solid ? 0.9 : 0.7}"${solid ? '' : ' stroke-dasharray="3 3"'} pointer-events="none"/>`);
+    });
+    out.push(`<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="${c.ink}" stroke-width="1.5" pointer-events="none"/>`);
+    out.push(`<circle cx="${cx}" cy="${cy}" r="1.6" fill="${c.ink}" pointer-events="none"/>`);
+
+    // Elevation mask from the session block.
+    const mask = num(o.mask);
+    if (fin(mask) && mask > 0 && mask < 90) {
+      out.push(`<circle cx="${cx}" cy="${cy}" r="${r2(rad(mask))}" fill="none" stroke="${c.hot}" stroke-width="1.2" stroke-dasharray="7 3" pointer-events="none"/>`);
+      const [mx, my] = xy(225, mask);
+      out.push(haloText(c, mx, my, `mask ${mask}°`, { size: 8.5, fill: c.hot, base: 'central' }));
+    }
+
+    // Labels.
+    [30, 60].forEach(el => out.push(haloText(c, cx + 3, cy - rad(el) - 3, `${el}°`, { size: 8.5, anchor: 'start', fill: c.soft, weight: 400 })));
+    for (let az = 0; az < 360; az += 30) {
+      const main = az % 90 === 0;
+      const [x, y] = xy(az, 0, R + (main ? 13 : 11));
+      const str = main ? (az === 0 ? north.top : 'ESW'[az / 90 - 1]) : String(az).padStart(3, '0');
+      out.push(haloText(c, x, y, str, main ? { size: 13, base: 'central', halo: 0 } : { size: 8, base: 'central', fill: c.soft, weight: 400, halo: 0 }));
+    }
+    wedges.forEach(w => {
+      const mid = w.az1 + w.sweep / 2;
+      const [x, y] = xy(mid, (w.el1 + w.el2) / 4);
+      out.push(haloText(c, x, y, String(w.n), { size: 11, base: 'central', cls: 'gn-sky-num' }));
+    });
+    out.push(haloText(c, cx, H - 16, north.label, { size: 10, halo: 0 }));
+    out.push(haloText(c, cx, H - 5, north.note, { size: 8, fill: c.soft, weight: 400, halo: 0 }));
+    out.push('</svg>');
+    return out.join('');
+  }
+
   const api = {
     BUILTIN_ANTENNAS, DEFAULT_ANTENNA_ID, METHODS, DEFAULT_TOL,
+    diagramValues, buildAntennaSVG, plotNorth, skyWedges, inWedge, wedgeElev, buildSkyPlotSVG,
     num, fmt4, fmtDiff,
     julianDay, utcDateISO, utcTimeHMS, parseHMS, fmtHMS, sessionDuration,
     parseLatLon, fmtLatLonDMS,
