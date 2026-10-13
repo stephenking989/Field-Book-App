@@ -640,7 +640,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.176';
+  const APP_VERSION = '1.177';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -3892,7 +3892,7 @@
     let _fm = 1;   // per-shape text size multiplier (s.fontSize), set by _dimsSVG
 
     const visLayers = new Set((layers || []).filter(l => l.visible !== false).map(l => l.id));
-    const defaultLayerId = (layers && layers[0]) ? layers[0].id : null;
+    const defaultLayerId = fbGnss.baseLayerId(layers);
 
     // ── SVG text element with white halo (matches screen rendering) ──────────
     function _dimSVG(lx, ly, angle, text) {
@@ -4359,7 +4359,8 @@
         else switch (s.type) {
           case 'line':   px=(s.x1+s.x2)/2; py=(s.y1+s.y2)/2; break;
           case 'circle': px=s.cx;           py=s.cy;           break;
-          case 'rect':   px=s.x+s.w/2;     py=s.y+s.h/2;     break;
+          case 'rect':
+          case 'image':  px=s.x+s.w/2;     py=s.y+s.h/2;     break;   // same pivot the canvas uses
           default:       px=s.x||0;         py=s.y||0;
         }
         el = `<g transform="rotate(${s._rot},${px},${py})">${el}</g>`;
@@ -4370,6 +4371,25 @@
 
     const bgAttr = transparent ? '' : ` style="background:${FBC.page};"`;
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}" width="${outW}" height="${outH}"${bgAttr}>${shapesSVG}${dimsSVG}</svg>`;
+  }
+
+  // The aerial image a sketch page is showing, if any (its layer can be hidden).
+  function _sketchAerial(page) {
+    const layers = page.layers || [];
+    return (page.shapes || []).find(s => s.aerial && s.visible !== false
+      && layers.find(l => l.id === s.layerId)?.visible !== false) || null;
+  }
+  // Imagery credit, small, with its left end at (x, y) — printed wherever a
+  // sketch that shows an aerial image is drawn. The provider's terms need it.
+  function _pdfAerialCredit(pdf, page, x, y) {
+    const a = _sketchAerial(page);
+    if (!a) return;
+    const credit = a.aerial.attribution || fbGnss.SAT_ATTRIBUTION;
+    pdf.setFontSize(5.5); pdf.setFont('helvetica', 'normal');
+    pdf.setFillColor(255, 255, 255);
+    pdf.rect(x - 0.8, y - 2.2, pdf.getTextWidth(credit) + 1.6, 3, 'F');
+    pdf.setTextColor(60, 60, 60);
+    pdf.text(credit, x, y);
   }
 
   // Draw the notebook-style page header on the current jsPDF page.
@@ -4838,6 +4858,7 @@
             for (let gy = r.y; gy <= r.y + r.h + 0.01; gy += 5) pdf.line(r.x, gy, r.x + r.w, gy);
           }
           pdf.addImage(await _svgToPng(svg, 1400, Math.round(1400 * vb.h / vb.w)), 'PNG', r.x, r.y, r.w, r.h, undefined, 'FAST');
+          _pdfAerialCredit(pdf, sp, r.x + 1, r.y + r.h - 1);
         }
       } else if (sk.source === 'satellite') {
         if (sat) { const r = mainFit(g.images.satellite.w || 4, g.images.satellite.h || 3); pdf.addImage(sat, 'JPEG', r.x, r.y, r.w, r.h, undefined, 'FAST'); }
@@ -5189,6 +5210,7 @@
               // North arrow and scale bar drawn directly in PDF (on top of sketch)
               if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
               if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin, page.viewBox?.w, availW);
+              _pdfAerialCredit(pdf, page, margin + 2, contentY + drawH - 1.5);
             } catch {
               if (tmp.parentNode) document.body.removeChild(tmp);
               pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
@@ -5576,6 +5598,7 @@
             // North arrow and scale bar drawn directly in PDF (on top of sketch)
             if (page.showNorthArrow !== false) _drawPdfNorthArrow(pdf, W, margin);
             if (page.showScaleBar !== false) _drawPdfScaleBar(pdf, page.scaleDenom, page.units, W, H, margin, page.viewBox?.w, availW);
+            _pdfAerialCredit(pdf, page, margin + 2, contentY + drawH - 1.5);
           } catch (_) { document.body.removeChild(tmp); }
         }
       } else if (page.type === 'title') {
@@ -7846,24 +7869,25 @@
   }
 
   // Pick an existing Points-page point to link a photo / voice note to.
-  function PointPickerSheet({ project, onPick, onClose }) {
+  // `only` narrows the list (e.g. to points with geographic coordinates).
+  function PointPickerSheet({ project, onPick, onClose, heading = 'Link to Point', only }) {
     const [q, setQ] = useState('');
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
-    const all = fbGeo.rowPoints(project).filter(p => p.number);
+    const all = fbGeo.rowPoints(project).filter(p => p.number && (!only || only(p)));
     const needle = q.trim().toLowerCase();
     const list = needle ? all.filter(p => p.number.toLowerCase().includes(needle) || p.desc.toLowerCase().includes(needle)) : all;
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
         <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 24 }}>
           <div tabIndex={0} className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4 outline-none" />
-          <h2 className="text-xl font-bold text-fb-ink mb-4">Link to Point</h2>
+          <h2 className="text-xl font-bold text-fb-ink mb-4">{heading}</h2>
           <input type="text" value={q} onChange={e => setQ(e.target.value)} placeholder="Search number or description"
             className="w-full px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint mb-3" />
           <div className="space-y-1.5 overflow-y-auto" style={{ maxHeight: '45vh' }}>
             {list.length === 0 && (
               <p className="text-sm text-fb-ink-muted py-6 text-center rounded-xl bg-fb-page-alt">
-                {all.length === 0 ? 'No numbered points on this project\'s Points pages yet.' : 'No matching points.'}
+                {all.length === 0 ? only ? 'No points with coordinates on this project yet.' : 'No numbered points on this project\'s Points pages yet.' : 'No matching points.'}
               </p>
             )}
             {list.map(p => (
@@ -12222,7 +12246,11 @@
   // Sheet that fetches satellite imagery around the station, stitches it on a
   // canvas centred on the mark and hands back a JPEG. It needs a signal now;
   // the saved image then works offline and in the PDF.
-  function SatelliteCaptureSheet({ lat, lon, station, onSave, onClose }) {
+  // `size` stitches a canvas other than the station sketch's 1024 × 768, and
+  // `plain` leaves the imagery bare (no pin, arrow, scale bar or attribution) —
+  // both for the aerial image that goes under a sketch.
+  function SatelliteCaptureSheet({ lat, lon, station, onSave, onClose, size, plain, title = 'Satellite image', footnote }) {
+    const W = size ? size.w : SAT_W, H = size ? size.h : SAT_H;
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
     const canvasRef = useRef(null);
@@ -12236,11 +12264,11 @@
       const ctx = canvasRef.current.getContext('2d');
       let live = true;
       ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, SAT_W, SAT_H);
+      ctx.fillRect(0, 0, W, H);
       setSaveErr(null);
       if (navigator.onLine === false) { setState('offline'); return; }
       setState('loading');
-      const plan = fbGnss.tilePlan(lat, lon, zoom, SAT_W, SAT_H);
+      const plan = fbGnss.tilePlan(lat, lon, zoom, W, H);
       const total = plan.tiles.length;
       let done = 0, failed = 0;
       // `giveUp` settles with whatever has arrived, so a stalled tile on a weak
@@ -12248,17 +12276,23 @@
       const settle = giveUp => {
         if (!live || (!giveUp && done + failed < total)) return;
         if (done === 0) { setState('failed'); return; }
-        drawSatOverlay(ctx, plan.mpp, station);
+        if (!plain) drawSatOverlay(ctx, plan.mpp, station);
         setState(done < total ? 'partial' : 'ready');
       };
       const slow = setTimeout(() => settle(true), 20000);
-      plan.tiles.forEach(t => {
+      // A tile that fails is asked for once more: a large image needs 60-odd
+      // tiles at once, and the odd request is dropped on the way.
+      const load = (t, retries) => {
         const img = new Image();
         img.crossOrigin = 'anonymous';   // without it the canvas is tainted and can't be saved
         img.onload = () => { if (live) { ctx.drawImage(img, t.dx, t.dy); done++; settle(); } };
-        img.onerror = () => { failed++; settle(); };
+        img.onerror = () => {
+          if (retries > 0 && live) setTimeout(() => load(t, retries - 1), 700);
+          else { failed++; settle(); }
+        };
         img.src = t.url;
-      });
+      };
+      plan.tiles.forEach(t => load(t, 1));
       return () => { live = false; clearTimeout(slow); };
     }, [zoom, attempt]);
 
@@ -12271,10 +12305,10 @@
         setSaveErr('The browser blocked saving this imagery (cross-origin canvas), so nothing was saved. Use a photo or a linked sketch for this station.');
         return;
       }
-      onSave(dataUrl, { zoom, lat, lon, mpp: fbGnss.metresPerPixel(lat, zoom), w: SAT_W, h: SAT_H, capturedAt: new Date().toISOString() });
+      onSave(dataUrl, { zoom, lat, lon, mpp: fbGnss.metresPerPixel(lat, zoom), w: W, h: H, capturedAt: new Date().toISOString() });
     }
 
-    const across = Math.round(fbGnss.metresPerPixel(lat, zoom) * SAT_W / 10) * 10;
+    const across = Math.round(fbGnss.metresPerPixel(lat, zoom) * W / 10) * 10;
     const chip = 'flex-1 h-11 rounded-lg text-sm font-semibold border bg-fb-page-alt border-fb-border text-fb-heading active:bg-fb-page-deep disabled:text-fb-ink-faint';
     const canSave = state === 'ready' || state === 'partial';
     return (
@@ -12282,10 +12316,10 @@
         <div ref={trapRef} className="modal-sheet">
           <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
           <div className="flex items-baseline justify-between mb-4">
-            <h2 className="text-xl font-bold text-fb-ink">Satellite image</h2>
+            <h2 className="text-xl font-bold text-fb-ink">{title}</h2>
             <span className="text-xs font-semibold text-fb-ink-muted font-data">Zoom {zoom} · {across} m across</span>
           </div>
-          <canvas ref={canvasRef} width={SAT_W} height={SAT_H} aria-label="Satellite image preview"
+          <canvas ref={canvasRef} width={W} height={H} aria-label="Satellite image preview"
             className="block w-full h-auto rounded-xl border border-fb-border mb-3" />
           {state === 'loading' && <p className="text-xs text-fb-ink-muted text-center mb-3">Loading imagery…</p>}
           {state === 'offline' && <Notice tone="error" className="mb-3">You're offline. Satellite imagery needs a signal when it's captured — once saved, it works offline.</Notice>}
@@ -12304,7 +12338,104 @@
             Use this image
           </button>
           <p className="text-[11px] text-fb-ink-muted text-center mt-3 leading-snug">
-            {fbGnss.SAT_ATTRIBUTION}. Centred on the approx position — the pin is only as good as that fix.
+            {footnote || `${fbGnss.SAT_ATTRIBUTION}. Centred on the approx position — the pin is only as good as that fix.`}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Aerial image for a sketch background ─────────────────────────────────────
+  // Latitude or longitude typed on a sheet: free-form ("44 38 55.7 N",
+  // "-63.5752"), read as it is typed and shown back as DMS when the field is left.
+  function SheetLatLon({ label, kind, value, onCommit }) {
+    const [text, setText] = useState(() => fbGnss.fmtLatLonDMS(value, kind));
+    const [bad, setBad] = useState(false);
+    const focused = useRef(false);
+    useEffect(() => {
+      if (!focused.current) { setText(fbGnss.fmtLatLonDMS(value, kind)); setBad(false); }
+    }, [value]);
+    const parse = t => {
+      const dd = t.trim() ? fbGnss.parseLatLon(t) : null;
+      return dd !== null && Math.abs(dd) <= (kind === 'lon' ? 180 : 90) ? dd : null;
+    };
+    function leave() {
+      focused.current = false;
+      const dd = parse(text);
+      setBad(!!text.trim() && dd === null);
+      if (dd !== null) setText(fbGnss.fmtLatLonDMS(dd, kind));
+    }
+    return (
+      <label className="block flex-1 min-w-0">
+        <span className="block text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5">{label}</span>
+        <input type="text" autoComplete="off" value={text} placeholder={kind === 'lon' ? '63 34 30.7 W' : '44 38 55.7 N'}
+          onFocus={() => { focused.current = true; }} onBlur={leave}
+          onChange={e => { setText(e.target.value); setBad(false); onCommit(parse(e.target.value)); }}
+          className={`w-full px-3 py-3 rounded-xl text-base font-data bg-fb-field border outline-none placeholder:text-fb-ink-faint ${bad
+            ? 'border-fb-error text-fb-error' : 'border-fb-border text-fb-ink focus:border-fb-accent'}`} />
+      </label>
+    );
+  }
+
+  // Picks where the imagery is centred — the phone's GPS, a project point that
+  // has geographic coordinates, or a typed latitude / longitude — then hands
+  // over to SatelliteCaptureSheet for the imagery itself. sketch.js opens it
+  // (through window._fb) and places what onSave returns under the sketch at
+  // true scale: onSave(dataUrl, fbGnss.aerialMeta record). `start` pre-fills
+  // the centre when an existing image is being replaced.
+  function AerialImageSheet({ projectId, start, onSave, onClose }) {
+    const project = DB.getProject(projectId);
+    const [lat, setLat] = useState(start ? start.lat : null);
+    const [lon, setLon] = useState(start ? start.lon : null);
+    const [from, setFrom] = useState(start ? 'the image now in this sketch' : '');
+    const [step, setStep] = useState('centre');     // 'centre' | 'gps' | 'point' | 'capture'
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, step === 'centre', onClose);
+    const hasCoords = p => p.lat !== null && p.lon !== null;
+    const pointCount = fbGeo.rowPoints(project).filter(p => p.number && hasCoords(p)).length;
+    const centre = (la, lo, src) => { setLat(la); setLon(lo); setFrom(src); setStep('centre'); };
+
+    if (step === 'gps') return (
+      <GpsCaptureSheet projectId={projectId} mode="position" heading="Image Centre"
+        onSave={({ geo }) => centre(geo.lat, geo.lon, 'phone GPS')} onClose={() => setStep('centre')} />
+    );
+    if (step === 'point') return (
+      <PointPickerSheet project={project} heading="Centre on Point" only={hasCoords}
+        onPick={p => centre(p.lat, p.lon, `point ${p.number}`)} onClose={() => setStep('centre')} />
+    );
+    if (step === 'capture') return (
+      <SatelliteCaptureSheet lat={lat} lon={lon} plain size={fbGnss.AERIAL_PX} title="Aerial image"
+        footnote={`${fbGnss.SAT_ATTRIBUTION}. Goes under the sketch at true scale, on its own locked layer.`}
+        onSave={(dataUrl, cap) => onSave(dataUrl, fbGnss.aerialMeta(cap))} onClose={() => setStep('centre')} />
+    );
+    const chip = 'h-11 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep disabled:text-fb-ink-faint';
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Aerial image</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted">{fbGnss.AERIAL_PROVIDER}</span>
+          </div>
+          <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5">Centre the image on</p>
+          <div className="flex flex-wrap gap-2 mb-3">
+            <button onClick={() => setStep('gps')} className={chip}><Ico.Pin size={14} /> My location</button>
+            <button onClick={() => setStep('point')} disabled={pointCount === 0} className={chip}>A project point</button>
+          </div>
+          <div className="flex gap-2 mb-2">
+            <SheetLatLon label="Latitude" kind="lat" value={lat} onCommit={v => { setLat(v); setFrom(''); }} />
+            <SheetLatLon label="Longitude" kind="lon" value={lon} onCommit={v => { setLon(v); setFrom(''); }} />
+          </div>
+          <p className="text-xs text-fb-ink-muted mb-5 leading-snug">
+            {from ? `Centre taken from ${from}.` : 'Degrees, minutes and seconds or decimal degrees. End with W or S, or use a minus sign.'}
+            {pointCount === 0 ? ' No point in this project has coordinates yet.' : ''}
+          </p>
+          <button onClick={() => setStep('capture')} disabled={lat === null || lon === null}
+            className="w-full py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
+            Get imagery
+          </button>
+          <p className="text-[11px] text-fb-ink-muted text-center mt-3 leading-snug">
+            Needs a signal now. The saved image then works offline and prints in the PDF.
           </p>
         </div>
       </div>
@@ -13099,7 +13230,7 @@
   // Expose shared globals for sketch.js to consume via window._fb
   window._fb = { DB, PageHeaderStrip, HCell, compressImage, PNEZD_COLS,
                  deletePointPermanently, getNextManualPtNum, addPointRow, updatePointRow, isPtNumTaken,
-                 photoDB, parseDMSInput, formatDMS, fbGeo: window.fbGeo };
+                 photoDB, parseDMSInput, formatDMS, fbGeo: window.fbGeo, AerialImageSheet };
 
   // Mount the app only after sketch.js has loaded and resolved _sketchPromise
   Promise.all([_sketchPromise, _dataReady.catch(() => {})]).then(() => {

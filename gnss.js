@@ -625,8 +625,92 @@
     return { metres: best, px: best / mpp, label: best >= 1000 ? `${best / 1000} km` : `${best} m` };
   }
 
+  // ─── Aerial image behind a sketch ──────────────────────────────────────────
+  // The same imagery, stitched larger and with nothing drawn on it, placed
+  // under a sketch at true scale. The shape is an ordinary sketch image with an
+  // `aerial` record: { provider, attribution, lat, lon, zoom, mppX, mppY, pxW,
+  // pxH, capturedAt }. Everything below is pure geometry; sketch.js holds the UI.
+  const AERIAL_PROVIDER = 'Esri World Imagery';
+  const AERIAL_PX = { w: 2000, h: 1500 };       // stitched canvas — "about 2000 px" keeps the JPEG near 1 MB
+  // The image lives alone on this layer, which is always first (drawn under
+  // everything) and always locked. A shape with no layerId therefore belongs
+  // to the first layer that ISN'T this one — never layers[0] blindly.
+  const AERIAL_LAYER_ID = 'l_aerial';
+  function baseLayerId(layers) {
+    const list = layers || [], l = list.find(x => x.id !== AERIAL_LAYER_ID) || list[0];
+    return l ? l.id : null;
+  }
+  const WGS84_A = 6378137, WGS84_E2 = 0.00669437999014;
+
+  // Ground metres per image pixel, east–west (x) and north–south (y). Web
+  // mercator is drawn on a sphere but the ground is the WGS84 ellipsoid, so the
+  // two differ: at 45° a pixel is 0.17 % longer east–west and 0.17 % shorter
+  // north–south than metresPerPixel() says — 0.8 m in 500 m if ignored.
+  function groundResolution(lat, z) {
+    const s2 = Math.pow(Math.sin(lat * Math.PI / 180), 2), k = 1 - WGS84_E2 * s2;
+    const sphere = metresPerPixel(lat, z);
+    return { x: sphere / Math.sqrt(k), y: sphere * (1 - WGS84_E2) / Math.pow(k, 1.5) };
+  }
+  function aerialMeta(cap) {
+    const res = groundResolution(cap.lat, cap.zoom);
+    return {
+      v: 1, provider: AERIAL_PROVIDER, attribution: SAT_ATTRIBUTION,
+      lat: cap.lat, lon: cap.lon, zoom: cap.zoom, mppX: res.x, mppY: res.y,
+      pxW: cap.w, pxH: cap.h, capturedAt: cap.capturedAt || '',
+    };
+  }
+  // Size of the image in sketch world px at 1:scaleDenom. `pxPerMetre` is the
+  // sketch's world px per metre at 1:1 (PIXELS_PER_METER in sketch.js).
+  function aerialSize(meta, scaleDenom, pxPerMetre) {
+    const k = pxPerMetre / scaleDenom;
+    return { w: meta.pxW * meta.mppX * k, h: meta.pxH * meta.mppY * k };
+  }
+  const aerialMid = s => ({ x: s.x + s.w / 2, y: s.y + s.h / 2 });
+  // The shape resized about its centre to the sketch's scale — the same object
+  // back when it already fits, so callers can tell nothing changed.
+  function aerialFit(shape, scaleDenom, pxPerMetre) {
+    if (!shape || !shape.aerial) return shape;
+    const { w, h } = aerialSize(shape.aerial, scaleDenom, pxPerMetre);
+    if (!(w > 0 && h > 0)) return shape;          // a damaged record — leave the image as it is
+    if (Math.abs(w - shape.w) < 1e-6 && Math.abs(h - shape.h) < 1e-6) return shape;
+    const c = aerialMid(shape);
+    return { ...shape, x: c.x - w / 2, y: c.y - h / 2, w, h };
+  }
+  function aerialMove(shape, dx, dy) { return { ...shape, x: shape.x + dx, y: shape.y + dy }; }
+  // Screen coordinates run y-down, so a positive angle turns clockwise — the
+  // sense SVG's rotate() and the sketch's _rot use.
+  function turnPoint(p, pivot, deg) {
+    const t = deg * Math.PI / 180, dx = p.x - pivot.x, dy = p.y - pivot.y;
+    return { x: pivot.x + dx * Math.cos(t) - dy * Math.sin(t), y: pivot.y + dx * Math.sin(t) + dy * Math.cos(t) };
+  }
+  const wrap180 = d => { const a = ((d + 180) % 360 + 360) % 360 - 180; return a === -180 ? 180 : a; };
+  // Turn the image about any point: its centre is carried round the pivot and
+  // its own rotation grows by the same angle, so the image moves as one piece.
+  function aerialTurn(shape, pivot, deg) {
+    const c = turnPoint(aerialMid(shape), pivot, deg);
+    return { ...shape, x: c.x - shape.w / 2, y: c.y - shape.h / 2, _rot: wrap180((shape._rot || 0) + deg) };
+  }
+  // Angle that turns the ray pivot→from onto the ray pivot→to.
+  function turnBetween(pivot, from, to) {
+    const a = Math.atan2(from.y - pivot.y, from.x - pivot.x), b = Math.atan2(to.y - pivot.y, to.x - pivot.x);
+    if ((from.x === pivot.x && from.y === pivot.y) || (to.x === pivot.x && to.y === pivot.y)) return 0;
+    return wrap180((b - a) * 180 / Math.PI);
+  }
+  // Where a replacement image's centre belongs so it stays registered with the
+  // image it replaces: the ground offset between the two centres, at the
+  // sketch's scale, turned by the old image's rotation.
+  function aerialCentre(oldShape, newMeta, scaleDenom, pxPerMetre) {
+    const o = oldShape.aerial, rad = Math.PI / 180;
+    const s2 = Math.pow(Math.sin(o.lat * rad), 2), k = 1 - WGS84_E2 * s2;
+    const east  = (newMeta.lon - o.lon) * rad * WGS84_A / Math.sqrt(k) * Math.cos(o.lat * rad);
+    const north = (newMeta.lat - o.lat) * rad * WGS84_A * (1 - WGS84_E2) / Math.pow(k, 1.5);
+    const c = aerialMid(oldShape), px = pxPerMetre / scaleDenom;
+    return turnPoint({ x: c.x + east * px, y: c.y - north * px }, c, oldShape._rot || 0);
+  }
+
   const api = {
     BUILTIN_ANTENNAS, DEFAULT_ANTENNA_ID, METHODS, DEFAULT_TOL,
+    AERIAL_PROVIDER, AERIAL_PX, AERIAL_LAYER_ID, baseLayerId, groundResolution, aerialMeta, aerialSize, aerialFit, aerialMove, aerialTurn, turnBetween, aerialCentre,
     IMAGE_SLOTS, pageImageRefs, SAT_HOST, SAT_ATTRIBUTION, SAT_ZOOM, tileXY, metresPerPixel, tilePlan, niceScale,
     diagramValues, buildAntennaSVG, plotNorth, skyWedges, inWedge, wedgeElev, buildSkyPlotSVG,
     num, fmt4, fmtDiff,

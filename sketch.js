@@ -31,6 +31,10 @@ const SNAP_NODES = new Set(['p1', 'p2', 'c', 'r', 'tl', 'tr', 'bl', 'br']);
 
 // Fixed layer ID for the Points layer — all point shapes are placed here
 const POINTS_LAYER_ID = 'l_points';
+// The aerial background image sits alone on this layer: always first (drawn
+// under everything, even the grid) and always locked. Its geometry — ground
+// resolution, fitting to the sketch scale, rigid moves — lives in gnss.js.
+const AERIAL_LAYER_ID = fbGnss.AERIAL_LAYER_ID;
 
 // ── Sketch tool SVG icons — 20×20 viewBox, stroke="currentColor" ──────────────
 const SketchIco = {
@@ -1048,7 +1052,7 @@ function MultiSelectCard({ selectedIds, shapes, layers, onBatchUpdate, inline = 
 
       {/* Layer assignment — only shown when multiple layers exist */}
       {layers.length > 1 && (() => {
-        const layerIds = [...new Set(selShapes.map(s => s.layerId || layers[0]?.id))];
+        const layerIds = [...new Set(selShapes.map(s => s.layerId || fbGnss.baseLayerId(layers)))];
         const currentLid = layerIds.length === 1 ? layerIds[0] : '';
         return (
           <div style={rStyle}>
@@ -1514,6 +1518,90 @@ function LayerCard({ layer, onRename }) {
 //                   on-canvas occupied marker — only shown during entry).
 //   onConfirm(args) -> boolean: builds + commits the leg; returns true on success.
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// AERIAL IMAGE PANEL — right-panel controls for the background imagery
+// ─────────────────────────────────────────────────────────────────────────────
+// The image is ground truth: it is held at the sketch's scale and can only be
+// slid and turned — never resized — to line it up with the linework.
+const AERIAL_STEPS = [0.1, 1, 10];        // nudge distances, in the sketch's units
+
+function AerialPanel({ shape, visible, scaleDenom, units, aligning, onVisible, onOpacity, onNudge, onTurn, onAlign, onReplace, onRemove }) {
+  const [step, setStep] = useState(1);
+  const [rotText, setRotText] = useState(null);     // the rotation while it is being typed
+  const meta = shape.aerial;
+  const rot = shape._rot || 0;
+  const opacity = shape.strokeOpacity ?? 1;
+  const d = realToPx(step, scaleDenom, units);
+  const btn = (extra = {}) => ({
+    height: 24, minWidth: 24, padding: '0 6px', borderRadius: 3, cursor: 'pointer', outline: 'none',
+    background: PT.bg, border: `1px solid ${PT.border}`, color: PT.text,
+    fontFamily: FBF.sketch, fontSize: 10, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', ...extra,
+  });
+  const lbl = { fontSize: 9, color: PT.muted, display: 'block', margin: '7px 0 2px', letterSpacing: '0.03em' };
+  const field = {
+    flex: 1, minWidth: 0, height: 24, background: PT.inputBg, border: `1px solid ${PT.border}`, borderRadius: 3,
+    color: PT.text, fontFamily: FBF.sketch, fontSize: 11, padding: '0 4px', outline: 'none', boxSizing: 'border-box',
+  };
+  const arrow = pts => (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points={pts}/>
+    </svg>
+  );
+  function commitRot() {
+    const v = parseFloat(rotText);
+    if (rotText !== null && Number.isFinite(v)) onTurn(v - rot);
+    setRotText(null);
+  }
+
+  return (
+    <div style={{ padding: '6px 8px 8px', fontFamily: FBF.sketch, color: PT.text }}>
+      <div style={{ display: 'flex', gap: 4 }}>
+        <button onClick={onVisible} style={btn({ flex: 1 })}>{visible ? 'Hide' : 'Show'}</button>
+        <button onClick={onReplace} style={btn({ flex: 1 })}>Replace</button>
+        <button onClick={onRemove} style={btn({ flex: 1 })}>Remove</button>
+      </div>
+
+      <span style={lbl}>Opacity <span style={{ float: 'right' }}>{Math.round(opacity * 100)}%</span></span>
+      <input type="range" min={10} max={100} step={5} value={Math.round(opacity * 100)} aria-label="Aerial image opacity"
+        onChange={e => onOpacity(Number(e.target.value) / 100)}
+        style={{ width: '100%', cursor: 'pointer', accentColor: PT.accent }} />
+
+      <span style={lbl}>Nudge</span>
+      <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+        <button title="Nudge left"  onClick={() => onNudge(-d, 0)} style={btn()}>{arrow('7 1 3 5 7 9')}</button>
+        <button title="Nudge up"    onClick={() => onNudge(0, -d)} style={btn()}>{arrow('1 7 5 3 9 7')}</button>
+        <button title="Nudge down"  onClick={() => onNudge(0, d)}  style={btn()}>{arrow('1 3 5 7 9 3')}</button>
+        <button title="Nudge right" onClick={() => onNudge(d, 0)}  style={btn()}>{arrow('3 1 7 5 3 9')}</button>
+        <select value={step} onChange={e => setStep(Number(e.target.value))} aria-label="Nudge distance" style={field}>
+          {AERIAL_STEPS.map(v => <option key={v} value={v}>{v} {units}</option>)}
+        </select>
+      </div>
+
+      <span style={lbl}>Rotation (° clockwise)</span>
+      <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+        <button title="Turn 1° anticlockwise"   onClick={() => onTurn(-1)}   style={btn()}>−1</button>
+        <button title="Turn 0.1° anticlockwise" onClick={() => onTurn(-0.1)} style={btn()}>−.1</button>
+        <input type="text" inputMode="decimal" aria-label="Aerial image rotation"
+          value={rotText !== null ? rotText : rot.toFixed(1)}
+          onChange={e => setRotText(e.target.value)} onBlur={commitRot}
+          onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setRotText(null); }}
+          style={{ ...field, textAlign: 'center' }} />
+        <button title="Turn 0.1° clockwise" onClick={() => onTurn(0.1)} style={btn()}>+.1</button>
+        <button title="Turn 1° clockwise"   onClick={() => onTurn(1)}   style={btn()}>+1</button>
+      </div>
+
+      <button onClick={onAlign}
+        style={btn({ width: '100%', height: 28, marginTop: 8, ...(aligning ? { background: PT.accent, borderColor: PT.accent, color: PT.bg } : {}) })}>
+        {aligning ? 'Cancel align' : 'Align to linework…'}
+      </button>
+
+      <p style={{ fontSize: 9, color: PT.muted, margin: '8px 0 0', lineHeight: 1.4 }}>
+        {meta.provider} · zoom {meta.zoom} · {Number(meta.mppX).toFixed(2)} m/px. Held at the sketch scale 1:{scaleDenom}. {meta.attribution}.
+      </p>
+    </div>
+  );
+}
+
 function CogoPanel({ line, occEnd, onSwap, onActive, onConfirm, scaleDenom, units }) {
   const [angle,    setAngle]    = useState('');
   const [turn,     setTurn]     = useState('R');
@@ -3129,7 +3217,19 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   const _initLayers = (page.layers && page.layers.length)
     ? page.layers : [{ id: 'l_1', name: 'Layer 1', visible: true }];
   const [layers,         setLayers]         = useState(_initLayers);
-  const [activeLayerId,  setActiveLayerId]  = useState(_initLayers[0].id);
+  const [activeLayerId,  setActiveLayerId]  = useState(fbGnss.baseLayerId(_initLayers));
+  // A shape saved without a layerId belongs to the first layer above the aerial image.
+  const defLayerId = fbGnss.baseLayerId(layers);
+  // Every layer the user works with — all but the aerial image's.
+  const userLayers = layers.filter(l => l.id !== AERIAL_LAYER_ID);
+
+  // ── Aerial image (background imagery at true scale) ───────────────────────
+  const aerialLayer = layers.find(l => l.id === AERIAL_LAYER_ID) || null;
+  const aerialShape = shapes.find(s => s.aerial && s.layerId === AERIAL_LAYER_ID) || null;
+  const [aerialSheet, setAerialSheet] = useState(false);   // the "Aerial image" sheet is open
+  // Two-point align in progress: { step: 1…4, a1, b1, a2 } — see pickAlignPoint.
+  const [aerialAlign, setAerialAlign] = useState(null);
+  const alignDownRef = useRef(null);                       // pointer-down of a possible align tap
   const [rightPanelOpen,   setRightPanelOpen]   = useState(false);
   const [collapsedLayers,  setCollapsedLayers]  = useState(() => new Set((page.layers || []).map(l => l.id)));
   const [panelDrag, setPanelDrag]             = useState(null);
@@ -3389,7 +3489,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     const ls = (page.layers && page.layers.length)
       ? page.layers : [{ id: 'l_1', name: 'Layer 1', visible: true }];
     setLayers(ls);
-    setActiveLayerId(ls[0].id);
+    setActiveLayerId(fbGnss.baseLayerId(ls));
     setSelectedIds([]);
     setShapesHistory({ past: [], future: [] });
     setMarquee(null);
@@ -3854,7 +3954,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             ...(useInline ? { dataUrl } : { imageId }),
             x, y, w, h,
             _origAspect: img.naturalWidth / img.naturalHeight,
-            layerId: layers[0]?.id,
+            layerId: defLayerId,
             stroke: 'none', strokeWidth: 0,
           };
           commitShapes([...shapesRef.current, shape]);
@@ -3867,6 +3967,108 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     };
     inp.click();
   }
+
+  // ── Aerial image ────────────────────────────────────────────────────────────
+  // Change the aerial image through `fn`. `live` leaves undo history alone —
+  // used for the opacity slider, which changes on every step of a drag.
+  function changeAerial(fn, live) {
+    const next = shapesRef.current.map(s => (s.aerial ? fn(s) : s));
+    if (!live) { commitShapes(next); return; }
+    shapesRef.current = next;
+    setShapes(next);
+    persist(next, undefined);
+  }
+
+  // Put captured imagery under the sketch at true scale. A first image is
+  // centred in the view and turned to the sketch's north; a replacement keeps
+  // the old one's rotation and opacity and stays registered with it on the
+  // ground, whatever its centre or zoom.
+  async function placeAerial(dataUrl, meta) {
+    setAerialSheet(false);
+    // Stored in IndexedDB like every sketch image; inline only if that fails.
+    const imageId = 'sk_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+    let inline = !photoDB;
+    if (photoDB) {
+      try {
+        await photoDB.put(imageId, dataUrl);
+        setImageCache(prev => ({ ...prev, [imageId]: dataUrl }));
+      } catch (idbErr) {
+        console.error('FieldBook: IDB write failed, falling back to inline image', idbErr);
+        inline = true;
+        if (window._fbShowStorageError) window._fbShowStorageError();
+      }
+    }
+    const old = shapesRef.current.find(s => s.aerial);
+    const { w, h } = fbGnss.aerialSize(meta, scaleDenom, PIXELS_PER_METER);
+    const c = old ? fbGnss.aerialCentre(old, meta, scaleDenom, PIXELS_PER_METER)
+                  : { x: viewBox.x + viewBox.w / 2, y: viewBox.y + viewBox.h / 2 };
+    const shape = {
+      id: old ? old.id : newId(), type: 'image',
+      ...(inline ? { dataUrl } : { imageId }),
+      x: c.x - w / 2, y: c.y - h / 2, w, h,
+      _rot: old ? (old._rot || 0) : (northAzimuth || 0),      // imagery is north up
+      strokeOpacity: old ? (old.strokeOpacity ?? 1) : 0.7,
+      layerId: AERIAL_LAYER_ID, stroke: 'none', strokeWidth: 0,
+      aerial: meta,
+    };
+    const next = [shape, ...shapesRef.current.filter(s => !s.aerial)];
+    const nextLayers = [{ id: AERIAL_LAYER_ID, name: 'Aerial', visible: true, locked: true },
+                        ...layers.filter(l => l.id !== AERIAL_LAYER_ID)];
+    setLayers(nextLayers);
+    commitShapes(next);
+    persist(next, undefined, nextLayers);
+    setRightPanelOpen(true);          // its controls are in the panel
+  }
+
+  function removeAerial() {
+    const next = shapesRef.current.filter(s => !s.aerial);
+    const nextLayers = layers.filter(l => l.id !== AERIAL_LAYER_ID);
+    setAerialAlign(null);
+    setLayers(nextLayers);
+    commitShapes(next);
+    persist(next, undefined, nextLayers);
+  }
+
+  // Two-point align. Pair 1 — a point on the image, then where it belongs on
+  // the sketch — slides the image. An optional pair 2 turns it about pair 1's
+  // sketch point. The image is never resized: its scale is ground truth.
+  function pickAlignPoint(pt) {
+    const st = aerialAlign;
+    if (!st) return;
+    const onSketch = () => (anySnapActive ? resolveSnap(pt) : pt);   // sketch points snap to the linework
+    if (st.step === 1) { setAerialAlign({ step: 2, a1: pt }); return; }
+    if (st.step === 2) {
+      const b1 = onSketch();
+      changeAerial(s => fbGnss.aerialMove(s, b1.x - st.a1.x, b1.y - st.a1.y));
+      setAerialAlign({ step: 3, b1: { x: b1.x, y: b1.y } });
+      return;
+    }
+    if (st.step === 3) { setAerialAlign({ ...st, step: 4, a2: pt }); return; }
+    const b2 = onSketch();
+    changeAerial(s => fbGnss.aerialTurn(s, st.b1, fbGnss.turnBetween(st.b1, st.a2, b2)));
+    setAerialAlign(null);
+  }
+
+  // The aerial image is ground truth, so it always sits at the sketch's scale —
+  // after a scale change, or an undo that brings an older copy back, it is
+  // resized about its centre — and its layer is always there, first and locked.
+  useEffect(() => {
+    let nextLayers = layers;
+    if (shapes.some(s => s.aerial) && !(layers[0]?.id === AERIAL_LAYER_ID && layers[0].locked)) {
+      nextLayers = [{ id: AERIAL_LAYER_ID, name: 'Aerial', visible: true, ...layers.find(l => l.id === AERIAL_LAYER_ID), locked: true },
+                    ...layers.filter(l => l.id !== AERIAL_LAYER_ID)];
+    }
+    let fitted = false;
+    const next = shapes.map(s => {
+      const f = fbGnss.aerialFit(s, scaleDenom, PIXELS_PER_METER);
+      if (f !== s) fitted = true;
+      return f;
+    });
+    if (!fitted && nextLayers === layers) return;
+    if (nextLayers !== layers) setLayers(nextLayers);
+    if (fitted) { shapesRef.current = next; setShapes(next); }
+    persist(fitted ? next : undefined, undefined, nextLayers);
+  }, [shapes, scaleDenom, layers]);
 
   // ── Points layer management ─────────────────────────────────────────────────
   // Ensures the dedicated Points layer exists, creating it if needed.
@@ -4326,6 +4528,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       setDrawState(null);           // cancel any in-progress text/dim/drawing state
       setMarquee(null);             // cancel any rubber-band marquee
       touchTapRef.current = null;   // cancel any deferred single-touch action
+      alignDownRef.current = null;  // …and any aerial-align tap: this is a pinch
       if (singleFingerPanRef.current?.timerId) clearTimeout(singleFingerPanRef.current.timerId);
       singleFingerPanRef.current = null; // cancel single-finger pan — this is now a pinch
       if (penNodeTimerRef.current) { clearTimeout(penNodeTimerRef.current); penNodeTimerRef.current = null; penNodeTimerRef._pending = null; }
@@ -4350,13 +4553,18 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     // they remain constant in screen pixels regardless of zoom level.
     const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
 
+    // ── Aerial two-point align ─────────────────────────────────────────────
+    // While aligning, a tap only picks a point (on release, so a pinch can
+    // still zoom) — no tool draws and nothing is selected.
+    if (aerialAlign) { alignDownRef.current = { pt, x: e.clientX, y: e.clientY }; return; }
+
     // ── Single-finger pan / long-press box-select (select / node tool, touch) ─
     // Empty-canvas or locked-shape touch: node mode pans immediately; select mode
     // waits 400 ms — finger moves first → pan, stays still → box-select marquee.
     if (e.pointerType === 'touch' && (tool === 'select' || tool === 'node') && prevTool === null) {
       const hitThreshPan = 24 * ps;
       const hit = hitTest(pt, shapes, hitThreshPan);
-      const isLocked = hit && (hit.locked || layers.find(l => l.id === (hit.layerId || layers[0]?.id))?.locked);
+      const isLocked = hit && (hit.locked || layers.find(l => l.id === (hit.layerId || defLayerId))?.locked);
       if (!hit || isLocked) {
         if (tool === 'node') {
           // Node tool: immediate pan — no long-press box select in node edit
@@ -4475,7 +4683,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const _msSelShapes = shapes.filter(s => {
           if (s.visible === false) return false;
           if (s.locked) return false;
-          const _lid = s.layerId || layers[0]?.id;
+          const _lid = s.layerId || defLayerId;
           const _layer = layers.find(l => l.id === _lid);
           return _layer?.visible !== false && !_layer?.locked;
         });
@@ -4578,7 +4786,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       const _selShapes = shapes.filter(s => {
         if (s.visible === false) return false;
         if (s.locked) return false;
-        const _lid = s.layerId || layers[0]?.id;
+        const _lid = s.layerId || defLayerId;
         const _layer = layers.find(l => l.id === _lid);
         return _layer?.visible !== false && !_layer?.locked;
       });
@@ -4635,7 +4843,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       const _erasable = shapes.filter(s => {
         if (s.visible === false) return false;
         if (s.locked) return false;
-        const _lid = s.layerId || layers[0]?.id;
+        const _lid = s.layerId || defLayerId;
         const _layer = layers.find(l => l.id === _lid);
         return _layer?.visible !== false && !_layer?.locked;
       });
@@ -5073,7 +5281,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       // (same behaviour as the select tool — node tool acts as select for non-path shapes)
       if (selectedId && !nodeSelectedId) {
         const sel = shapes.find(s => s.id === selectedId);
-        const selLayerLocked = sel ? layers.find(l => l.id === (sel.layerId || layers[0]?.id))?.locked : false;
+        const selLayerLocked = sel ? layers.find(l => l.id === (sel.layerId || defLayerId))?.locked : false;
         if (sel && sel.type !== 'path' && !sel.locked && !selLayerLocked) {
           const isTouch   = e.pointerType === 'touch';
           const nodeThresh = (isTouch ? 28 : NODE_R + 4) * ps;
@@ -5105,7 +5313,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       // or body-drag it if it was already selected.
       const _nodeUnlocked = s => {
         if (s.locked) return false;
-        const _lid = s.layerId || layers[0]?.id;
+        const _lid = s.layerId || defLayerId;
         return !layers.find(l => l.id === _lid)?.locked;
       };
       const pathHit = hitTest(pt, shapes.filter(s => s.type === 'path' && _nodeUnlocked(s)), hitThreshN);
@@ -5699,6 +5907,14 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     activePtrsRef.current.delete(e.pointerId);
     if (activePtrsRef.current.size < 2) lastPinchRef.current = null;
 
+    // ── Aerial two-point align: a still tap that wasn't a pinch picks a point ──
+    if (alignDownRef.current) {
+      const down = alignDownRef.current;
+      alignDownRef.current = null;
+      if (!wasMultiTouchRef.current && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10) pickAlignPoint(down.pt);
+      return;
+    }
+
     // ── Single-finger pan / long-press box-select cleanup ────────────────────
     if (singleFingerPanRef.current) {
       const sfp = singleFingerPanRef.current;
@@ -5773,9 +5989,9 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const testFn = dir === 'right' ? shapeContainedInRect : shapeIntersectsRect;
         const ids = shapes
           .filter(s => {
-            if (s.visible === false) return false;
-            const layer = layers.find(l => l.id === (s.layerId || layers[0]?.id));
-            if (layer?.visible === false) return false;
+            if (s.visible === false || s.locked) return false;
+            const layer = layers.find(l => l.id === (s.layerId || defLayerId));
+            if (layer?.visible === false || layer?.locked) return false;
             return testFn(s, x, y, x + w, y + h);
           })
           .map(s => s.id);
@@ -6446,7 +6662,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     const candidates = [];
 
     const visibleShapes = shapes.filter(s => {
-      const layer = layers.find(l => l.id === (s.layerId || layers[0]?.id));
+      if (s.layerId === AERIAL_LAYER_ID) return false;   // never snap to the aerial image's corners
+      const layer = layers.find(l => l.id === (s.layerId || defLayerId));
       return layer?.visible !== false;
     });
 
@@ -6579,7 +6796,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   // ── Layer management ───────────────────────────────────────────────────────
   function addLayer() {
     const id = 'l_' + Date.now();
-    const name = `Layer ${layers.length + 1}`;
+    const name = `Layer ${userLayers.length + 1}`;
     const next = [...layers, { id, name, visible: true }];
     setLayers(next);
     setActiveLayerId(id);
@@ -6598,6 +6815,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     if (idx === -1) return;
     const newIdx = idx + dir;
     if (newIdx < 0 || newIdx >= layers.length) return;
+    if (layers[newIdx].id === AERIAL_LAYER_ID) return;   // nothing goes under the aerial image
     const next = [...layers];
     [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
     setLayers(next);
@@ -6609,8 +6827,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   // For multi-select: moves all selected shapes as a group, preserving relative order.
   function moveShapeInStack(shapeId, dir) {
     // Build the panel display order: layers reversed (top layer first), shapes within each layer reversed (highest Z first)
-    const slots = [...layers].reverse().flatMap(l => {
-      const ls = shapes.filter(s => (s.layerId || layers[0]?.id) === l.id);
+    const slots = [...userLayers].reverse().flatMap(l => {
+      const ls = shapes.filter(s => (s.layerId || defLayerId) === l.id);
       return [...ls].reverse().map((s, ri) => ({ shapeId: s.id, layerId: l.id, arrIdx: ls.length - 1 - ri }));
     });
 
@@ -6651,7 +6869,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     if (fromIdx === toIdx) return;
     const next = [...layers];
     const [mv] = next.splice(fromIdx, 1);
-    next.splice(toIdx, 0, mv);
+    next.splice(next[0]?.id === AERIAL_LAYER_ID ? Math.max(1, toIdx) : toIdx, 0, mv);   // the aerial image stays at the bottom
     setLayers(next);
     persist(undefined, undefined, next);
   }
@@ -6672,7 +6890,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     // Remove the dragged shape from the shapes array
     const without = shapes.filter(s => s.id !== sh.id);
     // Get target layer's shapes in 'without' (these are in render/Z order, index 0 = bottom of layer)
-    const tLayerShapes = without.filter(s => (s.layerId || layers[0]?.id) === targetLayerId);
+    const tLayerShapes = without.filter(s => (s.layerId || defLayerId) === targetLayerId);
     // posInLayer from the slot is the original position. Adjust if same layer and source was below target.
     let tPos = toSlot.posInLayer;
     if (fromSlot.layerId === targetLayerId && fromSlot.posInLayer < toSlot.posInLayer) tPos--;
@@ -6683,7 +6901,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       const tLIdx = layers.findIndex(l => l.id === targetLayerId);
       insertIdx = 0;
       for (let i = 0; i < without.length; i++) {
-        const sLIdx = layers.findIndex(l => l.id === (without[i].layerId || layers[0]?.id));
+        const sLIdx = layers.findIndex(l => l.id === (without[i].layerId || defLayerId));
         if (sLIdx <= tLIdx) insertIdx = i + 1;
       }
     } else if (tPos >= tLayerShapes.length) {
@@ -6919,7 +7137,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   // Zoom the view to fit all visible shapes with 12% padding on each side.
   function zoomToExtents() {
     const visible = shapes.filter(s => {
-      const layer = layers.find(l => l.id === (s.layerId || layers[0]?.id));
+      const layer = layers.find(l => l.id === (s.layerId || defLayerId));
       return layer?.visible !== false;
     });
     const bb = getBoundingBox(visible);
@@ -8017,6 +8235,25 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 </svg>
               </span>
               <span style={{ flex: 1, fontFamily: FBF.sketch }}>Image…</span>
+            </button>
+            {/* Aerial image — imagery under the sketch at true scale, on its own locked layer */}
+            <button
+              onClick={() => { setAerialSheet(true); setOpenMenu(null); }}
+              style={{
+                width: '100%', height: 38, display: 'flex', alignItems: 'center',
+                gap: 10, padding: '0 14px',
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: PT.muted, fontSize: 11,
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = PT.bgHov; e.currentTarget.style.color = PT.text; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = PT.muted; }}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, flexShrink: 0 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/>
+                </svg>
+              </span>
+              <span style={{ flex: 1, fontFamily: FBF.sketch }}>{aerialShape ? 'Replace aerial image…' : 'Aerial image…'}</span>
             </button>
             {/* Camera — same file picker as Image but labelled to prompt users to use camera on mobile */}
             <button
@@ -9220,6 +9457,36 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           </div>
           )}
 
+          {/* Imagery credit — shown wherever the aerial image is */}
+          {aerialShape && aerialLayer?.visible && (
+            <div style={{ position: 'absolute', left: 6, top: 4, zIndex: 2, pointerEvents: 'none',   // bottom-left is the scale bar's
+              padding: '1px 5px', background: 'rgba(255,255,255,0.75)', color: PT.muted,
+              fontFamily: FBF.sketch, fontSize: 9 }}>
+              {aerialShape.aerial.attribution}
+            </div>
+          )}
+
+          {/* Two-point align — what to tap next */}
+          {aerialAlign && (
+            <div style={{ position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 3,
+              display: 'flex', alignItems: 'center', gap: 8, maxWidth: '92%', padding: '5px 6px 5px 10px',
+              background: PT.bg, border: `1px solid ${PT.border}`, color: PT.text,
+              fontFamily: FBF.sketch, fontSize: 11 }}>
+              <span>{[
+                'Tap a point on the image',
+                'Now tap where that point belongs on the sketch',
+                'Moved. To fix the rotation, tap a second point on the image',
+                'Now tap where that second point belongs',
+              ][aerialAlign.step - 1]}</span>
+              <button onClick={() => setAerialAlign(null)}
+                style={{ height: 24, padding: '0 8px', flexShrink: 0, cursor: 'pointer', outline: 'none',
+                  background: PT.bgAlt, border: `1px solid ${PT.border}`, color: PT.text,
+                  fontFamily: FBF.sketch, fontSize: 10 }}>
+                {aerialAlign.step >= 3 ? 'Done' : 'Cancel'}
+              </button>
+            </div>
+          )}
+
           {/* Empty hint */}
           {shapes.length === 0 && !drawState && (
             <div style={{ position: 'absolute', top: '50%', left: '50%',
@@ -9255,14 +9522,17 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 fill={bgColor} style={{ pointerEvents: 'none' }} />
             )}
 
-            {/* Dynamic grid — rendered below everything */}
+            {/* Aerial image — under the grid, so the grid reads over the ground */}
+            {aerialShape && aerialLayer?.visible && aerialShape.visible !== false && renderShape(aerialShape, false)}
+
+            {/* Dynamic grid — rendered below every drawn shape */}
             {showGrid && renderGrid()}
 
             {/* Committed shapes — rendered in layer order, bottom to top */}
-            {layers.map(layer => layer.visible && (
+            {userLayers.map(layer => layer.visible && (
               <g key={layer.id}>
                 {shapes
-                  .filter(s => (s.layerId || layers[0]?.id) === layer.id && s.visible !== false)
+                  .filter(s => (s.layerId || defLayerId) === layer.id && s.visible !== false)
                   .map(s => renderShape(s, selectedIds.includes(s.id)))}
               </g>
             ))}
@@ -9270,10 +9540,23 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             {/* Dimension labels — rendered above shapes, below handles */}
             {showDims && shapes.map(s => {
               if (s.visible === false) return null;
-              const layer = layers.find(l => l.id === (s.layerId || layers[0]?.id));
+              const layer = layers.find(l => l.id === (s.layerId || defLayerId));
               if (!layer?.visible) return null;
               const lbl = renderDimLabel(s);
               return lbl ? <g key={`dim-${s.id}`}>{lbl}</g> : null;
+            })}
+
+            {/* Two-point align — the points picked so far */}
+            {aerialAlign && [aerialAlign.a1, aerialAlign.b1, aerialAlign.a2].filter(Boolean).map((p, i) => {
+              const k = viewBox.w / (svgSizeRef.current.w || viewBox.w), r = 7 * k;
+              return (
+                <g key={`align-${i}`} style={{ pointerEvents: 'none' }}>
+                  {[['#fff', 4.5], [FBC.error, 2]].map(([stroke, w]) => (
+                    <path key={stroke} d={`M${p.x - r} ${p.y}H${p.x + r}M${p.x} ${p.y - r}V${p.y + r}`}
+                      stroke={stroke} strokeWidth={w * k} strokeLinecap="round" fill="none" />
+                  ))}
+                </g>
+              );
             })}
 
             {/* Marquee selection rectangle
@@ -9726,7 +10009,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     }}
                   >
                     <option value="" disabled>Move to layer…</option>
-                    {layers.map(l => (
+                    {userLayers.map(l => (
                       <option key={l.id} value={l.id}>{l.name}</option>
                     ))}
                   </select>
@@ -9735,10 +10018,10 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
               {/* Layer list — reversed so top of list = topmost render layer */}
               <div>
-                {[...layers].reverse().map((layer) => {
+                {[...userLayers].reverse().map((layer) => {
                   const isActive   = layer.id === activeLayerId;
                   const layerShapes = shapes.filter(s =>
-                    (s.layerId || layers[0]?.id) === layer.id);
+                    (s.layerId || defLayerId) === layer.id);
                   return (
                     <div key={layer.id}>
                       {/* Layer row — with drag and drop indicator */}
@@ -9806,7 +10089,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                               title="Select all in layer"
                               onClick={ev=>{
                                 ev.stopPropagation();
-                                const ids=shapes.filter(sh=>(sh.layerId||layers[0]?.id)===layer.id).map(sh=>sh.id);
+                                const ids=shapes.filter(sh=>(sh.layerId||defLayerId)===layer.id).map(sh=>sh.id);
                                 setSelectedIds(ids);
                                 setSelectedLayerForCard(null);
                                 setTool('select');setPrevTool(null);
@@ -9845,10 +10128,10 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                           // _revS[ri] === slot[offset+ri] because both use [...layerShapes].reverse() order.
                           const _myFlatIdx=(()=>{
                             let fi=0;
-                            for(const _l of [...layers].reverse()){
+                            for(const _l of [...userLayers].reverse()){
                               if(collapsedLayers.has(_l.id)) continue;
                               if(_l.id===layer.id) return fi+ri;
-                              fi+=shapes.filter(_s=>(_s.layerId||layers[0]?.id)===_l.id).length;
+                              fi+=shapes.filter(_s=>(_s.layerId||defLayerId)===_l.id).length;
                             }
                             return fi;
                           })();
@@ -9869,12 +10152,12 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                                   setSelectedIds(prev=>prev.includes(s.id)?prev.filter(id=>id!==s.id):[...prev,s.id]);
                                   setLastPanelClickId(s.id);
                                   setSelectedLayerForCard(null);
-                                  setActiveLayerId(s.layerId||layers[0]?.id);
+                                  setActiveLayerId(s.layerId||defLayerId);
                                 // Shift+click: range-select from last click to this one
                                 } else if(e.shiftKey&&lastPanelClickId){
                                   e.stopPropagation();
                                   setTool('select');setPrevTool(null);
-                                  const _allS=[...layers].reverse().flatMap(l=>[...shapes.filter(sh=>(sh.layerId||layers[0]?.id)===l.id)].reverse());
+                                  const _allS=[...userLayers].reverse().flatMap(l=>[...shapes.filter(sh=>(sh.layerId||defLayerId)===l.id)].reverse());
                                   const _ci=_allS.findIndex(sh=>sh.id===s.id);
                                   const _li=_allS.findIndex(sh=>sh.id===lastPanelClickId);
                                   if(_ci>=0&&_li>=0){
@@ -9886,7 +10169,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                                 } else {
                                   setTool('select');setSelectedIds([s.id]);setPrevTool(null);
                                   setLastPanelClickId(s.id);setSelectedLayerForCard(null);
-                                  setActiveLayerId(s.layerId||layers[0]?.id);
+                                  setActiveLayerId(s.layerId||defLayerId);
                                 }
                               }}
                               onPointerDown={e=>{
@@ -9898,9 +10181,9 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                                 if(panelDragTimerRef.current)clearTimeout(panelDragTimerRef.current);
                                 panelDragTimerRef.current=setTimeout(()=>{
                                   panelDragTimerRef.current=null;
-                                  const _slots=[...layers].reverse().flatMap(_l=>{
+                                  const _slots=[...userLayers].reverse().flatMap(_l=>{
                                     if(collapsedLayers.has(_l.id))return[];
-                                    const _ls=shapes.filter(_s=>(_s.layerId||layers[0]?.id)===_l.id);
+                                    const _ls=shapes.filter(_s=>(_s.layerId||defLayerId)===_l.id);
                                     return[..._ls].reverse().map((_sh,_ri)=>({shapeId:_sh.id,layerId:_l.id,posInLayer:_ls.length-1-_ri}));
                                   });
                                   const _origFi=_slots.findIndex(sl=>sl.shapeId===s.id);
@@ -9984,9 +10267,41 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     </div>
                   );
                 })}
+                {/* The aerial image's layer — always at the bottom, always locked */}
+                {aerialShape && aerialLayer && (
+                  <div title="The aerial image is on its own locked layer, under everything else"
+                    style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 6px 4px 22px', minHeight: 26, borderTop: `1px dashed ${PT.border}` }}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={PT.muted} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+                    </svg>
+                    <span style={{ flex: 1, fontSize: 11, color: aerialLayer.visible ? PT.text : PT.faint }}>Aerial</span>
+                    <span style={{ fontSize: 9, color: PT.muted }}>{aerialLayer.visible ? 'locked' : 'hidden'}</span>
+                  </div>
+                )}
               </div>
 
               </div>{/* end LAYERS SECTION */}
+
+              {/* ── AERIAL SECTION — only while the sketch has an aerial image ── */}
+              {aerialShape && aerialLayer && (
+                <div style={{ borderTop: `1px solid ${PT.border}` }}>
+                  <div style={{ padding: '4px 6px 4px 8px', background: PT.bgAlt, borderBottom: `1px solid ${PT.border}` }}>
+                    <span style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
+                      textTransform: 'uppercase', letterSpacing: '0.08em' }}>Aerial</span>
+                  </div>
+                  <AerialPanel
+                    shape={aerialShape} visible={aerialLayer.visible} scaleDenom={scaleDenom} units={units}
+                    aligning={!!aerialAlign}
+                    onVisible={() => toggleLayerVisibility(AERIAL_LAYER_ID)}
+                    onOpacity={v => changeAerial(s => ({ ...s, strokeOpacity: v }), true)}
+                    onNudge={(dx, dy) => changeAerial(s => fbGnss.aerialMove(s, dx, dy))}
+                    onTurn={deg => changeAerial(s => fbGnss.aerialTurn(s, { x: s.x + s.w / 2, y: s.y + s.h / 2 }, deg))}
+                    onAlign={() => setAerialAlign(a => (a ? null : { step: 1 }))}
+                    onReplace={() => setAerialSheet(true)}
+                    onRemove={removeAerial}
+                  />
+                </div>
+              )}
 
               {/* ── COLORS SECTION ─────────────────────────────────────── */}
               <div style={{ borderTop: `1px solid ${PT.border}` }}>
@@ -10076,7 +10391,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     <MultiSelectCard
                       selectedIds={selectedIds}
                       shapes={shapes}
-                      layers={layers}
+                      layers={userLayers}
                       onBatchUpdate={handleBatchUpdate}
                       inline={true}
                     />
@@ -10096,7 +10411,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
                   {/* Single shape (non-text, non-point) */}
                   {selectedIds.length === 1 && selectedShape && selectedShape.type !== 'text' && selectedShape.type !== 'point' && (() => {
-                    const _lShapes = shapes.filter(s => (s.layerId || layers[0]?.id) === (selectedShape.layerId || layers[0]?.id));
+                    const _lShapes = shapes.filter(s => (s.layerId || defLayerId) === (selectedShape.layerId || defLayerId));
                     const _ri = [..._lShapes].reverse().findIndex(s => s.id === selectedShape.id);
                     const _num = _ri >= 0 ? _lShapes.length - _ri : 1;
                     const _defaultName = selectedShape.type.charAt(0).toUpperCase() + selectedShape.type.slice(1) + ' ' + _num;
@@ -10118,7 +10433,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                   {selectedIds.length === 0 && selectedLayerForCard && (() => {
                     const _layer = layers.find(l => l.id === selectedLayerForCard);
                     if (!_layer) return null;
-                    const _shapeCount = shapes.filter(s => (s.layerId || layers[0]?.id) === _layer.id).length;
+                    const _shapeCount = shapes.filter(s => (s.layerId || defLayerId) === _layer.id).length;
                     return (
                       <div style={{ padding: '6px 8px', fontSize: 10, fontFamily: FBF.sketch }}>
                         <div style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
@@ -10160,7 +10475,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                               const nextLayers = layers.map(l => l.id === _layer.id ? { ...l, color: newColor } : l);
                               setLayers(nextLayers);
                               persist(undefined, undefined, nextLayers);
-                              commitShapes(shapes.map(s => (s.layerId || layers[0]?.id) === _layer.id ? { ...s, stroke: newColor } : s));
+                              commitShapes(shapes.map(s => (s.layerId || defLayerId) === _layer.id ? { ...s, stroke: newColor } : s));
                             }}
                             style={{ width: 28, height: 22, padding: 0, border: `1px solid ${PT.border}`,
                               borderRadius: 3, cursor: 'pointer', background: 'none' }}
@@ -10223,6 +10538,12 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       </div>
 
       {/* ── Point Select Modal ───────────────────────────────────────── */}
+      {/* Aerial image sheet — lives in index.html (it reuses the GPS, point and satellite sheets) */}
+      {aerialSheet && window._fb?.AerialImageSheet && React.createElement(window._fb.AerialImageSheet, {
+        projectId, start: aerialShape ? aerialShape.aerial : null,
+        onSave: placeAerial, onClose: () => setAerialSheet(false),
+      })}
+
       {showPointSelectModal && (
         <PointSelectModal
           projectId={projectId}
