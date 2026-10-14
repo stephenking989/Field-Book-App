@@ -299,18 +299,30 @@
     return { bad: false, before: readStats(b), after: readStats(a), all, flag };
   }
 
-  //   Slant:    S̄ = mean of every slant reading;  Z = √(S̄² − R²);  ARP = Z − d
-  //   Vertical: V̄ = mean of every vertical reading;  ARP = V̄
-  //   Both:     APC L1 = ARP + l1;  APC L2 = ARP + l2
+  // Every reading, slant or vertical, is taped to the slant measure mark (SHMP).
+  //   Slant:    S̄ = mean of every slant reading;     Z = √(S̄² − R²)
+  //   Vertical: V̄ = mean of every vertical reading;  Z = V̄;  derived S = √(Z² + R²)
+  //   Both:     ARP = Z − d;  APC L1 = ARP + l1;  APC L2 = ARP + l2
+  // A negative ARP is kept as computed — the unit can sit on the mark surface.
+  const ARP_NOISE = 0.010;            // m below zero still read as measurement noise
+  function arpNote(ARP) {
+    const below = Math.round(-ARP * 1e4);                  // tenths of a mm, at the form's 4 decimals
+    if (below < 0) return null;
+    const mm = (below / 10).toFixed(1);
+    return below <= ARP_NOISE * 1e4
+      ? { tone: 'note', text: `ARP is ${mm} mm below zero, within measurement noise (unit seated on or close to the mark surface).` }
+      : { tone: 'warn', text: `ARP is ${mm} mm below zero. Check d (sign) and the readings.` };
+  }
   function solveHeights(g) {
     const t = num(g.tol);
     const tol = fin(t) && t > 0 ? t : DEFAULT_TOL;
     const A = g.antenna || {};
-    const ant = { R: num(A.R), d: num(A.d), l1: num(A.l1), l2: num(A.l2) };
+    const ant = { R: num(A.R), d: num(A.d), l1: num(A.l1), l2: num(A.l2), slantMark: text(A.slantMark).trim() };
     const apc = (arp, k) => (fin(ant[k]) ? arp + ant[k] : null);
 
     const slant = readSet(g.slant, tol), vert = readSet(g.vert, tol);
-    const out = { tol, ant, slant, vert, slantRes: null, slantErr: null, vertRes: null, vertErr: null, diff: null };
+    const out = { tol, ant, slant, vert, slantRes: null, slantErr: null, slantNote: null,
+                  vertRes: null, vertErr: null, vertNote: null, diff: null };
     const BAD = 'Readings must be positive numbers.';
 
     if (slant.bad) out.slantErr = BAD;
@@ -321,17 +333,53 @@
       else {
         const Z = Math.sqrt(S * S - ant.R * ant.R);
         const ARP = Z - ant.d;
-        if (ARP <= 0) out.slantErr = 'ARP height comes out zero or negative. Check d (sign) and the readings.';
-        else out.slantRes = { S, Z, ARP, L1: apc(ARP, 'l1'), L2: apc(ARP, 'l2') };
+        out.slantRes = { S, Z, ARP, L1: apc(ARP, 'l1'), L2: apc(ARP, 'l2') };
+        out.slantNote = arpNote(ARP);
       }
     }
     if (vert.bad) out.vertErr = BAD;
     else if (vert.all) {
-      const V = vert.all.avg;
-      out.vertRes = { V, ARP: V, L1: apc(V, 'l1'), L2: apc(V, 'l2') };
+      const V = vert.all.avg, Z = V;
+      if (!fin(ant.d)) out.vertErr = 'Pick an antenna to reduce the vertical height — d is needed.';
+      else {
+        const ARP = Z - ant.d;
+        const S = fin(ant.R) ? Math.sqrt(Z * Z + ant.R * ant.R) : null;
+        out.vertRes = { V, Z, S, ARP, L1: apc(ARP, 'l1'), L2: apc(ARP, 'l2') };
+        out.vertNote = arpNote(ARP);
+      }
     }
     if (out.slantRes && out.vertRes) out.diff = out.slantRes.ARP - out.vertRes.ARP;
     return out;
+  }
+
+  // The reduced-heights table, shared by the page and the PDF:
+  //   [{ key, label, slant: { v, calc } | null, vert: { v, calc } | null }]
+  // A null cell doesn't apply (left blank); v null = nothing to show yet. When
+  // only one method was read, the other method's measurement is filled in as
+  // derived (calc): slant-only gets the vertical Z, vertical-only the slant S.
+  // { print: true } writes the labels in plain text for the PDF's Helvetica.
+  function heightRows(r, opts) {
+    const print = !!(opts && opts.print);
+    const s = r.slantRes, v = r.vertRes;
+    const slantOnly = !!s && !r.vert.all, vertOnly = !!v && !r.slant.all;
+    const avg = st => (!st.bad && st.all ? st.all.avg : null);
+    const own = val => ({ v: fin(val) ? val : null, calc: false });
+    const calc = val => (fin(val) ? { v: val, calc: true } : null);
+    const mark = r.ant && r.ant.slantMark ? ` (${r.ant.slantMark})` : '';
+    const L = print
+      ? { S: 'Avg uncorrected slant to slant mark (S)', V: `Vertical measurement to SHMP${mark} (V)`,
+          Z: 'Z   (slant: sqrt(S² - R²);  vertical: V)', ARP: 'ARP   (Z - d)', L1: 'APC L1 = ARP + L1', L2: 'APC L2 = ARP + L2' }
+      : { S: 'Avg uncorrected slant to slant mark  S̄', V: `Vertical measurement to SHMP${mark}  V̄`,
+          Z: 'Z  (slant √(S̄² − R²) · vertical V̄)', ARP: 'ARP = Z − d', L1: 'APC L1 = ARP + L1', L2: 'APC L2 = ARP + L2' };
+    const both = k => ({ slant: own(s && s[k]), vert: own(v && v[k]) });
+    return [
+      { key: 'S', label: L.S, slant: own(avg(r.slant)), vert: vertOnly ? calc(v.S) : null },
+      { key: 'V', label: L.V, slant: slantOnly ? calc(s.Z) : null, vert: own(avg(r.vert)) },
+      { key: 'Z', label: L.Z, ...both('Z') },
+      { key: 'ARP', label: L.ARP, ...both('ARP') },
+      { key: 'L1', label: L.L1, ...both('L1') },
+      { key: 'L2', label: L.L2, ...both('L2') },
+    ];
   }
 
   // Step-by-step working for a solveHeights result, as plain text:
@@ -352,8 +400,10 @@
     }
     if (r.vertRes) {
       const v = r.vertRes, a = r.ant;
-      steps.push({ t: 'Vertical method: measurement to ARP' + n(r.vert.all), e: mean('V̄', r.vert.all) });
-      steps.push({ t: 'Vertical method: ARP height', e: `ARP = V̄ = ${fm(v.ARP)}` });
+      steps.push({ t: 'Vertical measurement to SHMP' + n(r.vert.all), e: mean('V̄', r.vert.all) });
+      steps.push({ t: 'Vertical method: vertical to slant mark', e: `Z = V̄ = ${fm(v.Z)}` });
+      steps.push({ t: 'Vertical method: ARP height', e: `ARP = Z − d = ${f(v.Z)} − (${f(a.d)}) = ${fm(v.ARP)}` });
+      if (v.S !== null) steps.push({ t: 'Vertical method: derived slant height (calc)', e: `S = √(Z² + R²) = √(${f(v.Z)}² + ${f(a.R)}²) = ${fm(v.S)}` });
       if (v.L1 !== null) steps.push({ t: 'Vertical method: L1 phase centre height', e: apc('L1', v.ARP, a.l1) });
       if (v.L2 !== null) steps.push({ t: 'Vertical method: L2 phase centre height', e: apc('L2', v.ARP, a.l2) });
     }
@@ -386,17 +436,21 @@
     return `<text x="${r2(x)}" y="${r2(y)}" font-family="${c.font}" font-size="${a.size || 11}" font-weight="${a.weight || 700}"` +
       ` fill="${a.fill || c.ink}" text-anchor="${a.anchor || 'middle'}"${a.base ? ` dominant-baseline="${a.base}"` : ''}` +
       `${a.rot != null ? ` transform="rotate(${a.rot} ${r2(x)} ${r2(y)})"` : ''}${a.cls ? ` class="${a.cls}"` : ''}` +
-      ` stroke="${c.paper}" stroke-width="${a.halo != null ? a.halo : 3}" stroke-linejoin="round" paint-order="stroke" pointer-events="none">${esc(str)}</text>`;
+      ` stroke="${c.paper}" stroke-width="${a.halo != null ? a.halo : 3}" stroke-linejoin="round" paint-order="stroke" pointer-events="none">${esc(str)}` +
+      `${a.tag ? `<tspan font-size="${Math.round((a.size || 11) * 0.75)}" font-weight="400" fill-opacity="0.75"> ${esc(a.tag)}</tspan>` : ''}</text>`;
   }
 
   // ── Antenna height drawing ─────────────────────────────────────────────────
-  // Label values for the drawing, from a solveHeights result. The slant method
-  // gives S, Z and the ARP height; vertical readings alone give only the ARP.
+  // Label values for the drawing, from a solveHeights result. The slant
+  // reduction is drawn when there is one: S measured, Z calc. Vertical readings
+  // alone: Z measured (mark to SHMP level), S calc. The ARP is always Z − d.
   function diagramValues(r) {
     const s = r.slantRes, v = r.vertRes, a = r.ant || {};
+    const src = s || v;
     return {
-      S: s ? s.S : null, Z: s ? s.Z : null, ARP: s ? s.ARP : v ? v.ARP : null,
+      S: src && fin(src.S) ? src.S : null, Z: src ? src.Z : null, ARP: src ? src.ARP : null,
       R: fin(a.R) ? a.R : null, d: fin(a.d) ? a.d : null,
+      tags: s ? { S: 'measured', Z: 'calc' } : v ? { S: 'calc', Z: 'measured' } : {},
     };
   }
 
@@ -409,6 +463,7 @@
     const v = values || {}, c = palette(opts && opts.print);
     const arrow = 'gnArrow' + (c.print ? 'P' : 'S');
     const lab = (sym, val) => (fin(val) ? `${sym} ${f(val)}` : sym);
+    const tag = sym => (fin(v[sym]) && v.tags ? v.tags[sym] : undefined);   // 'measured' / 'calc'
     const ends = `marker-start="url(#${arrow})" marker-end="url(#${arrow})"`;
     const dimLine = (x1, y1, x2, y2) => `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c.dim}" stroke-width="1.3" ${ends}/>`;
     const ext = (x1, y1, x2, y2) => `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c.dim}" stroke-opacity="${c.print ? 0.6 : 0.8}" stroke-width="0.8" stroke-dasharray="2 2"/>`;
@@ -430,10 +485,10 @@
       haloText(c, 101, 42, lab('R', v.R)),
       // S — the taped slant, mark to slant mark
       `<line x1="80" y1="300" x2="122" y2="78" stroke="${c.hot}" stroke-width="2"/>`,
-      haloText(c, 117, 192, lab('S', v.S), { rot: -79.3, fill: c.hot, size: 12 }),
+      haloText(c, 117, 192, lab('S', v.S), { rot: -79.3, fill: c.hot, size: 12, tag: tag('S') }),
       // Z — vertical, mark to the level of the slant mark
       ext(125, 78, 206, 78), dimLine(165, 78, 165, 300),
-      haloText(c, 160, 189, lab('Z', v.Z), { rot: -90 }),
+      haloText(c, 160, 189, lab('Z', v.Z), { rot: -90, tag: tag('Z') }),
       // d — slant mark level to the ARP
       ext(84, 108, 206, 108), dimLine(200, 78, 200, 108),
       haloText(c, 200, 70, lab('d', v.d)),
@@ -721,7 +776,7 @@
     getAntennas, getAntenna, saveAntenna, deleteAntenna, duplicateAntenna, isBuiltin,
     antennaSnapshot, snapshotDiffers,
     emptyGnss, normalize, emptySite, normalizeSite,
-    solveHeights, workingSteps,
+    solveHeights, workingSteps, heightRows,
   };
   root.fbGnss = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

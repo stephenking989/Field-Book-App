@@ -181,6 +181,16 @@
       white-space: normal;
     }
     .gn-table td.gn-derived { color: var(--fb-ink-muted); background: rgb(var(--fb-border-rgb) / 0.14); }
+    /* A value derived from the other method's readings, not measured itself */
+    .gn-table td.gn-calc { color: var(--fb-ink-muted); font-style: italic; line-height: 1.1; }
+    .gn-table .gn-calc-tag {
+      display: block;
+      font-family: var(--fb-font-print);
+      font-style: normal;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+    }
     .gn-table td > input {
       display: block;
       width: 100%;
@@ -662,7 +672,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.182';
+  const APP_VERSION = '1.183';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -4909,14 +4919,9 @@
     pdf.autoTable({
       ...tableBase, startY: y, margin: tableMargin, tableWidth: colW,
       head: [['Heights (m)', 'Slant', 'Vertical']],
-      body: [
-        ['Avg uncorrected slant to slant mark (S)',     f4(res.slantRes?.S),   ''],
-        ['Uncorrected vertical measurement to ARP (V)', '',                    f4(res.vertRes?.V)],
-        ['Z = sqrt(S² - R²)',                           f4(res.slantRes?.Z),   ''],
-        ['ARP   (slant: Z - d;  vertical: V)',          f4(res.slantRes?.ARP), f4(res.vertRes?.ARP)],
-        ['APC L1 = ARP + L1',                           f4(res.slantRes?.L1),  f4(res.vertRes?.L1)],
-        ['APC L2 = ARP + L2',                           f4(res.slantRes?.L2),  f4(res.vertRes?.L2)],
-      ],
+      // A value derived from the other method's readings prints grey with "calc".
+      body: fbGnss.heightRows(res, { print: true }).map(r => [safe(r.label), ...[r.slant, r.vert].map(c =>
+        !c ? '' : c.calc ? { content: `${f4(c.v)} calc`, styles: { textColor: LBL } } : f4(c.v))]),
       styles: { ...tableBase.styles, halign: 'center', font: F.mono },
       columnStyles: { 0: { halign: 'left', font: 'helvetica' }, 1: { cellWidth: 26 }, 2: { cellWidth: 26 } },
     });
@@ -4928,7 +4933,11 @@
     });
     if (res.slantErr) checks.push(`Slant: ${res.slantErr}`);
     if (res.vertErr) checks.push(`Vertical: ${res.vertErr}`);
-    checks.forEach(line => { fineText(safe(line), L, y, { color: INK }); y += 3.4; });
+    if (res.slantNote) checks.push(`Slant: ${res.slantNote.text}`);
+    if (res.vertNote) checks.push(`Vertical: ${res.vertNote.text}`);
+    pdf.setFontSize(6.5); pdf.setFont('helvetica', 'normal');            // fineText's font, for the wrap width
+    checks.flatMap(line => pdf.splitTextToSize(safe(line), colW))
+      .forEach(line => { fineText(line, L, y, { color: INK }); y += 3.4; });
 
     // Antenna height drawing, beside the tables
     const dx = L + CW - drawW;
@@ -12096,10 +12105,12 @@
   const GN_READ_COLS = [['slant', 'before'], ['slant', 'after'], ['vert', 'before'], ['vert', 'after']];
 
   // S̄ / V̄ are written with a combining macron, which the mono font draws as a
-  // loose "¯" after the letter — draw the bar with an overline instead.
+  // loose "¯" after the letter — draw the bar with an overline instead. The
+  // antenna offset d stays lower case inside the upper-case row labels.
   function gnBar(text) {
-    return String(text).split(/([SV])\u0304/).map((part, i) =>
-      i % 2 ? <span key={i} className="overline">{part}</span> : part);
+    return String(text).split(/([SV])\u0304|\b(d)\b/).filter(p => p !== undefined).map((part, i) =>
+      i % 2 === 0 ? part : part === 'd' ? <span key={i} className="normal-case">d</span>
+        : <span key={i} className="overline">{part}</span>);
   }
 
   // The before / after reading grid with its averages, and the reduced heights.
@@ -12110,16 +12121,14 @@
       return !Number.isFinite(v) || v <= 0;
     };
     const stat = (set, part, key) => fbGnss.fmt4(res[set][part]?.[key]) || '';
-    // [label, slant value, vertical value] — `false` leaves a cell that doesn't apply blank.
-    const rows = [
-      ['Avg uncorrected slant to slant mark  S̄', res.slantRes?.S, false],
-      ['Uncorrected vertical measurement to ARP  V̄', false, res.vertRes?.V],
-      ['Z = √(S̄² − R²)', res.slantRes?.Z, false],
-      ['ARP', res.slantRes?.ARP, res.vertRes?.ARP],
-      ['APC L1 = ARP + L1', res.slantRes?.L1, res.vertRes?.L1],
-      ['APC L2 = ARP + L2', res.slantRes?.L2, res.vertRes?.L2],
-    ];
-    const cell = v => (v === false ? '' : fbGnss.fmt4(v) || '—');
+    const rows = fbGnss.heightRows(res);
+    // A null cell doesn't apply; a calc cell is derived from the other method's readings.
+    const cell = (c, key) => !c ? <td key={key}></td>
+      : c.calc ? <td key={key} className="gn-calc">{fbGnss.fmt4(c.v)}<span className="gn-calc-tag">calc</span></td>
+      : <td key={key}>{fbGnss.fmt4(c.v) || '—'}</td>;
+    const note = (name, n) => n && (n.tone === 'warn'
+      ? <Notice className="mb-3">{name}: {n.text}</Notice>
+      : <p className="font-data text-[13px] text-fb-ink-muted mb-3">{name}: {n.text}</p>);
     const summary = (set, name, sym) => {
       const st = res[set];
       if (!st.all) return null;
@@ -12174,16 +12183,18 @@
 
         {res.slantErr && <Notice tone="error" className="mb-3">Slant: {res.slantErr}</Notice>}
         {res.vertErr && <Notice tone="error" className="mb-3">Vertical: {res.vertErr}</Notice>}
+        {note('Slant', res.slantNote)}
+        {note('Vertical', res.vertNote)}
 
         <table className="gn-table">
           <colgroup><col /><col style={{ width: '27%' }} /><col style={{ width: '27%' }} /></colgroup>
           <thead><tr><th className="gn-key">Heights (m)</th><th>Slant</th><th>Vertical</th></tr></thead>
           <tbody>
-            {rows.map(([label, s, v]) => (
-              <tr key={label}>
-                <td className="gn-key">{gnBar(label)}</td>
-                <td>{cell(s)}</td>
-                <td>{cell(v)}</td>
+            {rows.map(r => (
+              <tr key={r.key}>
+                <td className="gn-key">{gnBar(r.label)}</td>
+                {cell(r.slant, 's')}
+                {cell(r.vert, 'v')}
               </tr>
             ))}
           </tbody>
