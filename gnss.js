@@ -632,9 +632,10 @@
   // pxH, capturedAt }. Everything below is pure geometry; sketch.js holds the UI.
   const AERIAL_PROVIDER = 'Esri World Imagery';
   const AERIAL_PX = { w: 2000, h: 1500 };       // stitched canvas — "about 2000 px" keeps the JPEG near 1 MB
-  // The image lives alone on this layer, which is always first (drawn under
-  // everything) and always locked. A shape with no layerId therefore belongs
-  // to the first layer that ISN'T this one — never layers[0] blindly.
+  // The layer a first image is put on: made at the bottom of the stack and
+  // locked, and after that an ordinary layer (it can be unlocked, hidden,
+  // reordered, drawn on). A shape with no layerId belongs to the first layer
+  // that ISN'T this one — never layers[0] blindly.
   const AERIAL_LAYER_ID = 'l_aerial';
   function baseLayerId(layers) {
     const list = layers || [], l = list.find(x => x.id !== AERIAL_LAYER_ID) || list[0];

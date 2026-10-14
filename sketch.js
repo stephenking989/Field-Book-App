@@ -1552,6 +1552,56 @@ function PrintScaleInput({ value, onCommit }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// RIGHT PANEL SECTIONS — each one folds away under its title
+// ─────────────────────────────────────────────────────────────────────────────
+// Which sections are unfolded is a device preference (the same on every
+// sketch), kept in localStorage — not on the page.
+const PANEL_SECTIONS_KEY = 'fb_sketch_sections';
+function loadPanelSections() {
+  const all = { layers: true, aerial: true, colors: true, cogo: true, info: true };
+  try { return { ...all, ...JSON.parse(localStorage.getItem(PANEL_SECTIONS_KEY) || '{}') }; } catch { return all; }
+}
+
+// A section's title bar. Tapping it folds or unfolds the section; `children`
+// are controls that sit at its right end (they stop the tap themselves).
+function PanelSectionHeader({ id, title, open, onToggle, children }) {
+  return (
+    <div data-panel-section={id} role="button" tabIndex={0} aria-expanded={open}
+      title={open ? 'Fold this section away' : 'Show this section'}
+      onClick={onToggle}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5, minHeight: 28, boxSizing: 'border-box',
+        padding: '4px 6px 4px 6px', cursor: 'pointer', outline: 'none',
+        background: PT.bgAlt, borderBottom: open ? `1px solid ${PT.border}` : 'none',
+      }}>
+      <span style={{ width: 9, flexShrink: 0, fontSize: 9, color: PT.faint }}>{open ? '▾' : '▸'}</span>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 9, fontWeight: 700, color: PT.muted,
+        textTransform: 'uppercase', letterSpacing: '0.08em' }}>{title}</span>
+      {children}
+    </div>
+  );
+}
+
+// The eye and the padlock used on layer and object rows.
+function EyeIcon({ off, size = 12 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+      {off && <line x1="3" y1="3" x2="21" y2="21"/>}
+    </svg>
+  );
+}
+function LockIcon({ open, size = 11 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="11" width="16" height="10" rx="2"/>
+      <path d={open ? 'M8 11V7a4 4 0 0 1 7.5-2' : 'M8 11V7a4 4 0 0 1 8 0v4'}/>
+    </svg>
+  );
+}
+
 const AERIAL_STEPS = [0.1, 1, 10];        // nudge distances, in the sketch's units
 
 function AerialPanel({ shape, visible, scaleDenom, units, aligning, onVisible, onOpacity, onNudge, onTurn, onAlign, onReplace, onRemove }) {
@@ -3155,7 +3205,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   const [activeFillOpacity,   setActiveFillOpacity]   = useState(1);
   const [colorTarget,         setColorTarget]         = useState('stroke'); // 'stroke' | 'fill'
   const [recentColors,        setRecentColors]        = useState([]);       // up to 10
-  const [colorPanelOpen,      setColorPanelOpen]      = useState(true);
+  // Right-panel sections that are unfolded: { layers, aerial, colors, cogo, info }
+  const [sections,            setSections]            = useState(loadPanelSections);
+  function toggleSection(key, open) {
+    const next = { ...sections, [key]: open ?? !sections[key] };
+    setSections(next);
+    try { localStorage.setItem(PANEL_SECTIONS_KEY, JSON.stringify(next)); } catch {}
+  }
   const [bgColor,           setBgColor]           = useState(page.bgColor || null);
 
   // Add a color to the recent history (prepend, deduplicate, cap at 20)
@@ -3242,19 +3298,37 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     return () => document.removeEventListener('pointerdown', onDoc, { capture: true });
   }, [openMenu]);
 
+  // Keep the open dropdown on screen. It opens under its button; on a narrow
+  // view that can run it off the right edge, so it is slid left to fit the
+  // toolbar, and it scrolls inside itself if it is taller than the view.
+  React.useLayoutEffect(() => {
+    const el = menuPanelRef.current, bar = toolbarRef.current;
+    if (!openMenu || !el || !bar) return;
+    const x = Math.max(4, Math.min(menuPos.x, bar.clientWidth - el.offsetWidth - 4));
+    const maxH = Math.max(120, Math.floor(window.innerHeight - el.getBoundingClientRect().top - 6));
+    if (x !== menuPos.x || maxH !== menuPos.maxH) setMenuPos({ x, maxH });
+  }, [openMenu, menuPos.x, menuPos.maxH]);
+  // Spread onto every toolbar dropdown panel.
+  const menuPanel = name => ({ ref: menuPanelRef, 'data-sketch-menu': name });
+  const menuFit = { maxHeight: menuPos.maxH, overflowY: 'auto' };
+
   // ── Layers ────────────────────────────────────────────────────────────────
   const _initLayers = (page.layers && page.layers.length)
     ? page.layers : [{ id: 'l_1', name: 'Layer 1', visible: true }];
   const [layers,         setLayers]         = useState(_initLayers);
   const [activeLayerId,  setActiveLayerId]  = useState(fbGnss.baseLayerId(_initLayers));
-  // A shape saved without a layerId belongs to the first layer above the aerial image.
+  // A shape saved without a layerId belongs to the first layer that isn't the Aerial one.
   const defLayerId = fbGnss.baseLayerId(layers);
-  // Every layer the user works with — all but the aerial image's.
-  const userLayers = layers.filter(l => l.id !== AERIAL_LAYER_ID);
 
   // ── Aerial image (background imagery at true scale) ───────────────────────
-  const aerialLayer = layers.find(l => l.id === AERIAL_LAYER_ID) || null;
-  const aerialShape = shapes.find(s => s.aerial && s.layerId === AERIAL_LAYER_ID) || null;
+  // An ordinary image on an ordinary layer: it starts on its own "Aerial"
+  // layer, locked, at the bottom, and from there the layer is the user's to
+  // unlock, hide, reorder or draw on. Only the image's size is held (aerialFit).
+  const aerialShape = shapes.find(s => s.aerial) || null;
+  const aerialLayer = aerialShape ? (layers.find(l => l.id === (aerialShape.layerId || defLayerId)) || null) : null;
+  const aerialShown = !!aerialShape && aerialShape.visible !== false && aerialLayer?.visible !== false;
+  // The grid reads over the imagery while the image's layer is the bottom one.
+  const gridOverBase = !!aerialLayer && layers[0]?.id === aerialLayer.id;
   const [aerialSheet, setAerialSheet] = useState(false);   // the "Aerial image" sheet is open
   // Two-point align in progress: { step: 1…4, a1, b1, a2 } — see pickAlignPoint.
   const [aerialAlign, setAerialAlign] = useState(null);
@@ -3328,6 +3402,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   const textareaRef = useRef(null);
   const lastTapRef  = useRef({ time: 0, x: 0, y: 0 }); // for touch double-tap detection
   const toolbarRef  = useRef(null);   // top toolbar — used to anchor dropdown position
+  const menuPanelRef = useRef(null);  // the dropdown panel that is open, if any
   const saveTimer   = useRef(null);
   // svgSizeRef: raw CSS pixel dimensions of the SVG container (updated by ResizeObserver).
   // Used to compute pixelScale (ps) = viewBox.w / svgSizeRef.w = world-units per CSS pixel.
@@ -3681,7 +3756,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           let t = Date.now();
           const pasted = shapeClipRef.current.map(s => {
             const id = 's_' + (++t) + '_' + Math.random().toString(36).slice(2, 6);
-            return offsetShape({ ...s, id }, 20, 20);
+            return offsetShape({ ...s, id, aerial: undefined }, 20, 20);   // a copy of the aerial image is a plain picture
           });
           commitShapes([...shapes, ...pasted]);
           setSelectedIds(pasted.map(s => s.id));
@@ -4054,13 +4129,20 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       x: c.x - w / 2, y: c.y - h / 2, w, h,
       _rot: old ? (old._rot || 0) : (northAzimuth || 0),      // imagery is north up
       strokeOpacity: old ? (old.strokeOpacity ?? 1) : 0.7,
-      layerId: AERIAL_LAYER_ID, stroke: 'none', strokeWidth: 0,
+      layerId: old ? (old.layerId || defLayerId) : AERIAL_LAYER_ID, stroke: 'none', strokeWidth: 0,
+      ...(old && old.locked ? { locked: true } : {}),
       aerial: meta,
     };
-    const next = [shape, ...shapesRef.current.filter(s => !s.aerial)];
-    const nextLayers = [{ id: AERIAL_LAYER_ID, name: 'Aerial', visible: true, locked: true },
-                        ...layers.filter(l => l.id !== AERIAL_LAYER_ID)];
-    setLayers(nextLayers);
+    // A replacement takes the old image's layer and its place in the stack. A
+    // first image goes under everything, on an "Aerial" layer that starts
+    // locked at the bottom — made here unless the sketch still has one.
+    const next = old ? shapesRef.current.map(s => (s.id === old.id ? shape : s)) : [shape, ...shapesRef.current];
+    const nextLayers = (old || layers.some(l => l.id === AERIAL_LAYER_ID)) ? layers
+      : [{ id: AERIAL_LAYER_ID, name: 'Aerial', visible: true, locked: true }, ...layers];
+    if (nextLayers !== layers) {
+      setLayers(nextLayers);
+      setCollapsedLayers(prev => new Set([...prev, AERIAL_LAYER_ID]));
+    }
     commitShapes(next);
     persist(next, undefined, nextLayers);
     setRightPanelOpen(true);          // its controls are in the panel
@@ -4068,10 +4150,29 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
   function removeAerial() {
     const next = shapesRef.current.filter(s => !s.aerial);
-    const nextLayers = layers.filter(l => l.id !== AERIAL_LAYER_ID);
+    // The Aerial layer goes with the image, unless something else is on it.
+    const emptied = !next.some(s => s.layerId === AERIAL_LAYER_ID) && layers.length > 1;
+    const nextLayers = emptied ? layers.filter(l => l.id !== AERIAL_LAYER_ID) : layers;
     setAerialAlign(null);
-    setLayers(nextLayers);
+    if (nextLayers !== layers) {
+      setLayers(nextLayers);
+      if (activeLayerId === AERIAL_LAYER_ID) setActiveLayerId(fbGnss.baseLayerId(nextLayers));
+      if (selectedLayerForCard === AERIAL_LAYER_ID) setSelectedLayerForCard(null);
+    }
     commitShapes(next);
+    persist(next, undefined, nextLayers);
+  }
+
+  // "Hide" in the Aerial panel takes the image off the sketch and leaves the
+  // rest of its layer alone. "Show" also turns its layer back on, if that is
+  // what was hiding it.
+  function toggleAerialShown() {
+    const hide = aerialShown, flip = hide || aerialShape.visible === false;
+    const next = flip ? shapesRef.current.map(s => (s.aerial ? { ...s, visible: hide ? false : undefined } : s)) : shapesRef.current;
+    const nextLayers = (!hide && aerialLayer && aerialLayer.visible === false)
+      ? layers.map(l => (l.id === aerialLayer.id ? { ...l, visible: true } : l)) : layers;
+    if (nextLayers !== layers) setLayers(nextLayers);
+    if (flip) commitShapes(next);
     persist(next, undefined, nextLayers);
   }
 
@@ -4097,13 +4198,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
   // The aerial image is ground truth, so it always sits at the sketch's scale —
   // after a scale change, or an undo that brings an older copy back, it is
-  // resized about its centre — and its layer is always there, first and locked.
+  // resized about its centre. Its layer is the user's to arrange; the one rule
+  // is that the image has a layer. Undo can bring an image back after "Remove"
+  // took its layer away, and then the layer comes back as it first was.
   useEffect(() => {
     let nextLayers = layers;
-    if (shapes.some(s => s.aerial) && !(layers[0]?.id === AERIAL_LAYER_ID && layers[0].locked)) {
-      nextLayers = [{ id: AERIAL_LAYER_ID, name: 'Aerial', visible: true, ...layers.find(l => l.id === AERIAL_LAYER_ID), locked: true },
-                    ...layers.filter(l => l.id !== AERIAL_LAYER_ID)];
-    }
+    const lost = shapes.find(s => s.aerial && s.layerId && !layers.some(l => l.id === s.layerId));
+    if (lost) nextLayers = [{ id: lost.layerId, name: 'Aerial', visible: true, locked: true }, ...layers];
     let fitted = false;
     const next = shapes.map(s => {
       const f = fbGnss.aerialFit(s, scaleDenom, PIXELS_PER_METER);
@@ -4219,6 +4320,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           { key: 'br', x: shape.x + shape.w, y: shape.y + shape.h, type: 'endpoint' },
         ];
       case 'image':
+        if (shape.aerial) return [];     // held at the sketch's scale: it moves and turns, never resizes
         return [
           { key: 'tl', x: shape.x,           y: shape.y,           type: 'endpoint' },
           { key: 'tr', x: shape.x + shape.w, y: shape.y,           type: 'endpoint' },
@@ -6769,7 +6871,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     const candidates = [];
 
     const visibleShapes = shapes.filter(s => {
-      if (s.layerId === AERIAL_LAYER_ID) return false;   // never snap to the aerial image's corners
+      if (s.aerial) return false;                        // never snap to the aerial image's corners
       const layer = layers.find(l => l.id === (s.layerId || defLayerId));
       return layer?.visible !== false;
     });
@@ -6903,7 +7005,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   // ── Layer management ───────────────────────────────────────────────────────
   function addLayer() {
     const id = 'l_' + Date.now();
-    const name = `Layer ${userLayers.length + 1}`;
+    const name = `Layer ${layers.filter(l => l.id !== AERIAL_LAYER_ID).length + 1}`;
     const next = [...layers, { id, name, visible: true }];
     setLayers(next);
     setActiveLayerId(id);
@@ -6922,7 +7024,6 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     if (idx === -1) return;
     const newIdx = idx + dir;
     if (newIdx < 0 || newIdx >= layers.length) return;
-    if (layers[newIdx].id === AERIAL_LAYER_ID) return;   // nothing goes under the aerial image
     const next = [...layers];
     [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
     setLayers(next);
@@ -6934,7 +7035,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   // For multi-select: moves all selected shapes as a group, preserving relative order.
   function moveShapeInStack(shapeId, dir) {
     // Build the panel display order: layers reversed (top layer first), shapes within each layer reversed (highest Z first)
-    const slots = [...userLayers].reverse().flatMap(l => {
+    const slots = [...layers].reverse().flatMap(l => {
       const ls = shapes.filter(s => (s.layerId || defLayerId) === l.id);
       return [...ls].reverse().map((s, ri) => ({ shapeId: s.id, layerId: l.id, arrIdx: ls.length - 1 - ri }));
     });
@@ -6976,7 +7077,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     if (fromIdx === toIdx) return;
     const next = [...layers];
     const [mv] = next.splice(fromIdx, 1);
-    next.splice(next[0]?.id === AERIAL_LAYER_ID ? Math.max(1, toIdx) : toIdx, 0, mv);   // the aerial image stays at the bottom
+    next.splice(toIdx, 0, mv);
     setLayers(next);
     persist(undefined, undefined, next);
   }
@@ -7628,7 +7729,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       );
     }
 
-    return <g key="grid" style={{ pointerEvents: 'none' }}>{lines}</g>;
+    return <g key="grid" data-sketch-grid="" style={{ pointerEvents: 'none' }}>{lines}</g>;
   }
 
   // ── Render dimension label(s) for a committed shape ───────────────────────
@@ -8291,13 +8392,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
         {/* ── Insert dropdown panel ────────────────────────────────────── */}
         {openMenu === 'insert' && (
-          <div style={{
+          <div {...menuPanel('insert')} style={{
             position: 'absolute', top: 36, left: menuPos.x, zIndex: 100,
             background: PT.bg, backdropFilter: 'blur(10px)',
             border: `1px solid ${PT.border}`, borderRadius: 6,
             boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             minWidth: 165, padding: '4px 0',
-            fontFamily: FBF.sketch,
+            fontFamily: FBF.sketch, ...menuFit,
           }}>
             {/* Point */}
             <button
@@ -8388,13 +8489,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
         {/* ── View dropdown panel ──────────────────────────────────────── */}
         {openMenu === 'view' && (
-          <div style={{
+          <div {...menuPanel('view')} style={{
             position: 'absolute', top: 36, left: menuPos.x, zIndex: 100,
             background: PT.bg, backdropFilter: 'blur(10px)',
             border: `1px solid ${PT.border}`, borderRadius: 6,
             boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             minWidth: 185, padding: '4px 0',
-            fontFamily: FBF.sketch,
+            fontFamily: FBF.sketch, ...menuFit,
           }}>
             {[
               { label: 'Grid',         icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3"><line x1="0" y1="4.7" x2="14" y2="4.7"/><line x1="0" y1="9.3" x2="14" y2="9.3"/><line x1="4.7" y1="0" x2="4.7" y2="14"/><line x1="9.3" y1="0" x2="9.3" y2="14"/></svg>, state: showGrid,      set: () => setShowGrid(v => !v),      activeCol: '#2D8A5C', activeBg: 'rgba(45,138,92,0.12)' },
@@ -8429,15 +8530,15 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
         {/* ── Scale dropdown panel ─────────────────────────────────────── */}
         {openMenu === 'scale' && (
-          <div style={{
+          <div {...menuPanel('scale')} style={{
             position: 'absolute', top: 36,
-            left: Math.max(4, menuPos.x),
+            left: menuPos.x,
             zIndex: 100,
             background: PT.bg, backdropFilter: 'blur(10px)',
             border: `1px solid ${PT.border}`, borderRadius: 6,
             boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             width: 232, padding: '8px 0',
-            fontFamily: FBF.sketch,
+            fontFamily: FBF.sketch, ...menuFit,
           }}>
 
             {/* Zoom controls row */}
@@ -8555,13 +8656,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             }
           };
           return (
-            <div style={{
+            <div {...menuPanel('stroke')} style={{
               position: 'absolute', top: '100%', left: menuPos.x,
               marginTop: 4, zIndex: 120, minWidth: 220,
               background: PT.bg,
               border: `1px solid ${PT.border}`,
               borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
-              padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 10,
+              padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 10, ...menuFit,
             }}>
               {/* Header */}
               <div style={{ fontSize: 10, fontWeight: 700, color: PT.muted,
@@ -8709,12 +8810,12 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             color: active ? '#2563A8' : PT.muted,
           });
           return (
-            <div style={{
+            <div {...menuPanel('text')} style={{
               position: 'absolute', top: '100%', left: menuPos.x,
               marginTop: 4, zIndex: 120, minWidth: 230,
               background: PT.bg, border: `1px solid ${PT.border}`,
               borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
-              padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 10,
+              padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 10, ...menuFit,
             }}>
               {/* Header */}
               <div style={{ fontSize: 10, fontWeight: 700, color: PT.muted,
@@ -8779,13 +8880,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
         {/* ── Snap dropdown panel ───────────────────────────────────────── */}
         {openMenu === 'snap' && (
-          <div style={{
+          <div {...menuPanel('snap')} style={{
             position: 'absolute', top: 36, left: menuPos.x, zIndex: 100,
             background: PT.bg, backdropFilter: 'blur(10px)',
             border: `1px solid ${PT.border}`, borderRadius: 6,
             boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             minWidth: 200, padding: '4px 0',
-            fontFamily: FBF.sketch,
+            fontFamily: FBF.sketch, ...menuFit,
           }}>
             {[
               { key: 'endpoint',     label: 'Endpoint',      icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="7" cy="7" r="5"/><circle cx="7" cy="7" r="2" fill="currentColor"/></svg>, col: '#2D8A5C', bg: 'rgba(45,138,92,0.12)',   desc: 'Line & curve endpoints' },
@@ -8822,13 +8923,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
         {/* ── Join dropdown panel ───────────────────────────────────────── */}
         {openMenu === 'join' && (
-          <div style={{
+          <div {...menuPanel('join')} style={{
             position: 'absolute', top: 36, left: menuPos.x, zIndex: 100,
             background: PT.bg, backdropFilter: 'blur(10px)',
             border: `1px solid ${PT.border}`, borderRadius: 6,
             boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
             minWidth: 170, padding: '4px 0',
-            fontFamily: FBF.sketch,
+            fontFamily: FBF.sketch, ...menuFit,
           }}>
             {[
               { op: 'add',       label: 'Add',       icon: <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="5" cy="8" r="4"/><circle cx="10" cy="8" r="4"/></svg>, desc: 'Union of all shapes',         col: '#2D8A5C', bg: 'rgba(45,138,92,0.12)'    },
@@ -9497,7 +9598,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               onClick={() => {
                 if (!shapeClipRef.current || shapeClipRef.current.length === 0) return;
                 let t = Date.now();
-                const pasted = shapeClipRef.current.map(s => { const id = 's_' + (++t) + '_' + Math.random().toString(36).slice(2, 6); return offsetShape({ ...s, id }, 20, 20); });
+                const pasted = shapeClipRef.current.map(s => { const id = 's_' + (++t) + '_' + Math.random().toString(36).slice(2, 6); return offsetShape({ ...s, id, aerial: undefined }, 20, 20); });
                 commitShapes([...shapes, ...pasted]);
                 setSelectedIds(pasted.map(s => s.id));
               }}
@@ -9566,7 +9667,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           )}
 
           {/* Imagery credit — shown wherever the aerial image is */}
-          {aerialShape && aerialLayer?.visible && (
+          {aerialShown && (
             <div style={{ position: 'absolute', left: 6, top: 4, zIndex: 2, pointerEvents: 'none',   // bottom-left is the scale bar's
               padding: '1px 5px', background: 'rgba(255,255,255,0.75)', color: PT.muted,
               fontFamily: FBF.sketch, fontSize: 9 }}>
@@ -9655,20 +9756,23 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 fill={bgColor} style={{ pointerEvents: 'none' }} />
             )}
 
-            {/* Aerial image — under the grid, so the grid reads over the ground */}
-            {aerialShape && aerialLayer?.visible && aerialShape.visible !== false && renderShape(aerialShape, false)}
-
-            {/* Dynamic grid — rendered below every drawn shape */}
-            {showGrid && renderGrid()}
-
-            {/* Committed shapes — rendered in layer order, bottom to top */}
-            {userLayers.map(layer => layer.visible && (
-              <g key={layer.id}>
-                {shapes
-                  .filter(s => (s.layerId || defLayerId) === layer.id && s.visible !== false)
-                  .map(s => renderShape(s, selectedIds.includes(s.id)))}
-              </g>
-            ))}
+            {/* Committed shapes — rendered in layer order, bottom to top. The grid
+                goes under all of them, except that it reads over the aerial
+                image's layer while that layer is the bottom one. */}
+            {(() => {
+              const layerGroup = layer => layer.visible && (
+                <g key={layer.id} data-layer={layer.id}>
+                  {shapes
+                    .filter(s => (s.layerId || defLayerId) === layer.id && s.visible !== false)
+                    .map(s => renderShape(s, selectedIds.includes(s.id)))}
+                </g>
+              );
+              return (<>
+                {gridOverBase && layerGroup(layers[0])}
+                {showGrid && renderGrid()}
+                {layers.slice(gridOverBase ? 1 : 0).map(layerGroup)}
+              </>);
+            })()}
 
             {/* Dimension labels — rendered above shapes, below handles */}
             {showDims && shapes.map(s => {
@@ -10117,25 +10221,18 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
               {/* ── LAYERS SECTION ─────────────────────────────────────── */}
               <div>
-              {/* Header */}
-              <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '4px 6px 4px 8px',
-                background: PT.bgAlt, borderBottom: `1px solid ${PT.border}`,
-              }}>
-                <span style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
-                  textTransform: 'uppercase', letterSpacing: '0.08em' }}>Layers</span>
-                <button onClick={addLayer} title="New layer" style={{
+              <PanelSectionHeader id="layers" title="Layers" open={sections.layers} onToggle={() => toggleSection('layers')}>
+                <button onClick={e => { e.stopPropagation(); addLayer(); toggleSection('layers', true); }} title="New layer" style={{
                   width: 20, height: 20, display: 'flex', alignItems: 'center',
                   justifyContent: 'center', borderRadius: 3,
                   background: PT.bg, border: `1px solid ${PT.border}`,
                   color: PT.text, fontSize: 15,
                   cursor: 'pointer', lineHeight: 1, outline: 'none',
                 }}>+</button>
-              </div>
+              </PanelSectionHeader>
 
               {/* Move-to-layer strip — visible when 1+ shapes are selected */}
-              {selectedIds.length >= 1 && (
+              {sections.layers && selectedIds.length >= 1 && (
                 <div style={{
                   padding: '3px 6px', borderBottom: `1px solid ${PT.border}`,
                   display: 'flex', alignItems: 'center', gap: 4,
@@ -10161,7 +10258,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     }}
                   >
                     <option value="" disabled>Move to layer…</option>
-                    {userLayers.map(l => (
+                    {layers.map(l => (
                       <option key={l.id} value={l.id}>{l.name}</option>
                     ))}
                   </select>
@@ -10169,7 +10266,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               )}
 
               {/* Layer list — reversed so top of list = topmost render layer */}
-              <div>
+              {sections.layers && <div>
                 {printAreas.length > 0 && (
                   <div data-print-layer="" title="Print areas are always on top. Only the Print area tool can move them."
                     style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 6px 4px 18px', minHeight: 26, borderBottom: `1px dashed ${PT.border}` }}>
@@ -10185,7 +10282,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     <span style={{ fontSize: 9, color: PT.muted }}>{printAreas.length}</span>
                   </div>
                 )}
-                {[...userLayers].reverse().map((layer) => {
+                {[...layers].reverse().map((layer) => {
                   const isActive   = layer.id === activeLayerId;
                   const layerShapes = shapes.filter(s =>
                     (s.layerId || defLayerId) === layer.id);
@@ -10199,7 +10296,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                         const _lUp   = panelDrag ? panelDrag.targetIdx > panelDrag.origIdx : false;
                         return (<>
                           {_lDrop && _lUp && <div style={{height:2,background:PT.accent,margin:'0 4px'}}/>}
-                          <div
+                          <div data-layer-row={layer.id}
                             onClick={()=>{ setActiveLayerId(layer.id); setSelectedLayerForCard(layer.id); setSelectedIds([]); }}
                             style={{
                               display:'flex', alignItems:'center', gap:2,
@@ -10244,13 +10341,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                               onClick={ev=>{ev.stopPropagation();toggleLayerVisibility(layer.id);}}
                               title={layer.visible?'Hide':'Show'}
                               style={{width:18,height:18,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:10,color:layer.visible?PT.text:PT.faint,outline:'none'}}
-                            >{layer.visible?'👁':'○'}</button>
+                            ><EyeIcon off={!layer.visible} /></button>
                             {/* Lock */}
                             <button
                               onClick={ev=>{ev.stopPropagation();toggleLayerLocked(layer.id);}}
                               title={layer.locked?'Unlock layer':'Lock layer'}
                               style={{width:18,height:18,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',fontSize:10,color:layer.locked?PT.accent:PT.faint,outline:'none'}}
-                            >{layer.locked?'🔒':'🔓'}</button>
+                            ><LockIcon open={!layer.locked} /></button>
                             {/* Layer stack icon — click to select all shapes in this layer */}
                             <button
                               title="Select all in layer"
@@ -10273,7 +10370,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                             </button>
                             <span style={{flex:1,fontSize:11,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
                               color:isActive?PT.accent:(layer.visible?PT.text:PT.faint)
-                            }}>{layer.name}{layer.locked && <span style={{marginLeft:3,fontSize:8,opacity:0.6}}>🔒</span>}</span>
+                            }}>{layer.name}</span>
                             {/* Up / Down */}
                             <div style={{display:'flex',flexDirection:'column',gap:1,flexShrink:0}}>
                               {[{dir:1,svg:<svg width="8" height="6" viewBox="0 0 8 6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 5 4 1 7 5"/></svg>,ttl:'Move up'},{dir:-1,svg:<svg width="8" height="6" viewBox="0 0 8 6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 1 4 5 7 1"/></svg>,ttl:'Move down'}].map(({dir,svg,ttl})=>(
@@ -10295,7 +10392,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                           // _revS[ri] === slot[offset+ri] because both use [...layerShapes].reverse() order.
                           const _myFlatIdx=(()=>{
                             let fi=0;
-                            for(const _l of [...userLayers].reverse()){
+                            for(const _l of [...layers].reverse()){
                               if(collapsedLayers.has(_l.id)) continue;
                               if(_l.id===layer.id) return fi+ri;
                               fi+=shapes.filter(_s=>(_s.layerId||defLayerId)===_l.id).length;
@@ -10324,7 +10421,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                                 } else if(e.shiftKey&&lastPanelClickId){
                                   e.stopPropagation();
                                   setTool('select');setPrevTool(null);
-                                  const _allS=[...userLayers].reverse().flatMap(l=>[...shapes.filter(sh=>(sh.layerId||defLayerId)===l.id)].reverse());
+                                  const _allS=[...layers].reverse().flatMap(l=>[...shapes.filter(sh=>(sh.layerId||defLayerId)===l.id)].reverse());
                                   const _ci=_allS.findIndex(sh=>sh.id===s.id);
                                   const _li=_allS.findIndex(sh=>sh.id===lastPanelClickId);
                                   if(_ci>=0&&_li>=0){
@@ -10348,7 +10445,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                                 if(panelDragTimerRef.current)clearTimeout(panelDragTimerRef.current);
                                 panelDragTimerRef.current=setTimeout(()=>{
                                   panelDragTimerRef.current=null;
-                                  const _slots=[...userLayers].reverse().flatMap(_l=>{
+                                  const _slots=[...layers].reverse().flatMap(_l=>{
                                     if(collapsedLayers.has(_l.id))return[];
                                     const _ls=shapes.filter(_s=>(_s.layerId||defLayerId)===_l.id);
                                     return[..._ls].reverse().map((_sh,_ri)=>({shapeId:_sh.id,layerId:_l.id,posInLayer:_ls.length-1-_ri}));
@@ -10408,10 +10505,10 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                                 style={{width:14,height:14,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
                                   background:'none',border:'none',cursor:'pointer',fontSize:8,outline:'none',
                                   color:s.locked?PT.accent:PT.faint}}
-                              >{s.locked?'🔒':'🔓'}</button>
+                              ><LockIcon open={!s.locked} size={9} /></button>
                               <span style={{flex:1,fontSize:10,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
                                 color:s.visible===false?PT.faint:(selectedIds.includes(s.id)?PT.accent:PT.muted)}}>
-                                {s.customName||(s.type.charAt(0).toUpperCase()+s.type.slice(1)+' '+(layerShapes.length-ri))}{s.locked&&<span style={{marginLeft:2,fontSize:7,opacity:0.7}}>🔒</span>}
+                                {s.customName||(s.aerial?'Aerial image':s.type.charAt(0).toUpperCase()+s.type.slice(1)+' '+(layerShapes.length-ri))}
                               </span>
                               {/* ▲▼ shape stack order buttons */}
                               <div style={{display:'flex',flexDirection:'column',gap:1,flexShrink:0}}>
@@ -10434,57 +10531,32 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                     </div>
                   );
                 })}
-                {/* The aerial image's layer — always at the bottom, always locked */}
-                {aerialShape && aerialLayer && (
-                  <div title="The aerial image is on its own locked layer, under everything else"
-                    style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 6px 4px 22px', minHeight: 26, borderTop: `1px dashed ${PT.border}` }}>
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={PT.muted} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>
-                    </svg>
-                    <span style={{ flex: 1, fontSize: 11, color: aerialLayer.visible ? PT.text : PT.faint }}>Aerial</span>
-                    <span style={{ fontSize: 9, color: PT.muted }}>{aerialLayer.visible ? 'locked' : 'hidden'}</span>
-                  </div>
-                )}
-              </div>
+              </div>}
 
               </div>{/* end LAYERS SECTION */}
 
               {/* ── AERIAL SECTION — only while the sketch has an aerial image ── */}
               {aerialShape && aerialLayer && (
                 <div style={{ borderTop: `1px solid ${PT.border}` }}>
-                  <div style={{ padding: '4px 6px 4px 8px', background: PT.bgAlt, borderBottom: `1px solid ${PT.border}` }}>
-                    <span style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
-                      textTransform: 'uppercase', letterSpacing: '0.08em' }}>Aerial</span>
-                  </div>
-                  <AerialPanel
-                    shape={aerialShape} visible={aerialLayer.visible} scaleDenom={scaleDenom} units={units}
+                  <PanelSectionHeader id="aerial" title="Aerial" open={sections.aerial} onToggle={() => toggleSection('aerial')} />
+                  {sections.aerial && <AerialPanel
+                    shape={aerialShape} visible={aerialShown} scaleDenom={scaleDenom} units={units}
                     aligning={!!aerialAlign}
-                    onVisible={() => toggleLayerVisibility(AERIAL_LAYER_ID)}
+                    onVisible={toggleAerialShown}
                     onOpacity={v => changeAerial(s => ({ ...s, strokeOpacity: v }), true)}
                     onNudge={(dx, dy) => changeAerial(s => fbGnss.aerialMove(s, dx, dy))}
                     onTurn={deg => changeAerial(s => fbGnss.aerialTurn(s, { x: s.x + s.w / 2, y: s.y + s.h / 2 }, deg))}
                     onAlign={() => setAerialAlign(a => (a ? null : { step: 1 }))}
                     onReplace={() => setAerialSheet(true)}
                     onRemove={removeAerial}
-                  />
+                  />}
                 </div>
               )}
 
               {/* ── COLORS SECTION ─────────────────────────────────────── */}
               <div style={{ borderTop: `1px solid ${PT.border}` }}>
-                <div style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '4px 6px 4px 8px', cursor: 'pointer',
-                  background: PT.bgAlt,
-                  borderBottom: colorPanelOpen ? `1px solid ${PT.border}` : 'none',
-                }} onClick={() => setColorPanelOpen(o => !o)}>
-                  <span style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
-                    textTransform: 'uppercase', letterSpacing: '0.08em' }}>Colors</span>
-                  <span style={{ fontSize: 9, color: PT.faint }}>
-                    {colorPanelOpen ? '▾' : '▸'}
-                  </span>
-                </div>
-                {colorPanelOpen && (
+                <PanelSectionHeader id="colors" title="Colors" open={sections.colors} onToggle={() => toggleSection('colors')} />
+                {sections.colors && (
                   <ColorPanel
                     colorTarget={colorTarget}
                     onTargetChange={t => setColorTarget(t)}
@@ -10503,15 +10575,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                 const bsLine = (selectedIds.length === 1 && selectedShape && selectedShape.type === 'line') ? selectedShape : null;
                 return (
                   <div style={{ borderTop: `1px solid ${PT.border}` }}>
-                    <div style={{
-                      display: 'flex', alignItems: 'center',
-                      padding: '4px 6px 4px 8px',
-                      background: PT.bgAlt, borderBottom: `1px solid ${PT.border}`,
-                    }}>
-                      <span style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
-                        textTransform: 'uppercase', letterSpacing: '0.08em' }}>COGO</span>
-                    </div>
-                    <CogoPanel
+                    <PanelSectionHeader id="cogo" title="COGO" open={sections.cogo} onToggle={() => toggleSection('cogo')} />
+                    {sections.cogo && <CogoPanel
                       line={bsLine}
                       occEnd={cogoOccupiedEnd}
                       onSwap={() => setCogoOccupiedEnd(e => e === 'p1' ? 'p2' : 'p1')}
@@ -10533,7 +10598,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                         commitShapes([...shapes, newLine]);
                         return true;
                       }}
-                    />
+                    />}
                   </div>
                 );
               })()}
@@ -10541,24 +10606,16 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               {/* ── INFO SECTION ───────────────────────────────────────── */}
               {showValueCard && (selectedIds.length > 0 || (selectedLayerForCard && selectedIds.length === 0)) && (
                 <div style={{ borderTop: `1px solid ${PT.border}` }}>
-                  {/* Info section header */}
-                  <div style={{
-                    display: 'flex', alignItems: 'center',
-                    padding: '4px 6px 4px 8px',
-                    background: PT.bgAlt, borderBottom: `1px solid ${PT.border}`,
-                  }}>
-                    <span style={{ fontSize: 9, fontWeight: 700, color: PT.muted,
-                      textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                      {selectedIds.length > 1 ? `${selectedIds.length} selected` : 'Info'}
-                    </span>
-                  </div>
+                  <PanelSectionHeader id="info" title={selectedIds.length > 1 ? `${selectedIds.length} selected` : 'Info'}
+                    open={sections.info} onToggle={() => toggleSection('info')} />
+                  {sections.info && (<>
 
                   {/* Multi-select */}
                   {selectedIds.length > 1 && (
                     <MultiSelectCard
                       selectedIds={selectedIds}
                       shapes={shapes}
-                      layers={userLayers}
+                      layers={layers}
                       onBatchUpdate={handleBatchUpdate}
                       inline={true}
                     />
@@ -10655,6 +10712,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                       </div>
                     );
                   })()}
+                  </>)}
                 </div>
               )}
 

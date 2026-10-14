@@ -430,6 +430,15 @@
       background: rgb(var(--fb-accent-rgb) / 0.10) !important;
       color: var(--fb-cover) !important;
     }
+    /* the row or column being carried */
+    th.dp-drag-src, .dp-row-num.dp-drag-src {
+      background: var(--fb-accent-pale) !important;
+      color: var(--fb-cover) !important;
+    }
+    /* a long press on these picks them up — it must not select text or open the callout */
+    .dp-col-header, .dp-row-num { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    /* the lists inside Insert ▾ → Rows / Columns */
+    .dp-drop-panel .dp-drop-sub { margin: 0 0 2px 12px; border-left: 1px solid var(--fb-border); }
     .dp-col-header[draggable="true"] { cursor: grab; }
     .dp-col-header[draggable="true"]:active { cursor: grabbing; }
     .dp-row-num[draggable="true"] { cursor: grab; }
@@ -441,6 +450,17 @@
       font-family: var(--fb-font-mono); font-size: 13px; line-height: 1.5;
       user-select: all;
     }
+    /* ── Notes page body ────────────────────────────────────────────
+       Tailwind's reset takes the size off headings and the markers and
+       indent off lists, so the note's own formatting is styled here. */
+    .fb-notes h2 { font-size: 1.5em;  font-weight: 700; line-height: 1.3;  margin: 0.3em 0 0.05em; }
+    .fb-notes h3 { font-size: 1.25em; font-weight: 700; line-height: 1.35; margin: 0.25em 0 0.05em; }
+    .fb-notes ul { list-style: disc outside;    padding-left: 1.4em; }
+    .fb-notes ol { list-style: decimal outside; padding-left: 1.6em; }
+    .fb-notes li { display: list-item; }
+    .fb-notes b, .fb-notes strong { font-weight: 700; }
+    .fb-notes i, .fb-notes em { font-style: italic; }
+    .fb-notes hr { border: 0; border-top: 1.5px solid var(--fb-border); margin: 0.6em 0; }
     /* ── Animations ─────────────────────────────────────────────── */
     .screen-enter { animation: slideUp 0.18s ease-out; }
     @keyframes slideUp {
@@ -642,7 +662,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.178';
+  const APP_VERSION = '1.179';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1735,6 +1755,40 @@
         <line x1="12" y1="1" x2="12" y2="5"/>
         <path d="M18.4 5.6 12 12l8.9-1.6"/>
         <circle cx="12" cy="12" r="4.5" strokeWidth="1.4" opacity="0.5"/>
+      </svg>
+    ),
+    // Notes formatting toolbar.
+    Bold: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M6 4h8a4 4 0 0 1 0 8H6z"/>
+        <path d="M6 12h9a4 4 0 0 1 0 8H6z"/>
+      </svg>
+    ),
+    Italic: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="19" y1="4" x2="10" y2="4"/>
+        <line x1="14" y1="20" x2="5" y2="20"/>
+        <line x1="15" y1="4" x2="9" y2="20"/>
+      </svg>
+    ),
+    ListBullet: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="9" y1="6" x2="21" y2="6"/>
+        <line x1="9" y1="12" x2="21" y2="12"/>
+        <line x1="9" y1="18" x2="21" y2="18"/>
+        <circle cx="4" cy="6" r="1.4" fill="currentColor" stroke="none"/>
+        <circle cx="4" cy="12" r="1.4" fill="currentColor" stroke="none"/>
+        <circle cx="4" cy="18" r="1.4" fill="currentColor" stroke="none"/>
+      </svg>
+    ),
+    ListNum: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="10" y1="6" x2="21" y2="6"/>
+        <line x1="10" y1="12" x2="21" y2="12"/>
+        <line x1="10" y1="18" x2="21" y2="18"/>
+        <path d="M3.5 4.6 5 3.8v4.4" strokeWidth="1.6"/>
+        <path d="M3.3 11a1.4 1.4 0 0 1 2.7.5c0 1-2.7 1.7-2.7 2.9H6" strokeWidth="1.6"/>
+        <path d="M3.4 16.6h2.4l-1.4 1.6a1.3 1.3 0 1 1-1.2 1.9" strokeWidth="1.6"/>
       </svg>
     ),
   };
@@ -4396,6 +4450,42 @@
 
   // Draw the notebook-style page header on the current jsPDF page.
   // Returns the y coordinate where content should start below the header.
+  // Helvetica has no prime or minus glyphs — swap them for their plain forms.
+  const _pdfPlain = v => String(v ?? '').replace(/[′’]/g, "'").replace(/[″”]/g, '"').replace(/−/g, '-');
+
+  // Body of a notes page, from contentY down, running on to new sheets. Headings
+  // print bold and larger, list lines with their markers (notesHtmlToLines).
+  function _pdfNotesBody(pdf, page, { W, H, margin, contentY }) {
+    const lines = notesHtmlToLines(page.notesHtml);
+    if (!lines.length) {
+      pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
+      pdf.text('(No notes)', W/2, contentY + 20, { align: 'center' });
+      return;
+    }
+    const STYLE = [{ size: 10, face: 'normal', step: 5.5 }, { size: 13, face: 'bold', step: 7 }, { size: 11, face: 'bold', step: 6.2 }];
+    let ny = contentY + 6;
+    const fits = () => { if (ny > H - margin - 14) { pdf.addPage(); ny = margin + 6; } };
+    pdf.setTextColor(28, 28, 28);
+    for (const l of lines) {
+      if (l.rule) {
+        fits();
+        pdf.setDrawColor(150, 150, 150); pdf.setLineWidth(0.2);
+        pdf.line(margin, ny - 2, W - margin, ny - 2);
+        ny += 3;
+        continue;
+      }
+      if (!l.text) { ny += 3; continue; }
+      const st = STYLE[l.head || 0];
+      pdf.setFont('helvetica', st.face);
+      pdf.setFontSize(st.size);
+      for (const ln of pdf.splitTextToSize(_pdfPlain(l.text), W - margin * 2)) {
+        fits();
+        pdf.text(ln, margin, ny);
+        ny += st.step;
+      }
+    }
+  }
+
   function _pdfPageHeader(pdf, page, meta, W, H, margin, F) {
     const _F = F || { hand: 'helvetica', handSt: 'bold', mono: 'courier', monoSt: 'normal' };
 
@@ -4700,8 +4790,7 @@
   function _pdfFormKit(pdf, { W, margin, F }) {
     const L = margin, CW = W - margin * 2;
     const INK = [28, 28, 28], LBL = [100, 100, 100], RULE = [190, 190, 190], GD = [40, 40, 40];
-    // Helvetica has no prime or minus glyphs — swap them for their plain forms.
-    const safe = v => String(v ?? '').replace(/[′’]/g, "'").replace(/[″”]/g, '"').replace(/−/g, '-');
+    const safe = _pdfPlain;
 
     function section(y, text) {
       pdf.setFontSize(7.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...GD);
@@ -5361,32 +5450,7 @@
         } else if (page.type === 'notes') {
           // ── NOTES PAGE ──────────────────────────────────────────────────────────
           const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
-          // Convert HTML to text, preserving paragraph/line breaks
-          let rawHtml = page.notesHtml || '';
-          rawHtml = rawHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n')
-                           .replace(/<\/div>/gi, '\n').replace(/<\/li>/gi, '\n')
-                           .replace(/<\/h[1-6]>/gi, '\n').replace(/<[^>]+>/g, '');
-          const entEl = document.createElement('textarea');
-          entEl.innerHTML = rawHtml;
-          const text = entEl.value.replace(/\n{3,}/g, '\n\n').trim();
-          if (!text) {
-            pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
-            pdf.text('(No notes)', W/2, contentY + 20, { align: 'center' });
-          } else {
-            let ny = contentY + 6;
-            pdf.setFont('helvetica', 'normal');
-            pdf.setFontSize(10);
-            pdf.setTextColor(28, 28, 28);
-            for (const para of text.split('\n')) {
-              if (!para.trim()) { ny += 3; continue; }
-              const wrapped = pdf.splitTextToSize(para, W - margin * 2);
-              for (const ln of wrapped) {
-                if (ny > H - margin - 14) { pdf.addPage(); ny = margin + 6; }
-                pdf.text(ln, margin, ny);
-                ny += 5.5;
-              }
-            }
-          }
+          _pdfNotesBody(pdf, page, { W, H, margin, contentY });
 
         } else {
           // DATA page
@@ -5699,31 +5763,7 @@
       } else if (page.type === 'obstructions') {
         await _pdfSiteBody(pdf, page, { W, margin, F, contentY });
       } else if (page.type === 'notes') {
-        let rawHtml = page.notesHtml || '';
-        rawHtml = rawHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n')
-                         .replace(/<\/div>/gi, '\n').replace(/<\/li>/gi, '\n')
-                         .replace(/<\/h[1-6]>/gi, '\n').replace(/<[^>]+>/g, '');
-        const entEl2 = document.createElement('textarea');
-        entEl2.innerHTML = rawHtml;
-        const text = entEl2.value.replace(/\n{3,}/g, '\n\n').trim();
-        if (!text) {
-          pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
-          pdf.text('(No notes)', W/2, contentY + 20, { align: 'center' });
-        } else {
-          let ny = contentY + 6;
-          pdf.setFont('helvetica', 'normal');
-          pdf.setFontSize(10);
-          pdf.setTextColor(28, 28, 28);
-          for (const para of text.split('\n')) {
-            if (!para.trim()) { ny += 3; continue; }
-            const wrapped = pdf.splitTextToSize(para, W - margin * 2);
-            for (const ln of wrapped) {
-              if (ny > H - margin - 14) { pdf.addPage(); ny = margin + 6; }
-              pdf.text(ln, margin, ny);
-              ny += 5.5;
-            }
-          }
-        }
+        _pdfNotesBody(pdf, page, { W, H, margin, contentY });
       } else {
         const cols = page.columns || [], rows = page.rows || [];
         if (cols.length === 0) {
@@ -7339,6 +7379,89 @@
   // NOTES PAGE
   // ─────────────────────────────────────────────────────────────────────────────
 
+  // The cursor / selection of a note as character offsets into its text, so it
+  // can be put back after a formatting command has re-wrapped the line it was
+  // in. `fwd` marks a cursor at the very start of a piece of text — the same
+  // offset is also the end of the text before it, on the line above.
+  // Null on an empty line: there is no text to count to, and the browser
+  // keeps the cursor on that line by itself.
+  function notesSelOffsets(ed) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !ed.contains(sel.anchorNode)) return null;
+    const r = sel.getRangeAt(0);
+    if (r.startContainer.nodeType !== 3) return null;
+    const pre = document.createRange();
+    pre.selectNodeContents(ed);
+    pre.setEnd(r.startContainer, r.startOffset);
+    const start = pre.toString().length;
+    return { start, end: start + r.toString().length, fwd: r.startOffset === 0 };
+  }
+
+  function notesSetSelOffsets(ed, o) {
+    if (!o) return;
+    const walker = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
+    const texts = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) texts.push(n);
+    const at = (offset, fwd) => {
+      let seen = 0;
+      for (let i = 0; i < texts.length; i++) {
+        const len = texts[i].nodeValue.length;
+        if (offset < seen + len || (offset === seen + len && !(fwd && i < texts.length - 1))) return [texts[i], offset - seen];
+        seen += len;
+      }
+      return null;
+    };
+    const a = at(o.start, o.fwd), b = o.end === o.start ? a : at(o.end, false);
+    if (!a || !b) return;
+    const range = document.createRange();
+    range.setStart(a[0], a[1]);
+    range.setEnd(b[0], b[1]);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  // A note's HTML as lines for the PDF, in reading order. Each line is
+  // { text, head } — head is 1 or 2 on a heading line — or { rule: true } for
+  // a drawn rule. List lines carry their marker ("• ", "1. "). A blank line
+  // has an empty text; runs of them close up to one and the ends are trimmed.
+  function notesHtmlToLines(html) {
+    const box = document.createElement('div');
+    box.innerHTML = html || '';
+    const BLOCK = new Set(['DIV', 'P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'UL', 'OL', 'BLOCKQUOTE']);
+    const out = [];
+    let cur = '', has = false;          // the line being built, and whether anything has been written on it
+    const push = head => { out.push({ text: cur.replace(/ /g, ' ').trimEnd(), head }); cur = ''; has = false; };
+    (function walk(node, head, list, depth) {
+      let n = 0;
+      for (const ch of node.childNodes) {
+        if (ch.nodeType === 3) {
+          const tx = ch.nodeValue.replace(/[ \t\r\n]+/g, ' ');
+          if (!tx.trim() && !has) continue;
+          cur += tx; has = true;
+          continue;
+        }
+        if (ch.nodeType !== 1) continue;
+        const tag = ch.tagName;
+        if (tag === 'BR') { if (ch.nextSibling) push(head); continue; }   // a last <br> only holds an empty line open
+        if (tag === 'HR') { if (has) push(head); out.push({ rule: true }); continue; }
+        if (!BLOCK.has(tag)) { walk(ch, head, list, depth); continue; }   // inline: bold, italic, a GPS pin chip
+        if (has) push(head);
+        const h = (tag === 'H1' || tag === 'H2') ? 1 : /^H[3-6]$/.test(tag) ? 2 : head;
+        if (tag === 'UL' || tag === 'OL') { walk(ch, h, tag, depth + 1); continue; }
+        if (tag === 'LI') cur = '  '.repeat(Math.max(0, depth - 1)) + (list === 'OL' ? `${++n}. ` : '• ');
+        const before = out.length;
+        walk(ch, h, list, depth);
+        if (has || cur || out.length === before) push(h);                 // its last line, or an empty block's blank line
+      }
+    })(box, 0, null, 0);
+    if (has) push(0);
+    const blank = l => !l.rule && !l.text;
+    const lines = out.filter((l, i) => !(blank(l) && (i === 0 || blank(out[i - 1]))));
+    while (lines.length && blank(lines[lines.length - 1])) lines.pop();
+    return lines;
+  }
+
   function NotesPage({ page, projectId, onReload, onRegisterExports }) {
     const editorRef  = useRef(null);
     const saveTimer  = useRef(null);
@@ -7372,9 +7495,103 @@
       }, 800);
     }
 
-    function execCmd(cmd, val) {
-      editorRef.current?.focus();
-      document.execCommand(cmd, false, val ?? null);
+    // ── Formatting toolbar ──
+    // The last cursor / selection the note had, so a button still acts there
+    // after the note has lost the keyboard focus; and which formats are on at
+    // the cursor, so the buttons can show it.
+    const lastRangeRef = useRef(null);
+    const [active, setActive] = useState({});
+
+    function readActive() {
+      const ed = editorRef.current, sel = window.getSelection();
+      if (!ed || !sel || !sel.rangeCount || !ed.contains(sel.anchorNode)) return;
+      const block = String(document.queryCommandValue('formatBlock') || '').toLowerCase();
+      const next = {
+        bold: document.queryCommandState('bold'), italic: document.queryCommandState('italic'),
+        h1: block === 'h2', h2: block === 'h3',
+        ul: document.queryCommandState('insertUnorderedList'), ol: document.queryCommandState('insertOrderedList'),
+      };
+      setActive(prev => Object.keys(next).every(k => prev[k] === next[k]) ? prev : next);
+    }
+
+    useEffect(() => {
+      const onSel = () => {
+        const ed = editorRef.current, sel = window.getSelection();
+        if (!ed || !sel || !sel.rangeCount || !ed.contains(sel.anchorNode)) return;
+        lastRangeRef.current = sel.getRangeAt(0).cloneRange();
+        readActive();
+      };
+      document.addEventListener('selectionchange', onSel);
+      return () => document.removeEventListener('selectionchange', onSel);
+    }, []);
+
+    // Put the selection back in the note if it has gone: where it last was,
+    // or at the end of the note — never thrown to the start.
+    function claimSelection() {
+      const ed = editorRef.current, sel = window.getSelection();
+      if (sel.rangeCount && ed.contains(sel.anchorNode)) return;
+      ed.focus();
+      let range = lastRangeRef.current;
+      if (!range || !ed.contains(range.startContainer)) {
+        range = document.createRange();
+        range.selectNodeContents(ed);
+        range.collapse(false);
+      }
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    // One toolbar action: 'bold' | 'italic' | 'h1' | 'h2' | 'ul' | 'ol' | 'hr' |
+    // 'clear', or a symbol to type at the cursor.
+    function fmt(action) {
+      const ed = editorRef.current;
+      if (!ed) return;
+      claimSelection();
+      const sel = window.getSelection();
+      const exec = (cmd, val) => document.execCommand(cmd, false, val ?? null);
+      const block = () => String(document.queryCommandValue('formatBlock') || '').toLowerCase();
+      const listCmd = () => document.queryCommandState('insertUnorderedList') ? 'insertUnorderedList'
+                          : document.queryCommandState('insertOrderedList') ? 'insertOrderedList' : null;
+      // A line is a heading or a list line, not both.
+      const unlist = () => { const c = listCmd(); if (c) exec(c); };
+      const unhead = () => { if (/^h[1-6]$/.test(block())) exec('formatBlock', 'div'); };
+      // Commands that re-wrap the line can throw the cursor to its start, so it is put back.
+      const keep = notesSelOffsets(ed);
+      switch (action) {
+        case 'bold': case 'italic':
+          exec(action);                 // with a bare cursor this arms the format for what is typed next
+          break;
+        case 'h1': case 'h2': {
+          const tag = action === 'h1' ? 'h2' : 'h3', on = block() === tag;
+          unlist();
+          exec('formatBlock', on ? 'div' : tag);
+          notesSetSelOffsets(ed, keep);
+          break;
+        }
+        case 'ul': case 'ol':
+          unhead();
+          exec(action === 'ul' ? 'insertUnorderedList' : 'insertOrderedList');
+          notesSetSelOffsets(ed, keep);
+          break;
+        case 'clear':
+          // With a bare cursor, "clear" means the line the cursor is on.
+          if (sel.isCollapsed && sel.modify) {
+            sel.modify('move', 'backward', 'paragraphboundary');
+            sel.modify('extend', 'forward', 'paragraphboundary');
+          }
+          exec('removeFormat');
+          unlist();
+          unhead();
+          if (keep) notesSetSelOffsets(ed, keep); else sel.collapseToEnd();
+          break;
+        case 'hr':
+          exec('insertHorizontalRule');
+          break;
+        default:
+          exec('insertText', action);
+      }
+      scheduleSave();
+      readActive();
     }
 
     // ── GPS pin — a geotagged point reference dropped into the note ──
@@ -7413,45 +7630,41 @@
       toast.success(`GPS pin ${pt.number} added`);
     }
 
-    // Toolbar button definitions
-    const tbBtns = [
-      { label: 'B',  title: 'Bold',        cmd: 'bold',        style: { fontWeight: 700 } },
-      { label: 'I',  title: 'Italic',       cmd: 'italic',      style: { fontStyle: 'italic' } },
-      { label: 'H1', title: 'Heading 1',    cmd: 'formatBlock', val: 'H2' },
-      { label: 'H2', title: 'Heading 2',    cmd: 'formatBlock', val: 'H3' },
-      { label: '•',  title: 'Bullet list',  cmd: 'insertUnorderedList' },
-      { label: '1.', title: 'Numbered list',cmd: 'insertOrderedList' },
-      { label: '—',  title: 'Horizontal rule', cmd: 'insertHorizontalRule' },
-      { label: 'Tx', title: 'Clear formatting', cmd: 'removeFormat' },
+    // Toolbar: [action, title, label] — a null is a divider. The first six
+    // are on / off formats and show their state; the last three type a symbol.
+    const tools = [
+      ['bold', 'Bold', <Ico.Bold />], ['italic', 'Italic', <Ico.Italic />], null,
+      ['h1', 'Heading 1', 'H1'], ['h2', 'Heading 2', 'H2'],
+      ['ul', 'Bullet list', <Ico.ListBullet />], ['ol', 'Numbered list', <Ico.ListNum />],
+      ['hr', 'Horizontal rule', '—'], ['clear', 'Clear formatting', 'Tx'], null,
+      ['°', 'Insert °', '°'], ['′', 'Insert ′', '′'], ['″', 'Insert ″', '″'], null,
     ];
+    const toggles = ['bold', 'italic', 'h1', 'h2', 'ul', 'ol'];
+    // A press on the toolbar must not take the cursor out of the note; the
+    // action runs on the click. The row wraps on a phone so nothing is hidden.
+    const hold = e => e.preventDefault();
 
     return (
       <div className="flex flex-col h-full" style={{ background: FBC.field }}>
         <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />
         {/* Formatting toolbar */}
-        <div style={{
-          display: 'flex', gap: 4, padding: '6px 10px', overflowX: 'auto',
-          borderBottom: '1px solid #E5E1D8', background: '#F5F1E8', flexShrink: 0,
-        }}>
-          {tbBtns.map(btn => (
-            <button key={btn.label}
-              onPointerDown={e => { e.preventDefault(); execCmd(btn.cmd, btn.val); }}
-              title={btn.title}
-              style={{
-                minWidth: 32, height: 32, padding: '0 8px', borderRadius: 7,
-                border: '1px solid #D4CFCA', background: FBC.field, cursor: 'pointer',
-                fontSize: 13, fontFamily: FBF.ui, color: FBC.heading,
-                flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                ...btn.style,
-              }}>
-              {btn.label}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-1.5 px-2.5 py-1.5 flex-shrink-0 bg-fb-page border-b border-fb-border">
+          {tools.map((tl, i) => tl === null
+            ? <span key={i} className="w-px h-5 bg-fb-border flex-shrink-0" />
+            : (
+              <button key={tl[0]} title={tl[1]}
+                aria-pressed={toggles.includes(tl[0]) ? !!active[tl[0]] : undefined}
+                onPointerDown={hold} onMouseDown={hold} onClick={() => fmt(tl[0])}
+                className={`h-9 min-w-[40px] px-2 rounded-lg font-semibold border flex-shrink-0 inline-flex items-center justify-center ${typeof tl[2] === 'string' && tl[2].length === 1 ? 'text-lg leading-none' : 'text-sm'} ${active[tl[0]]
+                  ? 'bg-fb-cover border-fb-cover text-white' : 'bg-fb-page-alt border-fb-border text-fb-heading active:bg-fb-page-deep'}`}>
+                {tl[2]}
+              </button>
+            ))}
           <button onPointerDown={e => { e.preventDefault(); savePinRange(); }}
             onClick={() => setPinOpen(true)}
-            title="Drop a GPS pin at your position"
-            className="h-8 px-2.5 ml-1 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 bg-fb-accent-pale border border-fb-accent text-fb-heading">
-            <Ico.Pin size={14} /> Drop GPS pin
+            title="Drop a GPS pin at your position" aria-label="Drop a GPS pin at your position"
+            className="h-9 w-10 rounded-lg inline-flex items-center justify-center flex-shrink-0 bg-fb-accent-pale border border-fb-accent text-fb-heading">
+            <Ico.Pin size={18} />
           </button>
         </div>
         {pinOpen && (
@@ -7465,13 +7678,7 @@
           suppressContentEditableWarning
           onInput={scheduleSave}
           spellCheck
-          style={{
-            flex: 1, minHeight: 0, overflowY: 'auto',
-            padding: '16px 18px', outline: 'none',
-            fontFamily: FBF.hand, fontSize: 18,
-            lineHeight: 1.7, color: FBC.ink,
-            caretColor: FBC.accent,
-          }}
+          className="fb-notes flex-1 min-h-0 overflow-y-auto px-[18px] py-4 outline-none font-handwritten text-[18px] leading-[1.7] text-fb-ink caret-fb-accent"
         />
       </div>
     );
@@ -7940,12 +8147,14 @@
     const [photos, setPhotos] = useState(page.photos || []);
     const [urlMap, setUrlMap] = useState({}); // photoRef -> dataUrl, for rendering
     const [expandedId, setExpandedId] = useState(null);
+    const [openPhotos, setOpenPhotos] = useState({});   // photo id -> true while its details are showing
     const [uploading, setUploading] = useState(false);
     const [camKey, setCamKey] = useState(0);
     const fileRef = useRef(null);
     const camRef  = useRef(null);
     const toast   = useToast();
     const project = DB.getProject(projectId);
+    const pointRows = project ? fbGeo.rowPoints(project) : [];   // for the Pt # on each photo's banner
 
     // Standalone voice notes on this page (per-photo memos live on the photo)
     const [voiceNotes, setVoiceNotes] = useState(page.voiceNotes || []);
@@ -8370,32 +8579,49 @@
                 onAddPoint={() => adoptPoint('voice', v.id)} />
             </VoiceCard>
           ))}
-          {photos.map((ph, i) => (
-            <div key={ph.id} style={{ flexShrink: 0, borderRadius: 16, overflow: 'hidden', border: '1px solid #E5E1D8',
-                                      background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-              <div style={{ position: 'relative', flexShrink: 0 }}>
+          {photos.map((ph, i) => {
+            // A card is the picture and a one-line banner. The note, position,
+            // point and voice memos stay behind the banner until it is tapped.
+            const open = !!openPhotos[ph.id];
+            const pt = fbGeo.mediaPoint(ph, project, 'photo', pointRows);
+            const memos = (ph.voice || []).length;
+            const noteLine = (ph.note || '').trim().split('\n')[0];
+            const finding = !!locating[ph.id];
+            return (
+            <div key={ph.id} data-photo-card={ph.id} className="flex-shrink-0 rounded-xl overflow-hidden bg-fb-page-alt border border-fb-border">
+              <div className="relative">
                 <img src={photoUrl(ph) || ''} alt={`Photo ${i + 1}`}
                      onClick={() => setExpandedId(ph.id)}
-                     style={{ width: '100%', height: 160, minHeight: 160, display: 'block', cursor: 'zoom-in',
-                              objectFit: 'cover', objectPosition: 'center', flexShrink: 0 }} />
-                <button onClick={() => deletePhoto(ph.id)}
-                  style={{ position: 'absolute', top: 8, right: 8, width: 32, height: 32,
-                           borderRadius: '50%', background: 'rgba(0,0,0,0.5)', border: 'none',
-                           display: 'flex', alignItems: 'center', justifyContent: 'center',
-                           color: '#fff', cursor: 'pointer' }}>
+                     className="block w-full h-40 object-cover object-center cursor-zoom-in" />
+                <button onClick={() => deletePhoto(ph.id)} title="Delete photo"
+                  className="absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center text-white bg-black/50">
                   <Ico.Trash />
                 </button>
               </div>
-              <div style={{ padding: 12, flexShrink: 0 }}>
+              <button data-photo-banner="" aria-expanded={open}
+                onClick={() => setOpenPhotos(o => ({ ...o, [ph.id]: !o[ph.id] }))}
+                className="w-full h-11 px-3 flex items-center gap-2 text-left active:bg-fb-page-deep">
+                {pt && (pt.number
+                  ? <span className="font-data text-[13px] text-fb-ink flex-shrink-0">Pt {pt.number}</span>
+                  : <span className="text-fb-ink-muted flex-shrink-0"><Ico.Pin size={14} /></span>)}
+                {finding && <span className="text-xs text-fb-ink-muted flex-shrink-0">Locating…</span>}
+                <span className={`flex-1 min-w-0 truncate ${noteLine ? 'font-handwritten text-[17px] text-fb-ink' : 'text-xs text-fb-ink-faint'}`}>
+                  {noteLine || ((pt || memos || finding) ? '' : 'Add note, point or voice memo')}
+                </span>
+                {memos > 0 && (
+                  <span aria-label={`${memos} voice memo${memos === 1 ? '' : 's'}`}
+                    className="flex items-center gap-1 font-data text-[13px] text-fb-ink-muted flex-shrink-0"><Ico.Mic size={14} />{memos}</span>
+                )}
+                <span className="text-xs text-fb-ink-muted flex-shrink-0">{open ? '▾' : '▸'}</span>
+              </button>
+              {open && (
+              <div className="px-3 pb-3 border-t border-fb-border">
                 <textarea
                   value={ph.note}
                   onChange={e => updateNote(ph.id, e.target.value)}
                   placeholder="Notes for this photo…"
                   rows={2}
-                  style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, resize: 'none',
-                           borderRadius: 8, border: '1px solid #E5E1D8', padding: '8px 10px',
-                           fontFamily: FBF.hand, fontSize: 15, outline: 'none',
-                           background: FBC.page, color: FBC.ink }}
+                  className="w-full resize-none mt-3 rounded-lg px-2.5 py-2 font-handwritten text-[17px] text-fb-ink bg-fb-page border border-fb-border outline-none placeholder:text-fb-ink-faint"
                 />
                 <MediaGeoRow rec={ph} source="photo" project={project} locating={!!locating[ph.id]}
                   onNumber={val => setNumber('photo', ph.id, val)}
@@ -8417,8 +8643,10 @@
                   <Ico.Mic size={14} /> Add voice memo
                 </button>
               </div>
+              )}
             </div>
-          ))}
+            );
+          })}
         </div>
         {recorder && (
           <VoiceRecorderSheet projectId={projectId}
@@ -9109,7 +9337,8 @@
     const [colModalForm, setColModalForm] = useState({});
     const [templateModal, setTemplateModal] = useState(false);
     const [customTemplates, setCustomTemplates] = useState(() => DB.getCustomTemplates());
-    const [openTbMenu, setOpenTbMenu]   = useState(null); // 'insert' | 'formulas' | 'view' | null
+    const [openTbMenu, setOpenTbMenu]   = useState(null); // 'insert' | 'formulas' | 'view' | 'edit' | null
+    const [insertSub, setInsertSub]     = useState(null); // 'rows' | 'cols' — the list open inside Insert ▾
     const [csvImportModal, setCsvImportModal] = useState(null); // null | { parsed, useHeader }
     const [gpsOpen, setGpsOpen]         = useState(false);  // GPS capture sheet (points pages)
     const [srcFilter, setSrcFilter]     = useState('all');  // points pages: 'all' | a fbGeo.SOURCES key
@@ -9142,6 +9371,9 @@
     const fillDragRef      = useRef({ active: false, startRow: -1, startCol: -1 });
     const lpTimerRef       = useRef(null);  // long-press timer ID (touch only)
     const lpStartRef       = useRef(null);  // { x, y, ri, ci } at touch pointerdown
+    const touchDragRef     = useRef(null);  // a row / column under a finger: { kind, from, over, x, y, active, timer }
+    const touchDragDoneRef = useRef(0);     // when the last touch drag was dropped (ms)
+    const touchDragFns     = useRef({});    // this render's move / end handlers, for the document listeners
     // ── Formula ref selection (mobile range picker) ─────────────
     const [formulaRefSel, setFormulaRefSel] = useState(null);
     // { r1, c1, r2, c2 } — range highlighted for formula ref insertion
@@ -9165,6 +9397,25 @@
       return () => document.removeEventListener('pointerup', fn);
     }, []);
 
+    // Touch drag of a row or column: follow the finger wherever it goes, and
+    // keep the table from scrolling under it while something is being carried.
+    useEffect(() => {
+      const move = e => touchDragFns.current.move && touchDragFns.current.move(e);
+      const end  = e => touchDragFns.current.end && touchDragFns.current.end(e);
+      const hold = e => { if (touchDragRef.current && touchDragRef.current.active) e.preventDefault(); };
+      document.addEventListener('pointermove', move);
+      document.addEventListener('pointerup', end);
+      document.addEventListener('pointercancel', end);
+      document.addEventListener('touchmove', hold, { passive: false });
+      return () => {
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', end);
+        document.removeEventListener('pointercancel', end);
+        document.removeEventListener('touchmove', hold);
+        if (touchDragRef.current && touchDragRef.current.timer) clearTimeout(touchDragRef.current.timer);
+      };
+    }, []);
+
     // Close toolbar dropdown on outside click
     useEffect(() => {
       if (!openTbMenu) return;
@@ -9176,6 +9427,17 @@
       document.addEventListener('pointerdown', fn, true);
       return () => document.removeEventListener('pointerdown', fn, true);
     }, [openTbMenu]);
+
+    // Keep the open dropdown on screen: it opens under its button, which on a
+    // phone can run it off the right edge. It also scrolls if it is too tall.
+    React.useLayoutEffect(() => {
+      const el = tbMenuRef.current;
+      if (!openTbMenu || !el) return;
+      const left = Math.max(4, Math.min(menuPos.left, window.innerWidth - el.offsetWidth - 4));
+      const maxH = Math.max(120, Math.floor(window.innerHeight - menuPos.top - 6));
+      if (left !== menuPos.left || maxH !== menuPos.maxH) setMenuPos({ top: menuPos.top, left, maxH });
+    }, [openTbMenu, insertSub, menuPos.left, menuPos.top, menuPos.maxH]);
+    const tbPanelAt = { top: menuPos.top, left: menuPos.left, maxHeight: menuPos.maxH, overflowY: 'auto' };
 
     // Initialise / refresh HyperFormula whenever rows or columns change
     useEffect(() => {
@@ -9975,12 +10237,17 @@
       setColModal(null);
     }
 
-    function addColumn() {
+    // A new, empty column at position `idx` (columns.length = at the end).
+    function insertColAt(idx) {
       const newId = 'c_' + Date.now();
-      const updated = [...columns, { id: newId, label: 'Col ' + (columns.length + 1), colType: 'num', width: 80 }];
+      const at = Math.max(0, Math.min(columns.length, idx));
+      const updated = [...columns];
+      updated.splice(at, 0, { id: newId, label: 'Col ' + (columns.length + 1), colType: 'num', width: 80 });
       const updatedRows = rows.map(r => ({ ...r, cells: { ...r.cells, [newId]: '' } }));
+      setRows(updatedRows);
       DB.updatePage(projectId, page.id, { columns: updated, rows: updatedRows });
       onReload();
+      if (activeCell) { setActiveCell({ rowIdx: activeCell.rowIdx, colIdx: at }); setSelectionAnchor(null); }
     }
 
     // ── CSV Import (Points pages only) ──────────────────────────────────
@@ -10113,6 +10380,7 @@
     // ── Column drag-and-drop ─────────────────────────────────────────
 
     function handleColDragStart(e, ci) {
+      if (touchDragRef.current) { e.preventDefault(); return; }   // a finger uses the long-press route below
       setDragStartCol(ci);
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', String(ci));
@@ -10124,12 +10392,7 @@
     }
     function handleColDrop(e, ci) {
       e.preventDefault();
-      if (dragStartCol !== null && dragStartCol !== ci) {
-        const reordered = [...columns];
-        const [moved] = reordered.splice(dragStartCol, 1);
-        reordered.splice(ci, 0, moved);
-        persistColumns(reordered);
-      }
+      if (dragStartCol !== null) moveCol(dragStartCol, ci);
       setDragStartCol(null); setDragOverCol(null);
     }
     function handleColDragEnd() { setDragStartCol(null); setDragOverCol(null); }
@@ -10137,6 +10400,7 @@
     // ── Row drag-and-drop ────────────────────────────────────────────
 
     function handleRowDragStart(e, ri) {
+      if (touchDragRef.current) { e.preventDefault(); return; }   // a finger uses the long-press route below
       setDragStartRow(ri);
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', String(ri));
@@ -10148,15 +10412,78 @@
     }
     function handleRowDrop(e, ri) {
       e.preventDefault();
-      if (dragStartRow !== null && dragStartRow !== ri) {
-        const reordered = [...rows];
-        const [moved] = reordered.splice(dragStartRow, 1);
-        reordered.splice(ri, 0, moved);
-        persistRows(reordered);
-      }
+      if (dragStartRow !== null) moveRow(dragStartRow, ri);
       setDragStartRow(null); setDragOverRow(null);
     }
     function handleRowDragEnd() { setDragStartRow(null); setDragOverRow(null); }
+
+    // A row or column lands at the place of the one it is dropped on.
+    function moveRow(from, to) {
+      if (from === to || !rows[from] || !rows[to]) return;
+      const reordered = [...rows];
+      const [moved] = reordered.splice(from, 1);
+      reordered.splice(to, 0, moved);
+      persistRows(reordered);
+    }
+    function moveCol(from, to) {
+      if (from === to || !columns[from] || !columns[to]) return;
+      const reordered = [...columns];
+      const [moved] = reordered.splice(from, 1);
+      reordered.splice(to, 0, moved);
+      persistColumns(reordered);
+    }
+
+    // ── Touch: long-press a row number or a column header, then drag ──
+    // A finger cannot start an HTML drag, so touch has its own route to
+    // moveRow / moveCol. Holding still for 400 ms picks the row or column up.
+    // A short tap keeps its meaning, and a finger that moves first scrolls.
+    function touchDragStart(e, kind, from) {
+      if (e.pointerType !== 'touch') return;
+      touchDragEnd();
+      const st = { kind, from, over: from, x: e.clientX, y: e.clientY, active: false, timer: null };
+      st.timer = setTimeout(() => {
+        st.timer = null;
+        st.active = true;
+        if (navigator.vibrate) navigator.vibrate(50);
+        if (kind === 'row') { setDragStartRow(from); setDragOverRow(from); }
+        else                { setDragStartCol(from); setDragOverCol(from); }
+      }, 400);
+      touchDragRef.current = st;
+    }
+    function touchDragMove(e) {
+      const st = touchDragRef.current;
+      if (!st || e.pointerType !== 'touch') return;
+      if (!st.active) {
+        if (Math.hypot(e.clientX - st.x, e.clientY - st.y) > 8) touchDragEnd();   // it is a scroll
+        return;
+      }
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const box = tableRef.current, rect = box && box.getBoundingClientRect(), EDGE = 44, SPEED = 10;
+      if (st.kind === 'row') {
+        const tr = el && el.closest('tr[data-row-idx]');
+        if (tr) { st.over = Number(tr.dataset.rowIdx); setDragOverRow(st.over); }
+        if (rect && e.clientY < rect.top + EDGE)    box.scrollTop -= SPEED;
+        if (rect && e.clientY > rect.bottom - EDGE) box.scrollTop += SPEED;
+      } else {
+        const c = el && el.closest('[data-col-idx], [data-cell-ci]');
+        if (c) { st.over = Number(c.dataset.colIdx ?? c.dataset.cellCi); setDragOverCol(st.over); }
+        if (rect && e.clientX < rect.left + EDGE)  box.scrollLeft -= SPEED;
+        if (rect && e.clientX > rect.right - EDGE) box.scrollLeft += SPEED;
+      }
+    }
+    // Lifting the finger drops it; anything else (a cancelled touch) puts it back.
+    function touchDragEnd(e) {
+      const st = touchDragRef.current;
+      if (!st || (e && e.pointerType !== 'touch')) return;
+      if (st.timer) clearTimeout(st.timer);
+      touchDragRef.current = null;
+      if (!st.active) return;
+      touchDragDoneRef.current = Date.now();      // the tap that follows the lift is not a tap
+      if (e && e.type === 'pointerup') (st.kind === 'row' ? moveRow : moveCol)(st.from, st.over);
+      setDragStartRow(null); setDragOverRow(null); setDragStartCol(null); setDragOverCol(null);
+    }
+    const justDragged = () => Date.now() - touchDragDoneRef.current < 400;
+    touchDragFns.current = { move: touchDragMove, end: touchDragEnd };
 
     // ── Template presets ──────────────────────────────────────────────
 
@@ -10434,6 +10761,7 @@
               e.preventDefault();
               const r = e.currentTarget.getBoundingClientRect();
               setMenuPos({ top: r.bottom + 4, left: r.left });
+              setInsertSub(null);
               setOpenTbMenu(m => m === 'insert' ? null : 'insert');
             }}>
             Insert ▾
@@ -10482,13 +10810,35 @@
           </button>
 
           {/* ── Dropdown panels — fixed-position, avoids toolbar overflow clipping ── */}
-          {openTbMenu === 'insert' && (
-            <div ref={tbMenuRef} className="dp-drop-panel" style={{ top: menuPos.top, left: menuPos.left }}>
-              <div className="dp-drop-section">Rows {page.type !== 'points' && '& Columns'}</div>
-              <button onClick={() => { addRow(); setOpenTbMenu(null); }}>＋ Row</button>
-              <button onClick={() => { addRows(5); setOpenTbMenu(null); }}>＋ 5 Rows</button>
+          {openTbMenu === 'insert' && (() => {
+            // Rows and Columns each open a short list in place. "Above / below" and
+            // "left / right" are placed from the selection, so they wait for one.
+            const sel = getSelectionBounds();
+            const pick = fn => () => { fn(); setOpenTbMenu(null); };
+            return (
+            <div ref={tbMenuRef} className="dp-drop-panel" style={tbPanelAt}>
+              <button aria-expanded={insertSub === 'rows'} onClick={() => setInsertSub(s => s === 'rows' ? null : 'rows')}>
+                <span className="flex-1">Rows</span><span>{insertSub === 'rows' ? '▾' : '▸'}</span>
+              </button>
+              {insertSub === 'rows' && (
+                <div className="dp-drop-sub">
+                  <button disabled={!sel} onClick={pick(() => insertRowAt(sel.minR, 'above'))}>＋1 above</button>
+                  <button disabled={!sel} onClick={pick(() => insertRowAt(sel.maxR, 'below'))}>＋1 below</button>
+                  <button onClick={pick(addRow)}>＋1 at end</button>
+                  <button onClick={pick(() => addRows(5))}>＋5 at end</button>
+                </div>
+              )}
               {page.type !== 'points' && (
-                <button onClick={() => { addColumn(); setOpenTbMenu(null); }}>＋ Column</button>
+                <button aria-expanded={insertSub === 'cols'} onClick={() => setInsertSub(s => s === 'cols' ? null : 'cols')}>
+                  <span className="flex-1">Columns</span><span>{insertSub === 'cols' ? '▾' : '▸'}</span>
+                </button>
+              )}
+              {page.type !== 'points' && insertSub === 'cols' && (
+                <div className="dp-drop-sub">
+                  <button disabled={!sel} onClick={pick(() => insertColAt(sel.minC))}>Left</button>
+                  <button disabled={!sel} onClick={pick(() => insertColAt(sel.maxC + 1))}>Right</button>
+                  <button onClick={pick(() => insertColAt(columns.length))}>End</button>
+                </div>
               )}
               {page.type === 'points' && (
                 <>
@@ -10511,9 +10861,10 @@
                 </>
               )}
             </div>
-          )}
+            );
+          })()}
           {openTbMenu === 'formulas' && (
-            <div ref={tbMenuRef} className="dp-drop-panel" style={{ top: menuPos.top, left: menuPos.left }}>
+            <div ref={tbMenuRef} className="dp-drop-panel" style={tbPanelAt}>
               <div className="dp-drop-section">Insert Formula</div>
               <button onClick={() => {
                 setOpenTbMenu(null);
@@ -10546,7 +10897,7 @@
             </div>
           )}
           {openTbMenu === 'view' && (
-            <div ref={tbMenuRef} className="dp-drop-panel" style={{ top: menuPos.top, left: menuPos.left, minWidth: 200 }}>
+            <div ref={tbMenuRef} className="dp-drop-panel" style={{ ...tbPanelAt, minWidth: 200 }}>
               <div className="dp-drop-section">Input</div>
               <button className="dp-drop-toggle" onClick={() => setDmsKeyboard(v => {
                   const next = !v;
@@ -10588,7 +10939,7 @@
             </div>
           )}
           {openTbMenu === 'edit' && (
-            <div ref={tbMenuRef} className="dp-drop-panel" style={{ top: menuPos.top, left: menuPos.left }}>
+            <div ref={tbMenuRef} className="dp-drop-panel" style={tbPanelAt}>
               <button disabled={!canUndo} onClick={() => { undoRows(); setOpenTbMenu(null); }}>↩ Undo</button>
               <div className="dp-drop-sep" />
               <div className="dp-drop-section">Clipboard</div>
@@ -10603,8 +10954,6 @@
               <button disabled={!activeCell} onClick={() => { if (activeCell) { selectEntireColumn(activeCell.colIdx); setOpenTbMenu(null); } }}>Select Column</button>
               <div className="dp-drop-sep" />
               <div className="dp-drop-section">Rows</div>
-              <button disabled={!activeCell} onClick={() => { if (activeCell) { insertRowAt(activeCell.rowIdx, 'above'); setOpenTbMenu(null); } }}>Insert Row Above</button>
-              <button disabled={!activeCell} onClick={() => { if (activeCell) { insertRowAt(activeCell.rowIdx, 'below'); setOpenTbMenu(null); } }}>Insert Row Below</button>
               <button disabled={!activeCell} onClick={() => { deleteSelectedRows(); setOpenTbMenu(null); }}>Delete Row(s)</button>
               <button disabled={!activeCell} onClick={() => { if (activeCell) { duplicateRow(activeCell.rowIdx); setOpenTbMenu(null); } }}>Duplicate Row</button>
             </div>
@@ -10765,16 +11114,18 @@
                 {/* Row number gutter */}
                 <th className="dp-row-num" style={{ position: 'sticky', top: 0, left: 0, zIndex: 3 }}>#</th>
                 {columns.map((col, ci) => (
-                  <th key={col.id}
+                  <th key={col.id} data-col-idx={ci}
                     draggable={page.type !== 'points'}
-                    className={`dp-col-header${activeCell && activeCell.colIdx === ci ? ' active-col' : ''}${dragOverCol === ci && dragStartCol !== ci ? ' dp-drag-over-col' : ''}`}
+                    className={`dp-col-header${activeCell && activeCell.colIdx === ci ? ' active-col' : ''}${dragOverCol === ci && dragStartCol !== ci ? ' dp-drag-over-col' : ''}${dragStartCol === ci ? ' dp-drag-src' : ''}`}
                     style={{ width: colWidth(col), minWidth: colWidth(col), cursor: page.type === 'points' ? 'default' : undefined }}
-                    onClick={() => page.type !== 'points' && openColModal(col)}
+                    onClick={() => page.type !== 'points' && !justDragged() && openColModal(col)}
+                    onPointerDown={page.type !== 'points' ? (e => touchDragStart(e, 'col', ci)) : undefined}
+                    onContextMenu={e => { if (touchDragRef.current) e.preventDefault(); }}
                     onDragStart={page.type !== 'points' ? (e => handleColDragStart(e, ci)) : undefined}
                     onDragOver={page.type !== 'points' ? (e => handleColDragOver(e, ci)) : undefined}
                     onDrop={page.type !== 'points' ? (e => handleColDrop(e, ci)) : undefined}
                     onDragEnd={page.type !== 'points' ? handleColDragEnd : undefined}
-                    title={page.type === 'points' ? 'PNEZD column — locked' : 'Drag to reorder · Tap to edit settings'}>
+                    title={page.type === 'points' ? 'PNEZD column — locked' : 'Drag (or long-press and drag) to reorder · Tap to edit settings'}>
                     <span style={{ fontSize: 7.5, color: 'rgba(156,163,175,0.6)', fontFamily: 'Courier New', marginRight: 3 }}>
                       {colLetter(ci)}
                     </span>
@@ -10793,21 +11144,24 @@
                 <tr>
                   <td colSpan={columns.length + 2}
                     style={{ textAlign: 'center', padding: '18px 10px', color: '#9CA3AF', fontStyle: 'italic', fontSize: 12, background: 'transparent', height: 'auto' }}>
-                               Tap + Row in the toolbar to begin
+                               Tap Insert ▾ → Rows in the toolbar to begin
                   </td>
                 </tr>
               )}
               {rows.map((row, ri) => rowHidden(row) ? null : (
                 <tr key={row.id} data-row-idx={ri}>
-                  {/* Row number — draggable to reorder */}
-                  <td className={`dp-row-num${activeCell && activeCell.rowIdx === ri ? ' active-row' : ''}${dragOverRow === ri && dragStartRow !== ri ? ' dp-drag-over-row' : ''}`}
+                  {/* Row number — tap to select the row; drag (long-press first, with a finger) to reorder */}
+                  <td className={`dp-row-num${activeCell && activeCell.rowIdx === ri ? ' active-row' : ''}${dragOverRow === ri && dragStartRow !== ri ? ' dp-drag-over-row' : ''}${dragStartRow === ri ? ' dp-drag-src' : ''}`}
                     draggable={true}
+                    onClick={() => { if (!justDragged()) { selectEntireRow(ri); if (tableRef.current) tableRef.current.focus(); } }}
+                    onPointerDown={e => touchDragStart(e, 'row', ri)}
+                    onContextMenu={e => { if (touchDragRef.current) e.preventDefault(); }}
                     onDragStart={e => handleRowDragStart(e, ri)}
                     onDragOver={e => handleRowDragOver(e, ri)}
                     onDrop={e => handleRowDrop(e, ri)}
                     onDragEnd={handleRowDragEnd}
                     onDragLeave={() => { if (dragOverRow === ri) setDragOverRow(null); }}
-                    title={row.geo ? `${fbGeo.SOURCES[row.geo.source]?.label || 'GPS point'} · ${fbGeo.fmtAcc(row.geo.acc)}` : 'Drag to reorder row'}
+                    title={row.geo ? `${fbGeo.SOURCES[row.geo.source]?.label || 'GPS point'} · ${fbGeo.fmtAcc(row.geo.acc)}` : 'Tap to select the row · Drag (or long-press and drag) to reorder'}
                     style={row.geo ? { background: FBC.warnPale } : undefined}>
                     {row.geo
                       ? <div className="flex justify-center text-fb-heading">{React.createElement(SOURCE_ICO[row.geo.source] || Ico.Pin, { size: 13 })}</div>
@@ -11092,7 +11446,7 @@
               </span>
             );
           })()}
-          <span className="ml-auto text-fb-muted" style={{ fontSize: 10 }}>Shift+click/arrow to select range · Ctrl+C/V · Del clears · drag # to reorder</span>
+          <span className="ml-auto text-fb-muted text-[10px]">Tap # to select a row · long-press # or a header, then drag, to move it · Shift+click/arrow selects a range · Ctrl+C/V · Del clears</span>
         </div>
 
         {/* ── DMS Numpad — shown when editing a DMS column cell ── */}
