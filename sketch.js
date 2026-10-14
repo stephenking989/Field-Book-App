@@ -197,6 +197,20 @@ const SketchIco = {
       <line x1="15.5" y1="10" x2="18" y2="10" strokeWidth="1.2"/>
     </svg>
   ),
+  // Menu icons (Feather line style, same as index.html's Ico)
+  Trash: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6"/>
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+    </svg>
+  ),
+  Scissors: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+      <line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>
+    </svg>
+  ),
 };
 
 const TOOLS = [
@@ -2855,7 +2869,7 @@ function PointInfoCard({ shape: s, onUpdate, projectId, onPtNumChange, inline = 
 
   // Field definitions: shape key, data-page column, visibility toggle field, button label
   const FIELDS = [
-    { key: 'ptNum',    col: 'col_ptnum', show: 'showNum',      label: 'Pt #', ph: 'Point #'     },
+    { key: 'ptNum',    col: 'col_ptnum', show: 'showNum',      label: 'Pt #', ph: 'Pt #'        },
     { key: 'northing', col: 'col_north', show: 'showNorthing', label: 'N',    ph: 'Northing'    },
     { key: 'easting',  col: 'col_east',  show: 'showEasting',  label: 'E',    ph: 'Easting'     },
     { key: 'elev',     col: 'col_elev',  show: 'showElev',     label: 'Z',    ph: 'Elevation'   },
@@ -3092,15 +3106,13 @@ function PointDeletePromptModal({ pointCount, onPermanent, onSketchOnly, onCance
         boxShadow: '0 8px 32px rgba(0,0,0,0.35)',
       }}>
         <p style={{ fontSize: 15, fontWeight: 600, color: '#1C3829', margin: '0 0 8px' }}>Delete {plural}?</p>
-        <p style={{ fontSize: 12, color: '#6B7280', margin: '0 0 20px', lineHeight: 1.5 }}>
-          Choose whether to remove {plural} from the canvas only, or permanently from the entire project.
-        </p>
+        <div style={{ height: 12 }} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <button onClick={onPermanent} style={{
             padding: '12px 16px', borderRadius: 10, border: 'none', cursor: 'pointer',
             background: '#7F1D1D', color: '#FECACA', fontWeight: 600, fontSize: 13, textAlign: 'left',
           }}>
-            🗑 Delete Permanently
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><SketchIco.Trash /> Delete Permanently</span>
             <div style={{ fontSize: 10, fontWeight: 400, color: 'rgba(254,202,202,0.7)', marginTop: 2 }}>
               Removes from data page and all sketch canvases
             </div>
@@ -3109,7 +3121,7 @@ function PointDeletePromptModal({ pointCount, onPermanent, onSketchOnly, onCance
             padding: '12px 16px', borderRadius: 10, border: 'none', cursor: 'pointer',
             background: '#1C3829', color: '#FDFAF4', fontWeight: 600, fontSize: 13, textAlign: 'left',
           }}>
-            ✂ Remove from Sketch Only
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><SketchIco.Scissors /> Remove from Sketch Only</span>
             <div style={{ fontSize: 10, fontWeight: 400, color: 'rgba(253,250,244,0.55)', marginTop: 2 }}>
               Keeps the point in the data page
             </div>
