@@ -672,7 +672,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.183';
+  const APP_VERSION = '1.184';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -4860,6 +4860,13 @@
       ? `Phone GPS${Number.isFinite(g.pos.acc) ? ` ±${g.pos.acc < 10 ? g.pos.acc.toFixed(1) : Math.round(g.pos.acc)} m` : ''}`
       : g.pos.source === 'manual' ? 'Entered by hand' : '';
     const duration = fbGnss.sessionDuration(g.startUT, g.stopUT);
+    // Local clock time beside each UT time, in the page's zone; a local date
+    // that isn't the UT observation date is marked (-1 d) / (+1 d).
+    const zone = fbGnss.localZone(g.obsDate, g.tz);
+    const localOf = ut => {
+      const l = fbGnss.utToLocal(g.obsDate, ut, g.tz);
+      return l ? l.time + (l.dayShift ? ` (${l.dayShift < 0 ? '-' : '+'}1 d)` : '') : '';
+    };
     const method = g.method === 'Other' ? (g.methodOther.trim() ? `Other: ${g.methodOther.trim()}` : 'Other') : g.method;
     y = fieldRow(y, [
       ['Approx Lat', fbGnss.fmtLatLonDMS(g.pos.lat, 'lat'), true],
@@ -4868,13 +4875,14 @@
       ['Ht — orthometric (CGVD2013)', ht.H === null ? '' : `${ht.H.toFixed(1)} m`, true],
     ]);
     y = fieldRow(y, [
+      [`Start Time (${zone})`, localOf(g.startUT), true], [`Stop Time (${zone})`, localOf(g.stopUT), true],
       ['Start Time (UT)', g.startUT, true], ['Stop Time (UT)', g.stopUT, true],
-      ['Session Length', duration ? duration.text : '', true], ['Recording Interval', unit(g.interval, ' s'), true],
     ]);
     y = fieldRow(y, [
+      ['Session Length', duration ? duration.text : '', true], ['Recording Interval', unit(g.interval, ' s'), true],
       ['Elev. Mask', unit(g.elevMask, '°'), true], ['PDOP', g.pdop, true],
-      ['Observation Method', method], ['Position From', posFrom],
     ]);
+    y = fieldRow(y, [['Observation Method', method], ['Position From', posFrom]]);
 
     y = section(y + 1.5, 'Antenna Height');
     const top = y, drawW = 56, drawH = drawW * 330 / 240, colW = CW - drawW - 6;
@@ -5034,9 +5042,10 @@
     });
     pdf.autoTable({
       ...tableBase, startY: pdf.lastAutoTable.finalY + 4, margin: wideMargin, tableWidth: CW,
-      head: [['Time (UT)', 'General and weather observations']],
-      body: padRows(g.observations.filter(o => String(o.time).trim() || String(o.text).trim()).map(o => [safe(o.time), safe(o.text)]), 4, 2),
-      columnStyles: { 0: { cellWidth: 26, font: F.mono, halign: 'center' } },
+      head: [[`Time (${zone})`, 'Time (UT)', 'General and weather observations']],
+      body: padRows(g.observations.filter(o => String(o.time).trim() || String(o.text).trim())
+        .map(o => [localOf(o.time), safe(o.time), safe(o.text)]), 4, 3),
+      columnStyles: { 0: { cellWidth: 30, font: F.mono, halign: 'center' }, 1: { cellWidth: 24, font: F.mono, halign: 'center' } },
     });
 
     // ═══ Page 3 — Site Obstruction Diagram ══════════════════════════════════
@@ -11922,7 +11931,7 @@
 
   // A UT time (HH:MM:SS). "Now" stamps the current UTC time; 140322 typed on a
   // number pad is tidied to 14:03:22 when the field is left.
-  function GnTime({ label, value, onChange }) {
+  function GnTime({ label, value, onChange, now = true }) {
     const bad = !!value.trim() && fbGnss.parseHMS(value) === null;
     function tidy() {
       const secs = fbGnss.parseHMS(value);
@@ -11931,7 +11940,33 @@
     return (
       <GnField label={label} value={value} onChange={onChange} onBlur={tidy} mono bad={bad}
         inputMode="numeric" placeholder="HH:MM:SS"
-        action={<button type="button" onClick={() => onChange(fbGnss.utcTimeHMS())} className={GN.chip}>Now</button>} />
+        action={now && <button type="button" onClick={() => onChange(fbGnss.utcTimeHMS())} className={GN.chip}>Now</button>} />
+    );
+  }
+
+  // The local clock time of a UT time, in the page's zone (g.tz). Only the UT
+  // time is stored: a valid local entry is converted as it is typed, and the
+  // field shows the converted UT value again once it is left. A local date
+  // that isn't the UT observation date is marked −1 d / +1 d.
+  function GnLocalTime({ label, ut, obsDate, tz, onChange }) {
+    const loc = fbGnss.utToLocal(obsDate, ut, tz);
+    const shown = loc ? loc.time : '';
+    const [text, setText] = useState(shown);
+    const focused = useRef(false);
+    useEffect(() => { if (!focused.current) setText(shown); }, [shown]);
+    const bad = !!text.trim() && fbGnss.parseHMS(text) === null;
+    function edit(v) {
+      setText(v);
+      if (!v.trim()) onChange('');
+      else { const u = fbGnss.localToUT(obsDate, v, tz); if (u !== null) onChange(u); }
+    }
+    const zone = fbGnss.localZone(obsDate, tz);
+    return (
+      <GnField label={`${label} (${loc ? loc.zone : zone})`} value={text} onChange={edit} mono bad={bad}
+        onFocus={() => { focused.current = true; }} onBlur={() => { focused.current = false; setText(shown); }}
+        inputMode="numeric" placeholder="HH:MM:SS"
+        unit={loc && loc.dayShift ? `${loc.dayShift < 0 ? '−' : '+'}1 d` : undefined}
+        action={<button type="button" onClick={() => { focused.current = false; onChange(fbGnss.utcTimeHMS()); }} className={GN.chip}>Now</button>} />
     );
   }
 
@@ -12126,23 +12161,19 @@
     const cell = (c, key) => !c ? <td key={key}></td>
       : c.calc ? <td key={key} className="gn-calc">{fbGnss.fmt4(c.v)}<span className="gn-calc-tag">calc</span></td>
       : <td key={key}>{fbGnss.fmt4(c.v) || '—'}</td>;
-    const note = (name, n) => n && (n.tone === 'warn'
-      ? <Notice className="mb-3">{name}: {n.text}</Notice>
-      : <p className="font-data text-[13px] text-fb-ink-muted mb-3">{name}: {n.text}</p>);
-    const summary = (set, name, sym) => {
-      const st = res[set];
-      if (!st.all) return null;
-      return (
-        <p className={`font-data text-[13px] ${st.flag ? 'text-fb-warn font-semibold' : 'text-fb-ink-muted'}`}>
-          {name} {gnBar(sym)} {fbGnss.fmt4(st.all.avg)} · n {st.all.n} · range {fbGnss.fmt4(st.all.range)}
-          {st.flag && ` — over the ${fbGnss.fmt4(res.tol)} m tolerance`}
-        </p>
-      );
-    };
+    // Only what puts the result at risk is spelled out: a range over the
+    // tolerance, and an ARP more than 10 mm below zero (the PDF keeps the
+    // within-noise note as part of the record).
+    const warn = (name, n) => n && n.tone === 'warn' && <Notice className="mb-3">{name}: {n.text}</Notice>;
+    const overTol = (set, name) => res[set].flag && (
+      <Notice className="mb-3">
+        {name} range {fbGnss.fmt4(res[set].all.range)} m is over the {fbGnss.fmt4(res.tol)} m tolerance.
+      </Notice>
+    );
 
     return (
       <>
-        <table className="gn-table mb-2">
+        <table className="gn-table mb-3">
           <colgroup><col style={{ width: 30 }} /><col /><col /><col /><col /></colgroup>
           <thead>
             <tr>
@@ -12176,15 +12207,12 @@
             </tr>
           </tbody>
         </table>
-        <div className="mb-3">
-          {summary('slant', 'Slant', 'S̄')}
-          {summary('vert', 'Vertical', 'V̄')}
-        </div>
-
+        {overTol('slant', 'Slant')}
+        {overTol('vert', 'Vertical')}
         {res.slantErr && <Notice tone="error" className="mb-3">Slant: {res.slantErr}</Notice>}
         {res.vertErr && <Notice tone="error" className="mb-3">Vertical: {res.vertErr}</Notice>}
-        {note('Slant', res.slantNote)}
-        {note('Vertical', res.vertNote)}
+        {warn('Slant', res.slantNote)}
+        {warn('Vertical', res.vertNote)}
 
         <table className="gn-table">
           <colgroup><col /><col style={{ width: '27%' }} /><col style={{ width: '27%' }} /></colgroup>
@@ -12870,8 +12898,9 @@
         {rows.map(o => (
           <div key={o.id} className="py-2 border-b border-fb-border/60">
             <div className="flex items-end gap-2">
-              <div className="flex-1 min-w-0">
-                <GnTime label="Time (UT)" value={o.time} onChange={v => setRow(o.id, { time: v })} />
+              <div className="flex-1 min-w-0 grid grid-cols-2 gap-x-3">
+                <GnLocalTime label="Time" ut={o.time} obsDate={g.obsDate} tz={g.tz} onChange={v => setRow(o.id, { time: v })} />
+                <GnTime label="Time (UT)" now={false} value={o.time} onChange={v => setRow(o.id, { time: v })} />
               </div>
               <button type="button" onClick={() => removeRow(o.id)} title="Remove this observation"
                 className="w-11 h-11 flex-shrink-0 flex items-center justify-center rounded-lg text-fb-error active:bg-fb-page-deep">
@@ -13117,8 +13146,10 @@
 
           <GnSection title="Session">
             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-              <GnTime label="Start Time (UT)" value={g.startUT} onChange={v => update({ startUT: v })} />
-              <GnTime label="Stop Time (UT)" value={g.stopUT} onChange={v => update({ stopUT: v })} />
+              <GnLocalTime label="Start Time" ut={g.startUT} obsDate={g.obsDate} tz={g.tz} onChange={v => update({ startUT: v })} />
+              <GnLocalTime label="Stop Time" ut={g.stopUT} obsDate={g.obsDate} tz={g.tz} onChange={v => update({ stopUT: v })} />
+              <GnTime label="Start Time (UT)" now={false} value={g.startUT} onChange={v => update({ startUT: v })} />
+              <GnTime label="Stop Time (UT)" now={false} value={g.stopUT} onChange={v => update({ stopUT: v })} />
               <GnReadout label="Session Length" value={duration ? duration.text : ''} />
               <GnField label="Recording Interval" mono inputMode="decimal" unit="s" {...field('interval')} />
               <GnField label="Elev. Mask" mono inputMode="decimal" unit="°" {...field('elevMask')} />

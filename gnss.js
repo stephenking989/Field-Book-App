@@ -74,6 +74,70 @@
     return { secs, text: `${h} h ${pad2(m)} m ${pad2(s)} s` };
   }
 
+  // ─── Local time beside UT ──────────────────────────────────────────────────
+  // UT stays the stored time; the local clock time is worked out from it. A
+  // page keeps the IANA zone it was made in (`tz`, e.g. 'America/Halifax'), so
+  // daylight time follows the observation date and the record reads the same
+  // on any device. A blank or unknown zone falls back to the device's.
+  function deviceZone() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; }
+  }
+  function zoneOk(tz) {
+    if (!tz) return undefined;
+    try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return tz; } catch (e) { return undefined; }
+  }
+  // Minutes east of UTC in zone `tz` at the instant `ms`.
+  function zoneOffset(tz, ms) {
+    try {
+      const p = {};
+      new Intl.DateTimeFormat('en-US', { timeZone: zoneOk(tz), hourCycle: 'h23', year: 'numeric', month: '2-digit',
+        day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        .formatToParts(new Date(ms)).forEach(x => { p[x.type] = x.value; });
+      const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second);
+      return Math.round((asUTC - Math.floor(ms / 1000) * 1000) / 60000);
+    } catch (e) {
+      return -new Date(ms).getTimezoneOffset();
+    }
+  }
+  // The zone's short name at `ms` ('ADT', 'AST'), or its offset ('UTC-3').
+  function zoneName(tz, ms) {
+    let name = '';
+    try {
+      const part = new Intl.DateTimeFormat('en-US', { timeZone: zoneOk(tz), timeZoneName: 'short' })
+        .formatToParts(new Date(ms)).find(x => x.type === 'timeZoneName');
+      name = part ? part.value : '';
+    } catch (e) { /* no Intl: use the offset */ }
+    if (/^[A-Z]{2,5}$/.test(name)) return name;
+    const off = zoneOffset(tz, ms), a = Math.abs(off);
+    if (!off) return 'UTC';
+    return `UTC${off < 0 ? '-' : '+'}${Math.floor(a / 60)}${a % 60 ? ':' + pad2(a % 60) : ''}`;
+  }
+  // UTC midnight of the (UT) observation date, or of today.
+  function dayMs(iso) {
+    return julianDay(iso) !== null ? Date.parse(iso + 'T00:00:00Z') : Date.parse(utcDateISO() + 'T00:00:00Z');
+  }
+  // Zone name for labels, before any time is entered (midday UT on the date).
+  function localZone(obsDate, tz) { return zoneName(tz, dayMs(obsDate) + 43200000); }
+  // A UT time on the observation date → { time, date, dayShift, zone } local, or null.
+  // dayShift is −1 / +1 when the local date isn't the UT date.
+  function utToLocal(obsDate, ut, tz) {
+    const secs = parseHMS(ut);
+    if (secs === null) return null;
+    const base = dayMs(obsDate), ms = base + secs * 1000;
+    const local = new Date(ms + zoneOffset(tz, ms) * 60000);
+    const day = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
+    return { time: fmtHMS(local.getUTCHours() * 3600 + local.getUTCMinutes() * 60 + local.getUTCSeconds()),
+             date: utcDateISO(local), dayShift: Math.round((day - base) / 86400000), zone: zoneName(tz, ms) };
+  }
+  // A local clock time → the UT time of day (HH:MM:SS), or null.
+  function localToUT(obsDate, local, tz) {
+    const secs = parseHMS(local);
+    if (secs === null) return null;
+    const guess = dayMs(obsDate) + secs * 1000;
+    const off = zoneOffset(tz, guess - zoneOffset(tz, guess) * 60000);
+    return fmtHMS(secs - off * 60);
+  }
+
   // ─── Clock times (local, HH:MM) — the Title page's start and stop ─────────
   // "HH:MM", "H:MM", "HH:MM:SS" (seconds dropped) or number-pad digits
   // ("805", "0805") → minutes since midnight, or null.
@@ -223,6 +287,8 @@
       // ellipsoidal height as typed (m); source is 'phone' | 'manual' | ''.
       pos: { ...EMPTY_POS },
       // Session
+      // Times are stored in UT; tz is the zone the local times beside them are shown in.
+      tz: deviceZone(),
       interval: '', startUT: '', stopUT: '', elevMask: '', pdop: '', method: METHODS[0], methodOther: '',
       // Antenna height readings, as typed
       slant: readingSet(), vert: readingSet(), tol: '',
@@ -278,6 +344,7 @@
     g.sketch = { ...base.sketch, ...(g.sketch || {}) };
     g.images = { ...base.images, ...(g.images || {}) };
     if (!METHODS.includes(g.method)) g.method = METHODS[0];
+    g.tz = text(g.tz).trim() || deviceZone();
     return g;
   }
 
@@ -771,6 +838,7 @@
     diagramValues, buildAntennaSVG, plotNorth, skyWedges, inWedge, wedgeElev, buildSkyPlotSVG,
     num, fmt4, fmtDiff,
     julianDay, utcDateISO, utcTimeHMS, parseHMS, fmtHMS, sessionDuration,
+    deviceZone, localZone, utToLocal, localToUT,
     parseHM, fmtHM, localTimeHM, dayDuration,
     parseLatLon, fmtLatLonDMS,
     getAntennas, getAntenna, saveAntenna, deleteAntenna, duplicateAntenna, isBuiltin,
