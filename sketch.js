@@ -809,26 +809,6 @@ function scaleToSlider(s) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GRID HELPERS  (Phase 4)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Choose a round-number real-world interval that targets ~10 minor grid lines
-// visible across the current view width.
-function niceGridInterval(scaleDenom, vbW, containerW, units) {
-  const worldWidthReal = pxToReal(vbW, scaleDenom, units);
-  const rawInterval    = worldWidthReal / 10;
-  const niceValues = [
-    0.001, 0.002, 0.005,
-    0.01,  0.02,  0.05,
-    0.1,   0.2,   0.5,
-    1,     2,     5,     10,   25,   50,
-    100,   250,   500,   1000, 2500, 5000,
-  ];
-  return niceValues.find(v => v >= rawInterval) || 5000;
-}
-// Major gridlines fall every 5th minor interval.
-
-// ─────────────────────────────────────────────────────────────────────────────
 // BEARING DMS HELPERS  —  used by ShapeValueCard bearing field
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1477,60 +1457,6 @@ function offsetShape(s, dx, dy) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LAYER CARD
-// ─────────────────────────────────────────────────────────────────────────────
-
-function LayerCard({ layer, onRename }) {
-  const iStyle = {
-    width: 100, background: 'rgba(255,255,255,0.08)',
-    border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3,
-    color: 'rgba(255,255,255,0.9)', fontFamily: FBF.sketch,
-    fontSize: 10, padding: '2px 5px', outline: 'none',
-  };
-  const [name, setName] = useState(layer.name);
-
-  useEffect(() => { setName(layer.name); }, [layer.id, layer.name]);
-
-  return (
-    <div style={{
-      position: 'absolute', bottom: 10, left: 10, pointerEvents: 'all',
-      background: 'rgba(10,15,35,0.90)', border: '1px solid rgba(99,102,241,0.45)',
-      borderRadius: 6, padding: '7px 11px',
-      fontFamily: FBF.sketch, fontSize: 10.5,
-      color: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(5px)', zIndex: 15,
-      lineHeight: 1.7, minWidth: 180,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#A5B4FC',
-        fontSize: 9.5, letterSpacing: '0.1em', marginBottom: 4, textTransform: 'uppercase' }}>
-        <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-          <rect x="1" y="1" width="10" height="3" rx="0.8"/>
-          <rect x="1" y="5" width="10" height="3" rx="0.8"/>
-          <rect x="1" y="9" width="10" height="2" rx="0.8" opacity="0.5"/>
-        </svg>
-        Layer
-      </div>
-      <div style={{ display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.6 }}>
-        <span style={{ color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 }}>Name</span>
-        <input
-          value={name}
-          onChange={e => setName(e.target.value)}
-          onBlur={e => { const v = e.target.value.trim(); if (v) onRename(v); else setName(layer.name); }}
-          onKeyDown={e => {
-            if (e.key === 'Enter') e.target.blur();
-            if (e.key === 'Escape') { setName(layer.name); e.target.blur(); }
-          }}
-          style={iStyle}
-        />
-      </div>
-      <div style={{ display: 'flex', gap: 5, alignItems: 'center', lineHeight: 1.6, marginTop: 3 }}>
-        <span style={{ color: '#64748B', width: 46, flexShrink: 0, fontSize: 10 }}>Shapes</span>
-        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>{layer._shapeCount ?? 0}</span>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // COGO PANEL  —  right-panel section for turned-angle traverse entry.
 // Module-level (per the React architecture rule) so its input state survives
 // SketchPage re-renders. Requires a single straight `line` selected as backsight.
@@ -1830,249 +1756,6 @@ function CogoPanel({ line, occEnd, onSwap, onActive, onConfirm, scaleDenom, unit
         border: `1px solid ${PT.border}`, borderRadius: 4, fontWeight: 700,
       }}>Draw leg</button>
     </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// COLOR UTILITIES
-// ─────────────────────────────────────────────────────────────────────────────
-
-function hexToHsv(hex) {
-  let h = (hex || '#000000').replace('#', '');
-  if (h.length === 3) h = h.split('').map(c => c + c).join('');
-  if (h.length !== 6) return { h: 0, s: 1, v: 1 };
-  const r = parseInt(h.slice(0, 2), 16) / 255;
-  const g = parseInt(h.slice(2, 4), 16) / 255;
-  const b = parseInt(h.slice(4, 6), 16) / 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
-  let hue = 0;
-  if (d > 0) {
-    if      (max === r) hue = ((g - b) / d + 6) % 6;
-    else if (max === g) hue = (b - r) / d + 2;
-    else                hue = (r - g) / d + 4;
-    hue *= 60;
-  }
-  return { h: hue, s: max > 0 ? d / max : 0, v: max };
-}
-
-function hsvToHex(h, s, v) {
-  const f = n => {
-    const k = (n + h / 60) % 6;
-    const val = v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
-    return Math.round(val * 255).toString(16).padStart(2, '0');
-  };
-  return '#' + f(5) + f(3) + f(1);
-}
-
-function hsvToRgb255(h, s, v) {
-  const f = n => {
-    const k = (n + h / 60) % 6;
-    return Math.round((v - v * s * Math.max(0, Math.min(k, 4 - k, 1))) * 255);
-  };
-  return { r: f(5), g: f(3), b: f(1) };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// COLOR WHEEL COMPONENT
-// ─────────────────────────────────────────────────────────────────────────────
-
-function ColorWheel({ color, onChange, onCommit }) {
-  const SIZE    = 154;
-  const RING_W  = 18;
-  const CENTER  = SIZE / 2;
-  const OUTER_R = CENTER - 2;
-  const INNER_R = OUTER_R - RING_W;
-
-  const canvasRef = useRef(null);
-  const dragging  = useRef(null);
-
-  const parseColor = c => {
-    if (!c || c === 'none') return { h: 0, s: 1, v: 1 };
-    try { return hexToHsv(c); } catch { return { h: 0, s: 1, v: 1 }; }
-  };
-
-  const [hsv, setHsv] = useState(() => parseColor(color));
-  useEffect(() => { setHsv(parseColor(color)); }, [color]);
-
-  // Triangle vertices in canvas-space.
-  // A = pure hue (S=1, V=1), B = black (V=0), C = white (S=0, V=1)
-  // All three vertices sit exactly on INNER_R, so they touch the ring.
-  function triVerts(h) {
-    const base = (h - 90) * Math.PI / 180;
-    const T = 2 * Math.PI / 3;
-    return {
-      Ax: CENTER + INNER_R * Math.cos(base),
-      Ay: CENTER + INNER_R * Math.sin(base),
-      Bx: CENTER + INNER_R * Math.cos(base + T),
-      By: CENTER + INNER_R * Math.sin(base + T),
-      Cx: CENTER + INNER_R * Math.cos(base - T),
-      Cy: CENTER + INNER_R * Math.sin(base - T),
-    };
-  }
-
-  // Barycentric coords of canvas point (px, py) relative to triangle A/B/C
-  function bary({ Ax, Ay, Bx, By, Cx, Cy }, px, py) {
-    const d = (By - Cy) * (Ax - Cx) + (Cx - Bx) * (Ay - Cy);
-    if (Math.abs(d) < 1e-10) return { lA: 1/3, lB: 1/3, lC: 1/3 };
-    const lA = ((By - Cy) * (px - Cx) + (Cx - Bx) * (py - Cy)) / d;
-    const lB = ((Cy - Ay) * (px - Cx) + (Ax - Cx) * (py - Cy)) / d;
-    return { lA, lB, lC: 1 - lA - lB };
-  }
-
-  // S/V from barycentric: λA=hue vertex, λB=black vertex, λC=white vertex
-  function baryToSV(lA, lB, lC) {
-    const V = Math.max(0, Math.min(1, lA + lC));
-    const S = V > 0.001 ? Math.max(0, Math.min(1, lA / V)) : 0;
-    return { S, V };
-  }
-
-  // Canvas position from S/V
-  function svToXY(s, v, verts) {
-    const { Ax, Ay, Bx, By, Cx, Cy } = verts;
-    const lA = s * v, lC = (1 - s) * v, lB = 1 - v;
-    return { x: lA * Ax + lB * Bx + lC * Cx, y: lA * Ay + lB * By + lC * Cy };
-  }
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, SIZE, SIZE);
-
-    // ── Hue ring ──
-    for (let i = 0; i < 360; i++) {
-      const a0 = (i - 90.5) * Math.PI / 180;
-      const a1 = (i - 89.5) * Math.PI / 180;
-      ctx.beginPath();
-      ctx.moveTo(CENTER, CENTER);
-      ctx.arc(CENTER, CENTER, OUTER_R, a0, a1);
-      ctx.closePath();
-      ctx.fillStyle = `hsl(${i},100%,50%)`;
-      ctx.fill();
-    }
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.beginPath();
-    ctx.arc(CENTER, CENTER, INNER_R, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalCompositeOperation = 'source-over';
-
-    // ── HSV triangle ──
-    const verts = triVerts(hsv.h);
-    const { Ax, Ay, Bx, By, Cx, Cy } = verts;
-    const { r, g, b } = hsvToRgb255(hsv.h, 1, 1);
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(Ax, Ay); ctx.lineTo(Bx, By); ctx.lineTo(Cx, Cy);
-    ctx.closePath();
-    ctx.clip();
-
-    const minX = Math.min(Ax, Bx, Cx) - 1, minY = Math.min(Ay, By, Cy) - 1;
-    const bw   = Math.max(Ax, Bx, Cx) - minX + 2;
-    const bh   = Math.max(Ay, By, Cy) - minY + 2;
-
-    // Pure hue base
-    ctx.fillStyle = `rgb(${r},${g},${b})`;
-    ctx.fillRect(minX, minY, bw, bh);
-
-    // White overlay: from white vertex C toward midpoint of AB
-    const wg = ctx.createLinearGradient(Cx, Cy, (Ax + Bx) / 2, (Ay + By) / 2);
-    wg.addColorStop(0, 'rgba(255,255,255,1)');
-    wg.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = wg;
-    ctx.fillRect(minX, minY, bw, bh);
-
-    // Black overlay: from black vertex B toward midpoint of AC
-    const bg = ctx.createLinearGradient(Bx, By, (Ax + Cx) / 2, (Ay + Cy) / 2);
-    bg.addColorStop(0, 'rgba(0,0,0,1)');
-    bg.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = bg;
-    ctx.fillRect(minX, minY, bw, bh);
-
-    ctx.restore();
-
-    // ── Hue ring indicator ──
-    const hAngle = (hsv.h - 90) * Math.PI / 180;
-    const ir = INNER_R + RING_W / 2;
-    const ix = CENTER + ir * Math.cos(hAngle), iy = CENTER + ir * Math.sin(hAngle);
-    ctx.beginPath(); ctx.arc(ix, iy, 6, 0, Math.PI * 2);
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
-    ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke();
-
-    // ── SV triangle indicator ──
-    const { x: svX, y: svY } = svToXY(hsv.s, hsv.v, verts);
-    ctx.beginPath(); ctx.arc(svX, svY, 5, 0, Math.PI * 2);
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
-    ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke();
-  }, [hsv.h, hsv.s, hsv.v]);
-
-  function getXY(e) {
-    const rect = canvasRef.current.getBoundingClientRect();
-    return {
-      x: (e.clientX - rect.left) * (SIZE / rect.width),
-      y: (e.clientY - rect.top)  * (SIZE / rect.height),
-    };
-  }
-
-  function hitZone(x, y) {
-    const dx = x - CENTER, dy = y - CENTER;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    if (d >= INNER_R && d <= OUTER_R) return 'ring';
-    const { lA, lB, lC } = bary(triVerts(hsv.h), x, y);
-    if (lA >= -0.02 && lB >= -0.02 && lC >= -0.02) return 'sv';
-    return 'none';
-  }
-
-  // lastHex: tracks current hex during drag so onCommit can fire it on pointerUp
-  const lastHexRef = useRef(null);
-
-  function applyXYFull(zone, x, y) {
-    if (zone === 'ring') {
-      const h = ((Math.atan2(y - CENTER, x - CENTER) * 180 / Math.PI) + 90 + 360) % 360;
-      const next = { ...hsv, h };
-      setHsv(next);
-      const hex = hsvToHex(next.h, next.s, next.v);
-      lastHexRef.current = hex;
-      onChange(hex);
-    } else if (zone === 'sv') {
-      let { lA, lB, lC } = bary(triVerts(hsv.h), x, y);
-      lA = Math.max(0, lA); lB = Math.max(0, lB); lC = Math.max(0, lC);
-      const sum = lA + lB + lC || 1;
-      const { S, V } = baryToSV(lA / sum, lB / sum, lC / sum);
-      const next = { ...hsv, s: S, v: V };
-      setHsv(next);
-      const hex = hsvToHex(next.h, next.s, next.v);
-      lastHexRef.current = hex;
-      onChange(hex);
-    }
-  }
-
-  return (
-    <canvas ref={canvasRef} width={SIZE} height={SIZE}
-      style={{ width: '100%', maxWidth: SIZE, display: 'block', margin: '0 auto',
-        cursor: 'crosshair', touchAction: 'none' }}
-      onPointerDown={e => {
-        const { x, y } = getXY(e);
-        const zone = hitZone(x, y);
-        if (zone === 'none') return;
-        dragging.current = zone;
-        lastHexRef.current = null;
-        canvasRef.current.setPointerCapture(e.pointerId);
-        applyXYFull(zone, x, y);
-      }}
-      onPointerMove={e => {
-        if (!dragging.current) return;
-        const { x, y } = getXY(e);
-        applyXYFull(dragging.current, x, y);
-      }}
-      onPointerUp={() => {
-        if (dragging.current && lastHexRef.current && onCommit) {
-          onCommit(lastHexRef.current);
-        }
-        dragging.current = null;
-        lastHexRef.current = null;
-      }}
-    />
   );
 }
 
@@ -3280,7 +2963,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   // ── North direction (Phase 7) ──────────────────────────────────────────────
   // northAzimuth: clockwise degrees from screen-up that true North points.
   // Default 0 = North is straight up the screen.  Affects dim-bearing display
-  // and the ShapeValueCard bearing field (Phase 6.9 deferred until Phase 7).
+  // and the ShapeValueCard bearing field.
   const [northAzimuth, setNorthAzimuth]  = useState(page.northAzimuth || 0);
 
   // ── Dropdown menus ─────────────────────────────────────────────────────────
@@ -3370,7 +3053,6 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   const [ropeLength,      setRopeLength]      = useState(20);   // screen px
   const [windowSize,      setWindowSize]      = useState(8);    // samples
   const [pencilSmoothness,setPencilSmoothness]= useState(0.4);  // 0–1
-  const [sculptMode,      setSculptMode]      = useState(false);
   // Pencil raw/smoothed points during active stroke (refs to avoid re-render on every point)
   const pencilRawRef      = useRef([]);    // raw pointer positions
   const pencilSmoothedRef = useRef([]);    // stabilizer output
@@ -6721,38 +6403,6 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       }
       default: return [];
     }
-  }
-
-  // Segment / segment intersection. Allows 5% extension to catch near-end hits.
-  function segIntersect(p1, p2, p3, p4) {
-    const d1x = p2.x-p1.x, d1y = p2.y-p1.y;
-    const d2x = p4.x-p3.x, d2y = p4.y-p3.y;
-    const cross = d1x*d2y - d1y*d2x;
-    if (Math.abs(cross) < 1e-8) return null;
-    const t = ((p3.x-p1.x)*d2y - (p3.y-p1.y)*d2x) / cross;
-    const u = ((p3.x-p1.x)*d1y - (p3.y-p1.y)*d1x) / cross;
-    const ext = 0.05;
-    if (t < -ext || t > 1+ext || u < -ext || u > 1+ext) return null;
-    return { x: p1.x + t*d1x, y: p1.y + t*d1y };
-  }
-
-  // Line segment / circle intersection. Returns 0–2 points.
-  function lineCircleIntersect(p1, p2, cx, cy, r) {
-    const dx = p2.x-p1.x, dy = p2.y-p1.y;
-    const fx = p1.x-cx,   fy = p1.y-cy;
-    const a = dx*dx + dy*dy;
-    if (a < 1e-10) return [];
-    const b = 2*(fx*dx + fy*dy);
-    const c = fx*fx + fy*fy - r*r;
-    const disc = b*b - 4*a*c;
-    if (disc < 0) return [];
-    const sq = Math.sqrt(disc);
-    const pts = [];
-    for (const sign of [-1, 1]) {
-      const t = (-b + sign*sq) / (2*a);
-      if (t >= -0.05 && t <= 1.05) pts.push({ x: p1.x+t*dx, y: p1.y+t*dy });
-    }
-    return pts;
   }
 
   // Perpendicular foot from point pt onto segment a→b. Returns null if degenerate.
