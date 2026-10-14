@@ -138,7 +138,7 @@
   const STORE_KEY = 'fb_antennas';
   const BUILTIN_ANTENNAS = [
     { id: 'builtin-f90', name: 'F90', R: 0.0785, d: 0.0437, l1: 0.0689, l2: 0.0623,
-      slantMark: 'White line', notes: 'Values from the COGS static observation form.', builtin: true },
+      slantMark: 'White line', notes: '', builtin: true },
   ];
   const DEFAULT_ANTENNA_ID = BUILTIN_ANTENNAS[0].id;
 

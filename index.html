@@ -662,7 +662,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.179';
+  const APP_VERSION = '1.180';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -2051,7 +2051,7 @@
         <div ref={trapRef} className="modal-sheet">
           <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
           <h2 className="text-xl font-bold text-fb-dark mb-1">Data Management</h2>
-          <p className="text-fb-muted text-sm mb-4">Back up or restore all projects, photos included. Everything is stored on this device.</p>
+          <p className="text-fb-muted text-sm mb-4">Back up or restore every project on this device.</p>
 
           {/* Storage gauge */}
           <div style={{ borderRadius: 12, border: `1px solid ${FBC.border}`, background: FBC.pageAlt, padding: 12, marginBottom: 14 }}>
@@ -2091,7 +2091,7 @@
                 <span style={{ fontSize: 22 }}>📂</span>
                 <div>
                   <div style={{ fontWeight: 600, fontSize: 14, color: FBC.ink }}>Import Project</div>
-                  <div style={{ fontSize: 12, color: FBC.inkMuted, marginTop: 1 }}>Add one project from a .fieldbook file — nothing is overwritten</div>
+                  <div style={{ fontSize: 12, color: FBC.inkMuted, marginTop: 1 }}>Add a project from a .fieldbook file</div>
                 </div>
               </button>
             )}
@@ -2099,14 +2099,14 @@
               <span style={{ fontSize: 22 }}>⬇</span>
               <div>
                 <div style={{ fontWeight: 600, fontSize: 14, color: FBC.ink }}>Export Backup</div>
-                <div style={{ fontSize: 12, color: FBC.inkMuted, marginTop: 1 }}>Download all projects as a .json file</div>
+                <div style={{ fontSize: 12, color: FBC.inkMuted, marginTop: 1 }}>Download everything as .json</div>
               </div>
             </button>
             <button onClick={() => fileInputRef.current?.click()} style={btnStyle}>
               <span style={{ fontSize: 22 }}>⬆</span>
               <div>
                 <div style={{ fontWeight: 600, fontSize: 14, color: FBC.ink }}>Import Backup</div>
-                <div style={{ fontSize: 12, color: FBC.inkMuted, marginTop: 1 }}>Restore from a .json backup (overwrites all data)</div>
+                <div style={{ fontSize: 12, color: FBC.inkMuted, marginTop: 1 }}>Replace everything from a .json backup</div>
               </div>
             </button>
             <input ref={fileInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={importBackup} />
@@ -2540,8 +2540,7 @@
           <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
           <h2 className="text-xl font-bold text-fb-text mb-1">Export Project</h2>
           <p className="text-sm text-fb-muted mb-5">
-            Creates a <code className="font-data text-fb-mid">.fieldbook</code> file.
-            Share it to continue working on another device, or email it to the office.
+            Creates a <code className="font-data text-fb-mid">.fieldbook</code> file to share or open on another device.
           </p>
 
           <div className="space-y-3 mb-6">
@@ -3063,8 +3062,7 @@
         </div>
         {crsId === 'local' && (
           <p className="text-xs text-fb-ink-muted mt-2 leading-snug">
-            Local coordinates can't be converted to lat/lon, so points can't be sent to a map app.
-            Phone-GPS points still store their lat/lon but get no N/E.
+            No lat/lon — map export is off.
           </p>
         )}
 
@@ -3075,10 +3073,9 @@
             </p>
             <p className="text-xs text-fb-ink leading-snug mb-3">
               This project has {pending.instrument} entered point{pending.instrument === 1 ? '' : 's'} and {pending.gps} phone-GPS point{pending.gps === 1 ? '' : 's'}.
-              {pending.gps > 0 && <> GPS points always recalculate from their stored lat/lon.</>}
               {pending.instrument > 0 && (pending.canReproject
-                ? <> Entered points can keep their numbers as typed (<b>Relabel</b> — use this if the old setting was simply wrong) or be converted to the new grid (<b>Reproject</b>). Reprojecting rewrites N/E — export a backup first if unsure.</>
-                : <> Entered points keep their numbers exactly as typed — a local system can't be converted.</>)}
+                ? <> <b>Relabel</b> keeps their N/E as typed; <b>Reproject</b> converts them to the new grid. Back up first if unsure.</>
+                : <> Their N/E are kept as typed.</>)}
             </p>
             <div className="flex flex-wrap gap-2">
               <button onClick={() => setPending(null)}
@@ -3110,7 +3107,7 @@
           className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left bg-fb-page-alt border border-fb-border active:opacity-80">
           <span className="flex-1 min-w-0">
             <span className="block text-sm text-fb-ink">Fill Z from phone height</span>
-            <span className="block text-xs text-fb-ink-muted leading-snug">Z = H = h − N (CGG2013a geoid, CGVD2013). Phone height is only ±5–15 m.</span>
+            <span className="block text-xs text-fb-ink-muted leading-snug">CGG2013a geoid. Phone height is ±5–15 m.</span>
           </span>
           <span className={`text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0 ${fbGeo.useZ(project) ? 'bg-fb-accent text-white' : 'bg-fb-border text-fb-ink'}`}>
             {fbGeo.useZ(project) ? 'ON' : 'OFF'}
@@ -3286,7 +3283,7 @@
               <p className="text-xs text-fb-ink-muted mb-2 flex-shrink-0 min-h-[16px]">
                 {range.trim()
                   ? <>{matched.length} point{matched.length === 1 ? '' : 's'} matched{parsed.bad.length ? ` · can't read "${parsed.bad.join(' ')}"` : ''}</>
-                  : 'Add puts the range into the selection; Only replaces the selection with it.'}
+                  : ''}
               </p>
 
               {/* Checklist */}
@@ -3349,8 +3346,7 @@
                   </button>
                 ) : (
                   <p className="text-xs text-fb-ink-muted leading-snug">
-                    Lat/lon for a phone map app{format === 'kml' ? ', one folder per point type' : ' — waypoints grouped by point type'}.
-                    Grid values, source and accuracy go in each point's description.
+                    Lat/lon for a phone map app, grouped by point type.
                   </p>
                 )}
               </div>
@@ -3427,9 +3423,7 @@
                 className="w-full py-3 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep flex items-center justify-center gap-2 mb-1">
                 <Ico.Upload size={16} /> Export Points
               </button>
-              <p className="text-xs text-fb-muted text-center mb-5">
-                PNEZD CSV in the project grid, or KML / GPX for a phone map app
-              </p>
+              <div className="mb-5" />
 
               {/* Transfer history */}
               <p className="text-xs font-bold text-fb-muted uppercase tracking-widest mb-2">Transfer History</p>
@@ -3480,11 +3474,7 @@
                 style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
                 {project.archived ? 'Restore Project to Active' : 'Archive Project'}
               </button>
-              <p className="text-xs text-fb-muted text-center">
-                {project.archived
-                  ? 'Moves this project back to the top of the working list.'
-                  : 'Moves this project out of the working list. Nothing is deleted.'}
-              </p>
+              {!project.archived && <p className="text-xs text-fb-muted text-center">Nothing is deleted.</p>}
             </>
           )}
         </div>
@@ -4918,13 +4908,13 @@
       pdf.line(L, y + 4.2, L + colW, y + 4.2);
       y += 4.5;
     };
-    [['Radius from antenna centre to slant measure mark (R)', A.R],
-     ['Slant measure mark height above Antenna Reference Point (ARP) (d)', A.d],
-     ['Correction from Antenna Reference Point (ARP) to L1 Phase Centre', A.l1],
-     ['Correction from Antenna Reference Point (ARP) to L2 Phase Centre', A.l2],
+    [['Radius to slant mark (R)', A.R],
+     ['Slant mark above ARP (d)', A.d],
+     ['ARP to L1 phase centre', A.l1],
+     ['ARP to L2 phase centre', A.l2],
     ].forEach(([label, v]) => constLine(label, f4(v) ? `${f4(v)} m` : '', true));
     constLine('Slant measure mark', A.slantMark || '');
-    fineText('3 measurements equally spaced around the antenna, at the beginning and again at the end of the session.', L, y + 2.8, { size: 6, style: 'italic' });
+    fineText('3 readings before and 3 after, spaced around the antenna.', L, y + 2.8, { size: 6, style: 'italic' });
     y += 4.5;
 
     const READ = [['slant', 'before'], ['slant', 'after'], ['vert', 'before'], ['vert', 'after']];
@@ -4965,7 +4955,7 @@
     const checks = [];
     if (res.diff !== null) checks.push(`Check: slant - vertical ARP = ${safe(fbGnss.fmtDiff(res.diff))} m`);
     [['slant', 'Slant'], ['vert', 'Vertical']].forEach(([set, name]) => {
-      if (res[set].flag) checks.push(`${name} range ${f4(res[set].all.range)} m is over the ${f4(res.tol)} m tolerance (app default, not a COGS standard)`);
+      if (res[set].flag) checks.push(`${name} range ${f4(res[set].all.range)} m is over the ${f4(res.tol)} m tolerance`);
     });
     if (res.slantErr) checks.push(`Slant: ${res.slantErr}`);
     if (res.vertErr) checks.push(`Vertical: ${res.vertErr}`);
@@ -7037,14 +7027,14 @@
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
     const types = [
-      { id: 'data',   Icon: Ico.Table,  label: 'Data Page',   desc: 'Tabular columns with custom headers — your field observations',         color: '#2D6A4F' },
-      { id: 'sketch', Icon: Ico.Grid,   label: 'Sketch Page', desc: 'Fine grid paper for diagrams, site sketches, and notes',                  color: '#3B82F6' },
-      { id: 'notes',  Icon: Ico.Pencil, label: 'Notes Page',  desc: 'Rich-text notes — bold, italic, lists, headings. Fast field entry.',      color: '#B45309' },
-      { id: 'title',  Icon: Ico.File,   label: 'Title Page',  desc: 'Job info, equipment, datum settings, crew and summary',                   color: '#D97706' },
-      { id: 'photo',  Icon: Ico.Camera, label: 'Photos Page', desc: 'Site photos, equipment shots, and setup images with notes',               color: '#7C3AED' },
-      { id: 'points', Icon: Ico.Pin,    label: 'Points Page', desc: 'PNEZD point list — links to sketch canvas for placing survey points',     color: '#0E7490' },
-      { id: 'gnss',   Icon: () => <Ico.Antenna size={20} />, label: 'GNSS Obs Page', desc: 'Static observation log — antenna heights, sky plot and station sketch', color: TYPE_META.gnss.color },
-      { id: 'obstructions', Icon: () => <Ico.SkyPlot size={20} />, label: 'Obstructions Page', desc: 'Site obstruction table and sky plot for a station or point', color: TYPE_META.obstructions.color },
+      { id: 'data',   Icon: Ico.Table,  label: 'Data Page',   desc: 'Columns of field observations',         color: '#2D6A4F' },
+      { id: 'sketch', Icon: Ico.Grid,   label: 'Sketch Page', desc: 'Grid paper for site sketches',                  color: '#3B82F6' },
+      { id: 'notes',  Icon: Ico.Pencil, label: 'Notes Page',  desc: 'Formatted text notes',      color: '#B45309' },
+      { id: 'title',  Icon: Ico.File,   label: 'Title Page',  desc: 'Job info, crew, equipment, datum',                   color: '#D97706' },
+      { id: 'photo',  Icon: Ico.Camera, label: 'Photos Page', desc: 'Site photos with notes',               color: '#7C3AED' },
+      { id: 'points', Icon: Ico.Pin,    label: 'Points Page', desc: 'PNEZD point list',     color: '#0E7490' },
+      { id: 'gnss',   Icon: () => <Ico.Antenna size={20} />, label: 'GNSS Obs Page', desc: 'Static session log', color: TYPE_META.gnss.color },
+      { id: 'obstructions', Icon: () => <Ico.SkyPlot size={20} />, label: 'Obstructions Page', desc: 'Obstruction table and sky plot', color: TYPE_META.obstructions.color },
     ];
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -7078,7 +7068,6 @@
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-fb-text text-sm">Copy from another project…</p>
-                    <p className="text-fb-muted text-xs mt-0.5 leading-snug">Browse your other projects and copy a page into this one</p>
                   </div>
                   <Ico.ChevR />
                 </button>
@@ -7125,8 +7114,7 @@
             <Ico.Back /> Back
           </button>
           <h2 className="text-lg font-bold text-fb-dark mb-1">Define Columns</h2>
-          <p className="text-fb-muted text-sm mb-1">Name each column and choose its type. Up to 10 columns.</p>
-          <p className="text-fb-muted text-xs mb-4 font-data">TXT = text/notes &nbsp;·&nbsp; NUM = decimal number &nbsp;·&nbsp; DMS = angle (°′″)</p>
+          <p className="text-fb-muted text-sm mb-4">Name each column and choose its type.</p>
 
           <div className="space-y-2 mb-4">
             {cols.map((col, i) => (
@@ -11144,7 +11132,7 @@
                 <tr>
                   <td colSpan={columns.length + 2}
                     style={{ textAlign: 'center', padding: '18px 10px', color: '#9CA3AF', fontStyle: 'italic', fontSize: 12, background: 'transparent', height: 'auto' }}>
-                               Tap Insert ▾ → Rows in the toolbar to begin
+                               Insert ▾ → Rows to begin
                   </td>
                 </tr>
               )}
@@ -11446,7 +11434,6 @@
               </span>
             );
           })()}
-          <span className="ml-auto text-fb-muted text-[10px]">Tap # to select a row · long-press # or a header, then drag, to move it · Shift+click/arrow selects a range · Ctrl+C/V · Del clears</span>
         </div>
 
         {/* ── DMS Numpad — shown when editing a DMS column cell ── */}
@@ -11496,9 +11483,8 @@
                     ))}
                   </div>
                   <p className="text-xs text-fb-muted mt-2">
-                    {colModalForm.colType === 'dms' && 'Enter angles as “45 34 23” (D M S) or “45°34\'23"”. Displays as D°MM\'SS.s".'}
-                    {colModalForm.colType === 'num' && 'Decimal numbers. Formulas like =SUM(A1:A5) work in this column.'}
-                    {colModalForm.colType === 'text' && 'Free text — station IDs, descriptions, notes.'}
+                    {colModalForm.colType === 'dms' && 'Type as 45 34 23 (D M S).'}
+                    {colModalForm.colType === 'num' && 'Numbers and formulas.'}
                   </p>
                 </div>
                 <div>
@@ -12089,10 +12075,10 @@
 
   // ── Antenna library sheet ────────────────────────────────────────────────────
   const ANT_FORM_FIELDS = [
-    ['R',  'R — radius, antenna centre to slant mark (m)'],
-    ['d',  'd — slant mark above ARP (m), negative if below'],
-    ['l1', 'L1 — ARP to L1 phase centre (m)'],
-    ['l2', 'L2 — ARP to L2 phase centre (m)'],
+    ['R',  'R — radius to slant mark (m)'],
+    ['d',  'd — slant mark above ARP (m)'],
+    ['l1', 'L1 offset from ARP (m)'],
+    ['l2', 'L2 offset from ARP (m)'],
   ];
   function antennaLine(a) {
     return ['R', 'd', 'l1', 'l2'].map(k => `${k === 'l1' ? 'L1' : k === 'l2' ? 'L2' : k} ${fbGnss.fmt4(a[k]) || '—'}`).join(' · ');
@@ -12161,7 +12147,7 @@
               <div key={k} className="mb-3">
                 <p className={lbl}>{label}</p>
                 <input type="text" inputMode={k === 'd' ? 'text' : 'decimal'} value={form[k]} onChange={e => set(k, e.target.value)}
-                  placeholder="0.0000" autoComplete="off"
+                  placeholder={k === 'd' ? '0.0000 (− if below ARP)' : '0.0000'} autoComplete="off"
                   className={`${fieldCls} font-data ${errs[k] ? 'border-fb-error' : ''}`} />
               </div>
             ))}
@@ -12181,9 +12167,6 @@
                 Save antenna
               </button>
             </div>
-            <p className="text-[11px] text-fb-ink-muted text-center mt-3 leading-snug">
-              Take R, d and the phase centre corrections from the antenna's spec sheet or calibration.
-            </p>
           </div>
         </div>
       );
@@ -12234,7 +12217,7 @@
             {chosen ? `Use ${chosen.name}` : 'Use antenna'}
           </button>
           <p className="text-[11px] text-fb-ink-muted text-center mt-3 leading-snug">
-            Built-in models are read-only — duplicate one to change its values. A page keeps its own copy of the constants it used.
+            Built-in models are read-only — duplicate one to edit it.
           </p>
         </div>
       </div>
@@ -12417,11 +12400,7 @@
           <GnField label="Declination" mono unit="°" placeholder="e.g. −16.5" bad={declBad}
             value={g.declination} onChange={v => update({ declination: v })} />
         </div>
-        <p className={GN.note + ' mb-3'}>
-          {g.bearingRef === 'true' ? 'Bearings are plotted as entered.'
-            : north.shift ? 'The plot turns magnetic bearings to true: True = Magnetic + declination (west is negative).'
-            : 'West declination is negative. With none entered, the plot is drawn to magnetic north.'}
-        </p>
+        {g.bearingRef !== 'true' && north.shift ? <p className={GN.note + ' mb-3'}>Plotted to true north.</p> : <div className="mb-3" />}
 
         {rows.length === 0 && (
           <p className="text-sm text-fb-ink-muted py-4 mb-2 text-center rounded-xl bg-fb-page-alt">No obstructions recorded.</p>
@@ -12459,7 +12438,7 @@
 
         <p className={GN.lbl + ' mt-4 mb-1'}>Site Obstruction Diagram</p>
         <GnDrawing svg={svg} onClick={onPlotTap} className="max-w-[360px] cursor-pointer" />
-        <p className={GN.note + ' text-center'}>Outer ring is the horizon, centre is the zenith. Tap a wedge to find its row.</p>
+        <p className={GN.note + ' text-center'}>Tap a wedge to find its row.</p>
       </>
     );
   }
@@ -12628,7 +12607,7 @@
   // `size` stitches a canvas other than the station sketch's 1024 × 768, and
   // `plain` leaves the imagery bare (no pin, arrow, scale bar or attribution) —
   // both for the aerial image that goes under a sketch.
-  function SatelliteCaptureSheet({ lat, lon, station, onSave, onClose, size, plain, title = 'Satellite image', footnote }) {
+  function SatelliteCaptureSheet({ lat, lon, station, onSave, onClose, size, plain, title = 'Satellite image' }) {
     const W = size ? size.w : SAT_W, H = size ? size.h : SAT_H;
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
@@ -12701,9 +12680,9 @@
           <canvas ref={canvasRef} width={W} height={H} aria-label="Satellite image preview"
             className="block w-full h-auto rounded-xl border border-fb-border mb-3" />
           {state === 'loading' && <p className="text-xs text-fb-ink-muted text-center mb-3">Loading imagery…</p>}
-          {state === 'offline' && <Notice tone="error" className="mb-3">You're offline. Satellite imagery needs a signal when it's captured — once saved, it works offline.</Notice>}
+          {state === 'offline' && <Notice tone="error" className="mb-3">You're offline — imagery needs a signal.</Notice>}
           {state === 'failed' && <Notice tone="error" className="mb-3">The imagery didn't load. Check your signal, then try again.</Notice>}
-          {state === 'partial' && <Notice className="mb-3">Some of the imagery didn't load, so part of the picture is blank. Try again for a complete image.</Notice>}
+          {state === 'partial' && <Notice className="mb-3">Part of the image didn't load. Try again.</Notice>}
           {saveErr && <Notice tone="error" className="mb-3">{saveErr}</Notice>}
           <div className="flex gap-2 mb-3">
             <button onClick={() => setZoom(z => Math.max(min, z - 1))} disabled={zoom <= min} className={chip}>Zoom out</button>
@@ -12717,7 +12696,7 @@
             Use this image
           </button>
           <p className="text-[11px] text-fb-ink-muted text-center mt-3 leading-snug">
-            {footnote || `${fbGnss.SAT_ATTRIBUTION}. Centred on the approx position — the pin is only as good as that fix.`}
+            {fbGnss.SAT_ATTRIBUTION}
           </p>
         </div>
       </div>
@@ -12784,7 +12763,6 @@
     );
     if (step === 'capture') return (
       <SatelliteCaptureSheet lat={lat} lon={lon} plain size={fbGnss.AERIAL_PX} title="Aerial image"
-        footnote={`${fbGnss.SAT_ATTRIBUTION}. Goes under the sketch at true scale, on its own locked layer.`}
         onSave={(dataUrl, cap) => onSave(dataUrl, fbGnss.aerialMeta(cap))} onClose={() => setStep('centre')} />
     );
     const chip = 'h-11 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep disabled:text-fb-ink-faint';
@@ -12806,16 +12784,12 @@
             <SheetLatLon label="Longitude" kind="lon" value={lon} onCommit={v => { setLon(v); setFrom(''); }} />
           </div>
           <p className="text-xs text-fb-ink-muted mb-5 leading-snug">
-            {from ? `Centre taken from ${from}.` : 'Degrees, minutes and seconds or decimal degrees. End with W or S, or use a minus sign.'}
-            {pointCount === 0 ? ' No point in this project has coordinates yet.' : ''}
+            {from ? `Centre taken from ${from}.` : 'DMS or decimal degrees.'}
           </p>
           <button onClick={() => setStep('capture')} disabled={lat === null || lon === null}
             className="w-full py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
             Get imagery
           </button>
-          <p className="text-[11px] text-fb-ink-muted text-center mt-3 leading-snug">
-            Needs a signal now. The saved image then works offline and prints in the PDF.
-          </p>
         </div>
       </div>
     );
@@ -12907,7 +12881,7 @@
       ) : (
         <div className="rounded-xl bg-fb-page-alt px-4 py-5 text-center">
           <p className="text-sm text-fb-ink-muted mb-3">
-            {hasPos ? 'No satellite image yet. Capturing one needs a signal.' : 'Enter the approx position first — the image is centred on it.'}
+            {hasPos ? 'No satellite image yet.' : 'Enter the approx position first.'}
           </p>
           <button type="button" onClick={() => setSatOpen(true)} disabled={!hasPos}
             className={GN.chip + ' disabled:text-fb-ink-faint'}><Ico.Map size={14} /> Get satellite image</button>
@@ -12927,8 +12901,7 @@
                 <button type="button" onClick={openSketch} className={GN.chip}><Ico.Grid /> Open sketch</button>
                 <button type="button" onClick={() => setPicker(true)} className={GN.chip}><Ico.Link size={14} /> Change</button>
               </div>
-              <GnToggle on={!!sk.ownPage} onChange={v => setSketch({ ownPage: v })} title="Also export as its own page"
-                help="The sketch prints inside this page, so a project PDF leaves its own page out unless this is on." />
+              <GnToggle on={!!sk.ownPage} onChange={v => setSketch({ ownPage: v })} title="Also export as its own page" />
             </>
           ) : (
             <div className="rounded-xl bg-fb-page-alt px-4 py-5 text-center">
@@ -12964,7 +12937,7 @@
                 </>
               ) : (
                 <div className="rounded-xl bg-fb-page-alt px-4 py-5 text-center">
-                  <p className="text-sm text-fb-ink-muted mb-3">Take or choose a photo — a paper sketch, the station, the setup.</p>
+                  <p className="text-sm text-fb-ink-muted mb-3">No photo yet.</p>
                   <button type="button" onClick={() => fileRef.current?.click()} disabled={busy} className={GN.chip}>
                     <Ico.Camera size={14} /> {busy ? 'Importing…' : 'Add photo'}
                   </button>
@@ -12975,7 +12948,7 @@
 
           {sk.source === 'blank' && (
             <p className="text-sm text-fb-ink-muted py-8 text-center border border-dashed border-fb-border">
-              An empty box prints in the PDF, for sketching by hand on the printout.
+              Prints as an empty box for sketching by hand.
             </p>
           )}
         </div>
@@ -12983,7 +12956,7 @@
         {(sk.source === 'linked' || sk.source === 'photo') && (
           <div className="mt-3">
             <GnToggle on={!!sk.inset} onChange={v => setSketch({ inset: v })} title="Location map inset"
-              help="Prints the satellite image as a small inset beside the sketch." />
+              help="Satellite image beside the sketch." />
             {sk.inset && <div className="mt-2">{satellite(true)}</div>}
           </div>
         )}
@@ -13034,7 +13007,6 @@
           </div>
         ))}
         <button type="button" onClick={addRow} className={GN.chip + ' mt-3'}>＋ Add observation</button>
-        <p className={GN.note + ' mt-2'}>A new row is stamped with the current UT time.</p>
       </>
     );
   }
@@ -13140,8 +13112,7 @@
               <GnField label="Station / Point Name" wide {...field('station')} />
               <GnField label="Date" mono type="date" {...field('date')} />
               <GnField label="Observer" {...field('observer')} />
-              <GnField label="Elevation Mask" mono inputMode="decimal" unit="°" bad={maskBad} {...field('elevMask')}
-                hint="Drawn on the sky plot as a dashed ring." />
+              <GnField label="Elevation Mask" mono inputMode="decimal" unit="°" bad={maskBad} {...field('elevMask')} />
             </div>
           </GnSection>
           <GnSection title="Site Obstructions">
@@ -13193,10 +13164,10 @@
       update(prev => ({ ...prev, [set]: { ...prev[set], [part]: prev[set][part].map((x, j) => (j === i ? v : x)) } }));
     }
     const constants = [
-      ['Radius from antenna centre to slant measure mark (R)', ant.R],
-      ['Slant measure mark height above Antenna Reference Point (ARP) (d)', ant.d],
-      ['Correction from Antenna Reference Point (ARP) to L1 Phase Centre', ant.l1],
-      ['Correction from Antenna Reference Point (ARP) to L2 Phase Centre', ant.l2],
+      ['Radius to slant mark (R)', ant.R],
+      ['Slant mark above ARP (d)', ant.d],
+      ['ARP to L1 phase centre', ant.l1],
+      ['ARP to L2 phase centre', ant.l2],
     ];
 
     // Leaving a field writes at once, so tapping Export (or anything else)
@@ -13221,7 +13192,7 @@
                   onClick={() => update(g.julianManual ? { julianManual: false, julianDay: '' } : { julianManual: true, julianDay: julian })}>
                   {g.julianManual ? 'Auto' : 'Edit'}
                 </button>}
-                hint={g.julianManual ? `Typed by hand${autoJulian === null ? '' : ` — the date gives ${autoJulian}`}.` : 'Day of year, from the date.'} />
+                hint={g.julianManual && autoJulian !== null ? `Date gives ${autoJulian}` : undefined} />
               <GnField label="Operator(s)" wide {...field('operators')} />
             </div>
           </GnSection>
@@ -13257,14 +13228,12 @@
                 value={ht.H === null ? '' : `${ht.H.toFixed(1)} m`}
                 hint={ht.H === null ? '' : `CGVD2013, geoid N ${ht.N.toFixed(1)} m`} />
             </div>
-            <p className={GN.note + ' mt-2'}>
-              {pos.source === 'phone'
-                ? <>Phone GPS{Number.isFinite(pos.acc) && <>, <span className="font-data">±{pos.acc < 10 ? pos.acc.toFixed(1) : Math.round(pos.acc)} m</span></>}
-                    {pos.ts && <> · <span className="font-data">{pos.ts.slice(0, 16).replace('T', ' ')} UT</span></>}. </>
-                : pos.source === 'manual' ? 'Entered by hand. ' : ''}
-              {ht.h !== null && ht.H === null && 'Height is ellipsoidal (approx) — no geoid model for this position.'}
-              {ht.h !== null && ht.H !== null && 'Phone height is ellipsoidal; the orthometric height takes off the CGG2013a geoid.'}
-            </p>
+            {pos.source === 'phone' && (
+              <p className={GN.note + ' mt-2'}>
+                Phone GPS{Number.isFinite(pos.acc) && <>, <span className="font-data">±{pos.acc < 10 ? pos.acc.toFixed(1) : Math.round(pos.acc)} m</span></>}
+                {pos.ts && <> · <span className="font-data">{pos.ts.slice(0, 16).replace('T', ' ')} UT</span></>}
+              </p>
+            )}
           </GnSection>
 
           <GnSection title="Session">
@@ -13294,7 +13263,7 @@
 
           <GnSection title="Antenna Height">
             <p className={GN.note + ' mb-3'}>
-              3 measurements equally spaced around the antenna, at the beginning and again at the end of the session.
+              3 readings before and 3 after, spaced around the antenna.
             </p>
 
             <div className="mb-3">
@@ -13322,12 +13291,9 @@
 
             <GnHeights g={g} res={res} onReading={setReading} />
 
-            <div className="flex items-end gap-2 mt-3">
-              <div className="w-32 flex-shrink-0">
-                <GnField label="Range tolerance" mono inputMode="decimal" unit="m" placeholder={fbGnss.fmt4(fbGnss.DEFAULT_TOL).slice(0, 5)}
-                  {...field('tol')} />
-              </div>
-              <p className={GN.note + ' pb-1.5'}>App default {fbGnss.DEFAULT_TOL} m — not a COGS standard. A range above it is flagged.</p>
+            <div className="w-32 mt-3">
+              <GnField label="Range tolerance" mono inputMode="decimal" unit="m" placeholder={fbGnss.fmt4(fbGnss.DEFAULT_TOL).slice(0, 5)}
+                {...field('tol')} />
             </div>
 
             {steps.length > 0 && (
