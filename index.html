@@ -672,7 +672,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.184';
+  const APP_VERSION = '1.185';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -5073,8 +5073,8 @@
     const decl = fbGnss.num(d.declination);
     const northLine = d.bearingRef === 'true'
       ? 'North reference: bearings entered and plotted as TRUE.'
-      : north.shift ? `North reference: bearings entered as MAGNETIC, plotted to TRUE NORTH with declination ${decl > 0 ? '+' : ''}${decl}° (True = Magnetic + declination).`
-      : 'North reference: bearings entered and plotted as MAGNETIC. Declination: not entered.';
+      : north.shift ? `North reference: bearings entered as MAGNETIC; declination ${decl > 0 ? '+' : ''}${decl}° applied, plotted to TRUE NORTH (True = Magnetic + declination).`
+      : 'North reference: bearings entered and plotted as MAGNETIC.';
     fineText(northLine, L + CW / 2, y, { size: 7.5, color: INK, align: 'center' });
     const maskText = unit(d.elevMask, '°');
     fineText(`Outer ring = horizon (0°), centre = zenith (90°).${maskText ? `  Dashed ring = elevation mask ${maskText}.` : ''}`, L + CW / 2, y + 4, { align: 'center' });
@@ -12307,7 +12307,9 @@
           <GnField label="Declination" mono unit="°" placeholder="e.g. −16.5" bad={declBad}
             value={g.declination} onChange={v => update({ declination: v })} />
         </div>
-        {g.bearingRef !== 'true' && north.shift ? <p className={GN.note + ' mb-3'}>Plotted to true north.</p> : <div className="mb-3" />}
+        {g.bearingRef !== 'true' && north.shift
+          ? <p className={GN.note + ' mb-3'}>Declination {north.shift > 0 ? '+' : '−'}{Math.abs(north.shift)}° applied: plotted to true north.</p>
+          : <div className="mb-3" />}
 
         {rows.length === 0 && (
           <p className="text-sm text-fb-ink-muted py-4 mb-2 text-center rounded-xl bg-fb-page-alt">No obstructions recorded.</p>
@@ -12345,7 +12347,6 @@
 
         <p className={GN.lbl + ' mt-4 mb-1'}>Site Obstruction Diagram</p>
         <GnDrawing svg={svg} onClick={onPlotTap} className="max-w-[360px] cursor-pointer" />
-        <p className={GN.note + ' text-center'}>Tap a wedge to find its row.</p>
       </>
     );
   }

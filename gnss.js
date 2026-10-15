@@ -582,11 +582,14 @@
 
   // Which north the plot is drawn to. Magnetic bearings are turned to true when
   // a declination is given: True = Magnetic + declination (west negative).
+  // Magnetic with no declination means compass bearings, plotted as read — a
+  // compass may already have declination set — so declination is mentioned
+  // only when the app applies one.
   function plotNorth(opts) {
     const o = opts || {}, decl = num(o.declination);
     if (o.ref === 'true') return { shift: 0, top: 'N', label: 'TRUE NORTH', note: 'bearings entered as true' };
-    if (fin(decl)) return { shift: decl, top: 'N', label: 'TRUE NORTH', note: `magnetic bearings + declination ${signed(decl)}°` };
-    return { shift: 0, top: 'MN', label: 'MAGNETIC NORTH', note: 'no declination applied' };
+    if (fin(decl)) return { shift: decl, top: 'N', label: 'TRUE NORTH', note: `declination ${signed(decl)}° applied to magnetic bearings` };
+    return { shift: 0, top: 'MN', label: 'MAGNETIC NORTH', note: '' };
   }
 
   // Rows as plot wedges: [{ id, n, az1, sweep, el1, el2 }] — az1 is where the
@@ -693,8 +696,8 @@
       const [x, y] = xy(mid, (w.el1 + w.el2) / 4);
       out.push(haloText(c, x, y, String(w.n), { size: 11, base: 'central', cls: 'gn-sky-num' }));
     });
-    out.push(haloText(c, cx, H - 16, north.label, { size: 10, halo: 0 }));
-    out.push(haloText(c, cx, H - 5, north.note, { size: 8, fill: c.soft, weight: 400, halo: 0 }));
+    out.push(haloText(c, cx, north.note ? H - 16 : H - 8, north.label, { size: 10, halo: 0 }));
+    if (north.note) out.push(haloText(c, cx, H - 5, north.note, { size: 8, fill: c.soft, weight: 400, halo: 0 }));
     out.push('</svg>');
     return out.join('');
   }
