@@ -580,17 +580,19 @@
   const THIN = 3;                     // degrees drawn for an obstruction with one bearing
   const signed = v => (v < 0 ? '−' : '+') + Math.abs(v);
 
-  // Which north the plot is drawn to. Magnetic bearings are turned to true when
-  // a declination is given: True = Magnetic + declination (west negative).
-  // Magnetic with no declination means compass bearings, plotted as read — a
-  // compass may already have declination set — so declination is mentioned
-  // only when the app applies one.
+  // How the bearings are turned onto the plot. The plot is simply north-up
+  // ('N'): bearings are plotted as entered — a compass may already have
+  // declination set. Only a declination typed against magnetic bearings turns
+  // them (True = Magnetic + declination, west negative), and only then does
+  // the plot say anything about it (`applied`, `note`).
   function plotNorth(opts) {
     const o = opts || {}, decl = num(o.declination);
-    if (o.ref === 'true') return { shift: 0, top: 'N', label: 'TRUE NORTH', note: 'bearings entered as true' };
-    if (fin(decl)) return { shift: decl, top: 'N', label: 'TRUE NORTH', note: `declination ${signed(decl)}° applied to magnetic bearings` };
-    return { shift: 0, top: 'MN', label: 'MAGNETIC NORTH', note: '' };
+    if (o.ref !== 'true' && fin(decl)) {
+      return { shift: decl, applied: true, top: 'N', note: `declination ${signed(decl)}° applied` };
+    }
+    return { shift: 0, applied: false, top: 'N', note: '' };
   }
+  const SKY_TITLE = 'OBSTRUCTION PLOT';
 
   // Rows as plot wedges: [{ id, n, az1, sweep, el1, el2 }] — az1 is where the
   // wedge starts on the plot's north, sweep how far it runs clockwise.
@@ -639,7 +641,7 @@
       return [cx + rr * Math.sin(a), cy - rr * Math.cos(a)];
     };
     const p = (az, el) => xy(az, el).map(r2).join(' ');
-    const out = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Sky plot of site obstructions, ${north.label.toLowerCase()} up">`];
+    const out = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Obstruction plot, north up">`];
     if (c.print) {
       out.push(`<defs><pattern id="gnHatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">` +
         `<rect width="5" height="5" fill="#fff"/><line x1="0" y1="0" x2="0" y2="5" stroke="#000" stroke-opacity="0.6" stroke-width="1.5"/></pattern></defs>`);
@@ -696,7 +698,7 @@
       const [x, y] = xy(mid, (w.el1 + w.el2) / 4);
       out.push(haloText(c, x, y, String(w.n), { size: 11, base: 'central', cls: 'gn-sky-num' }));
     });
-    out.push(haloText(c, cx, north.note ? H - 16 : H - 8, north.label, { size: 10, halo: 0 }));
+    out.push(haloText(c, cx, north.note ? H - 16 : H - 8, SKY_TITLE, { size: 10, halo: 0 }));
     if (north.note) out.push(haloText(c, cx, H - 5, north.note, { size: 8, fill: c.soft, weight: 400, halo: 0 }));
     out.push('</svg>');
     return out.join('');

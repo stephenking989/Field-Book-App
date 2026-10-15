@@ -672,7 +672,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.185';
+  const APP_VERSION = '1.186';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -4838,7 +4838,7 @@
     }
     const filled = kit.filledObstructions(g.obstructions);
     const obsNo = o => String(g.obstructions.indexOf(o) + 1);    // matches the number on the sky plot
-    const refLetter = g.bearingRef === 'true' ? 'T' : 'M';
+    const declApplied = fbGnss.plotNorth({ ref: g.bearingRef, declination: g.declination }).applied;
 
     // ═══ Page 1 — Observation Log ═══════════════════════════════════════════
     let y = section(contentY + 2, 'Project & Station');
@@ -4901,8 +4901,6 @@
      ['ARP to L2 phase centre', A.l2],
     ].forEach(([label, v]) => constLine(label, f4(v) ? `${f4(v)} m` : '', true));
     constLine('Slant measure mark', A.slantMark || '');
-    fineText('3 readings before and 3 after, spaced around the antenna.', L, y + 2.8, { size: 6, style: 'italic' });
-    y += 4.5;
 
     const READ = [['slant', 'before'], ['slant', 'after'], ['vert', 'before'], ['vert', 'after']];
     const reading = (set, part, i) => {
@@ -4941,8 +4939,8 @@
     });
     if (res.slantErr) checks.push(`Slant: ${res.slantErr}`);
     if (res.vertErr) checks.push(`Vertical: ${res.vertErr}`);
-    if (res.slantNote) checks.push(`Slant: ${res.slantNote.text}`);
-    if (res.vertNote) checks.push(`Vertical: ${res.vertNote.text}`);
+    if (res.slantNote?.tone === 'warn') checks.push(`Slant: ${res.slantNote.text}`);
+    if (res.vertNote?.tone === 'warn') checks.push(`Vertical: ${res.vertNote.text}`);
     pdf.setFontSize(6.5); pdf.setFont('helvetica', 'normal');            // fineText's font, for the wrap width
     checks.flatMap(line => pdf.splitTextToSize(safe(line), colW))
       .forEach(line => { fineText(line, L, y, { color: INK }); y += 3.4; });
@@ -5018,7 +5016,7 @@
 
     // Sketch notes — the text, or blank lines to write on
     pdf.setFontSize(5.8); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...LBL);
-    pdf.text('SKETCH NOTES / TO REACH', L, y + 2);
+    pdf.text('SKETCH NOTES', L, y + 2);
     y += 6.5;
     const noteText = safe(sk.notes).trim();
     if (noteText) {
@@ -5033,12 +5031,13 @@
 
     pdf.autoTable({
       ...tableBase, startY: y + 1, margin: wideMargin, tableWidth: CW,
-      head: [['#', 'Obstruction', `Bearing (from – to, ${g.bearingRef === 'true' ? 'true' : 'magnetic'})`, 'Comments']],
+      // Bearings as entered; they are only called magnetic when a declination turns them on the plot.
+      head: [['#', 'Obstruction', 'Type / Description', `Bearing (from – to${declApplied ? ', magnetic' : ''})`, 'Comments']],
       body: padRows(filled.map(o => {
         const from = angle(o.fromAz, 3), to = angle(o.toAz, 3);
-        return [obsNo(o), safe(o.name), from || to ? `${from}${to ? ` – ${to}` : ''} ${refLetter}` : '', safe(o.comments)];
-      }), 4, 4),
-      columnStyles: { 0: { cellWidth: 9, halign: 'center' }, 1: { cellWidth: 48 }, 2: { cellWidth: 46, font: F.mono, halign: 'center' } },
+        return [obsNo(o), safe(o.name), safe(o.desc), from || to ? `${from}${to ? ` – ${to}` : ''}` : '', safe(o.comments)];
+      }), 4, 5),
+      columnStyles: { 0: { cellWidth: 9, halign: 'center' }, 1: { cellWidth: 38 }, 2: { cellWidth: 38 }, 3: { cellWidth: 40, font: F.mono, halign: 'center' } },
     });
     pdf.autoTable({
       ...tableBase, startY: pdf.lastAutoTable.finalY + 4, margin: wideMargin, tableWidth: CW,
@@ -5054,14 +5053,13 @@
     await _pdfSkyPlotBlock(pdf, kit, y, g, F);
   }
 
-  // The Site Obstruction Diagram: sky plot, north-reference note and the
-  // numbered obstruction table. `d` carries obstructions, bearingRef,
+  // The Site Obstruction Diagram: the sky plot and the numbered obstruction
+  // table. `d` carries obstructions, bearingRef,
   // declination and elevMask — a GNSS page's data or a site page's.
   async function _pdfSkyPlotBlock(pdf, kit, y, d, F) {
-    const { L, CW, INK, safe, fineText, tableBase, padRows, angle, unit, wideMargin } = kit;
+    const { L, CW, safe, fineText, tableBase, padRows, angle, wideMargin } = kit;
     const obsNo = o => String(d.obstructions.indexOf(o) + 1);    // matches the number on the sky plot
     const plotW = 132, plotH = plotW * 344 / 320, px = L + (CW - plotW) / 2;
-    const north = fbGnss.plotNorth({ ref: d.bearingRef, declination: d.declination });
     try {
       const svg = fbGnss.buildSkyPlotSVG(d.obstructions, { print: true, ref: d.bearingRef, declination: d.declination, mask: d.elevMask, parse: gnAngle });
       pdf.addImage(await _svgToPng(svg, 1280, 1376), 'PNG', px, y, plotW, plotH, undefined, 'FAST');
@@ -5069,16 +5067,9 @@
       console.error('[pdf] sky plot failed:', err);
       fineText('(sky plot could not be rendered)', L + CW / 2, y + plotH / 2, { size: 8, align: 'center' });
     }
+    // The plot carries its own title (and the declination, when one is applied);
+    // nothing else is written under it.
     y += plotH + 4;
-    const decl = fbGnss.num(d.declination);
-    const northLine = d.bearingRef === 'true'
-      ? 'North reference: bearings entered and plotted as TRUE.'
-      : north.shift ? `North reference: bearings entered as MAGNETIC; declination ${decl > 0 ? '+' : ''}${decl}° applied, plotted to TRUE NORTH (True = Magnetic + declination).`
-      : 'North reference: bearings entered and plotted as MAGNETIC.';
-    fineText(northLine, L + CW / 2, y, { size: 7.5, color: INK, align: 'center' });
-    const maskText = unit(d.elevMask, '°');
-    fineText(`Outer ring = horizon (0°), centre = zenith (90°).${maskText ? `  Dashed ring = elevation mask ${maskText}.` : ''}`, L + CW / 2, y + 4, { align: 'center' });
-    y += 8;
     pdf.autoTable({
       ...tableBase, startY: y, margin: wideMargin, tableWidth: CW,
       head: [['#', 'Obstruction', 'Type / Description', 'From Az', 'Elev', 'To Az', 'Elev']],
@@ -12869,8 +12860,8 @@
           </div>
         )}
 
-        <p className={GN.lbl + ' mt-4'}>Sketch notes / to reach</p>
-        <textarea ref={gnGrow} onInput={e => gnGrow(e.target)} rows={2} aria-label="Sketch notes / to reach"
+        <p className={GN.lbl + ' mt-4'}>Sketch notes</p>
+        <textarea ref={gnGrow} onInput={e => gnGrow(e.target)} rows={2} aria-label="Sketch notes"
           value={sk.notes} onChange={e => setSketch({ notes: e.target.value })}
           placeholder="Access, parking, how to find the mark..."
           className={`w-full bg-transparent outline-none resize-none overflow-hidden border-b leading-relaxed placeholder:text-fb-ink-faint ${GN.hand} ${GN.ok}`} />
