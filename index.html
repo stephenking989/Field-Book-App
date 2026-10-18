@@ -9188,6 +9188,111 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // POINTS PAGE TOOLS — inverse between two points (beta)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Grid inverse from point A to point B (PNEZD rows). Returns null when either
+  // point lacks a northing/easting. Azimuth is grid, clockwise from grid north.
+  function pointInverse(a, b) {
+    const num = v => { const n = parseFloat(String(v ?? '').replace(/,/g, '')); return isFinite(n) ? n : null; };
+    const n1 = num(a.cells?.col_north), e1 = num(a.cells?.col_east);
+    const n2 = num(b.cells?.col_north), e2 = num(b.cells?.col_east);
+    if (n1 === null || e1 === null || n2 === null || e2 === null) return null;
+    const dN = n2 - n1, dE = e2 - e1;
+    const hd = Math.hypot(dN, dE);
+    let az = Math.atan2(dE, dN) * 180 / Math.PI;
+    if (az < 0) az += 360;
+    const z1 = num(a.cells?.col_elev), z2 = num(b.cells?.col_elev);
+    const dZ = z1 !== null && z2 !== null ? z2 - z1 : null;
+    return { dN, dE, hd, az, dZ, sd: dZ !== null ? Math.hypot(hd, dZ) : null };
+  }
+
+  // Quadrant bearing, e.g. N 45°12'30" E. A zero-length line has no bearing.
+  function quadrantBearing(az, hd) {
+    if (!(hd > 0)) return '—';
+    if (az <= 90)  return `N ${formatDMS(az)} E`;
+    if (az <= 180) return `S ${formatDMS(180 - az)} E`;
+    if (az <= 270) return `S ${formatDMS(az - 180)} W`;
+    return `N ${formatDMS(360 - az)} W`;
+  }
+
+  function inverseText(fromPt, toPt, inv) {
+    const f = v => v.toFixed(3);
+    const lines = [
+      `Inverse ${fromPt} → ${toPt}`,
+      `Bearing ${quadrantBearing(inv.az, inv.hd)}  (Az ${inv.hd > 0 ? formatDMS(inv.az) : '—'})`,
+      `HD ${f(inv.hd)} m`,
+      `ΔN ${f(inv.dN)}  ΔE ${f(inv.dE)}`,
+    ];
+    if (inv.dZ !== null) lines.push(`ΔElev ${f(inv.dZ)}  SD ${f(inv.sd)}`);
+    return lines.join('\n');
+  }
+
+  // Sheet: pick two point numbers on this page and read the inverse.
+  function InverseSheet({ rows, initialFrom, initialTo, onClose }) {
+    const [from, setFrom] = useState(initialFrom || '');
+    const [to, setTo]     = useState(initialTo || '');
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const toast = useToast();
+    const find = pt => rows.find(r => String(r.cells?.col_ptnum ?? '').trim().toLowerCase() === pt.trim().toLowerCase());
+    const a = from.trim() ? find(from) : null;
+    const b = to.trim() ? find(to) : null;
+    const inv = a && b ? pointInverse(a, b) : null;
+    const problem = !from.trim() || !to.trim() ? null
+      : !a ? `No point ${from.trim()} on this page`
+      : !b ? `No point ${to.trim()} on this page`
+      : !inv ? 'Both points need a northing and easting'
+      : null;
+    const f = v => v.toFixed(3);
+    const inputCls = 'w-full px-3 py-3 rounded-xl text-base font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint';
+
+    async function copy() {
+      if (!inv) return;
+      const text = inverseText(from.trim(), to.trim(), inv);
+      try { await navigator.clipboard.writeText(text); toast.success('Inverse copied'); }
+      catch { toast.error('Copy failed'); }
+    }
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Inverse</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted font-data">Grid</span>
+          </div>
+          <div className="flex gap-2 mb-3">
+            <div className="flex-1">
+              <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5">From Pt #</p>
+              <input className={inputCls} value={from} onChange={e => setFrom(e.target.value)} inputMode="numeric" autoFocus={!initialFrom} />
+            </div>
+            <div className="flex-1">
+              <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5">To Pt #</p>
+              <input className={inputCls} value={to} onChange={e => setTo(e.target.value)} inputMode="numeric" autoFocus={!!initialFrom && !initialTo} />
+            </div>
+          </div>
+          {problem && <p className="text-sm text-fb-warn mb-3">{problem}</p>}
+          {inv && (
+            <div className="rounded-xl px-4 py-3 text-center bg-fb-field border border-fb-border mb-3" data-inverse-result>
+              <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1">Bearing</p>
+              <p className="font-data text-fb-ink text-[26px] leading-tight">{quadrantBearing(inv.az, inv.hd)}</p>
+              <p className="text-xs text-fb-ink-muted mt-1 font-data">Az {inv.hd > 0 ? formatDMS(inv.az) : '—'}</p>
+              <p className="font-data text-fb-ink text-[22px] leading-tight mt-2">{f(inv.hd)} m</p>
+              <p className="text-xs text-fb-ink-muted mt-1 font-data">ΔN {f(inv.dN)} · ΔE {f(inv.dE)}</p>
+              {inv.dZ !== null && <p className="text-xs text-fb-ink-muted font-data">ΔElev {f(inv.dZ)} · SD {f(inv.sd)}</p>}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={onClose}>Close</button>
+            <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint" disabled={!inv} onClick={copy}>Copy result</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // DATA PAGE
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -9206,6 +9311,7 @@
     const [insertSub, setInsertSub]     = useState(null); // 'rows' | 'cols' — the list open inside Insert ▾
     const [csvImportModal, setCsvImportModal] = useState(null); // null | { parsed, useHeader }
     const [gpsOpen, setGpsOpen]         = useState(false);  // GPS capture sheet (points pages)
+    const [inverseOpen, setInverseOpen] = useState(null);   // { from, to } while the Inverse sheet is open
     const [srcFilter, setSrcFilter]     = useState('all');  // points pages: 'all' | a fbGeo.SOURCES key
     const [menuPos, setMenuPos]         = useState({ top: 0, left: 0 }); // fixed-position for open dropdown
     // DMS keyboard — global setting persisted in localStorage, OFF by default
@@ -10789,6 +10895,14 @@
                     </button>
                   )}
                   <div className="dp-drop-sep" />
+                  <div className="dp-drop-section">Check</div>
+                  <button onClick={() => {
+                    setOpenTbMenu(null);
+                    const b = getSelectionBounds();
+                    const pt = i => String(rows[i]?.cells?.col_ptnum ?? '').trim();
+                    setInverseOpen(b ? { from: pt(b.minR), to: b.maxR !== b.minR ? pt(b.maxR) : '' } : { from: '', to: '' });
+                  }}>Inverse…</button>
+                  <div className="dp-drop-sep" />
                   <div className="dp-drop-section">Show points</div>
                   <button onClick={() => { setSrcFilter('all'); setOpenTbMenu(null); }}>
                     <span style={{ width: 14 }}>{srcFilter === 'all' ? '✓' : ''}</span> All ({rows.length})
@@ -11383,6 +11497,10 @@
               </div>
             </div>
           </div>
+        )}
+
+        {inverseOpen && (
+          <InverseSheet rows={rows} initialFrom={inverseOpen.from} initialTo={inverseOpen.to} onClose={() => setInverseOpen(null)} />
         )}
 
         {/* ── GPS capture (points pages) — the row lands on THIS page ── */}
