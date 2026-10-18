@@ -9188,7 +9188,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // POINTS PAGE TOOLS — inverse between two points (beta)
+  // POINTS PAGE TOOLS — inverse between two points, description code chips (beta)
   // ─────────────────────────────────────────────────────────────────────────────
 
   // Grid inverse from point A to point B (PNEZD rows). Returns null when either
@@ -9292,6 +9292,54 @@
     );
   }
 
+  // Description codes. The editable list is a device preference (fb_desc_codes);
+  // recent codes come from the first word of this page's descriptions.
+  const DEFAULT_DESC_CODES = ['IB', 'IP', 'CP', 'BM', 'PP', 'FH', 'CL', 'EP', 'TOB', 'BOB'];
+  function loadDescCodes() {
+    try {
+      const v = JSON.parse(localStorage.getItem('fb_desc_codes'));
+      if (Array.isArray(v)) return v.filter(c => typeof c === 'string' && c.trim());
+    } catch {}
+    return DEFAULT_DESC_CODES;
+  }
+  function saveDescCodes(codes) {
+    try { localStorage.setItem('fb_desc_codes', JSON.stringify(codes)); } catch {}
+  }
+  function recentDescCodes(rows, max = 6) {
+    const out = [];
+    for (let i = rows.length - 1; i >= 0 && out.length < max; i--) {
+      const w = String(rows[i].cells?.col_desc ?? '').trim().split(/\s+/)[0];
+      if (w && !out.includes(w.toUpperCase())) out.push(w.toUpperCase());
+    }
+    return out;
+  }
+  function parseDescCodes(text) {
+    const seen = new Set();
+    return text.split(/[\s,;]+/).map(c => c.trim().toUpperCase()).filter(c => c && !seen.has(c) && seen.add(c));
+  }
+
+  function DescCodesSheet({ codes, onSave, onClose }) {
+    const [text, setText] = useState(codes.join(' '));
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-fb-ink mb-4">Description codes</h2>
+          <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5">Codes</p>
+          <textarea rows={4} value={text} onChange={e => setText(e.target.value)} autoCapitalize="characters" spellCheck={false}
+            className="w-full px-3 py-3 rounded-xl text-base font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint mb-4"
+            placeholder="IB IP CP BM" />
+          <div className="flex gap-2">
+            <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={() => setText(DEFAULT_DESC_CODES.join(' '))}>Reset</button>
+            <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80" onClick={() => onSave(parseDescCodes(text))}>Save codes</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // DATA PAGE
   // ─────────────────────────────────────────────────────────────────────────────
@@ -9312,6 +9360,8 @@
     const [csvImportModal, setCsvImportModal] = useState(null); // null | { parsed, useHeader }
     const [gpsOpen, setGpsOpen]         = useState(false);  // GPS capture sheet (points pages)
     const [inverseOpen, setInverseOpen] = useState(null);   // { from, to } while the Inverse sheet is open
+    const [descCodes, setDescCodes]     = useState(loadDescCodes);
+    const [codesOpen, setCodesOpen]     = useState(false);
     const [srcFilter, setSrcFilter]     = useState('all');  // points pages: 'all' | a fbGeo.SOURCES key
     const [menuPos, setMenuPos]         = useState({ top: 0, left: 0 }); // fixed-position for open dropdown
     // DMS keyboard — global setting persisted in localStorage, OFF by default
@@ -11008,6 +11058,27 @@
             style={{ background: isFormulaEditing ? 'rgba(45,106,79,0.05)' : 'transparent' }}
           />
         </div>
+        {/* ── Description code chips (points pages, Description cell active) ── */}
+        {page.type === 'points' && activeCell && columns[activeCell.colIdx]?.id === 'col_desc' && rows[activeCell.rowIdx] && (() => {
+          const recent = recentDescCodes(rows);
+          const chips = [...recent, ...descCodes.filter(c => !recent.includes(c))];
+          // Cell being typed in: the code replaces the text and Enter saves it as usual.
+          // Cell only selected: one tap saves the code.
+          const apply = code => {
+            if (editingCell) { setEditValue(code); setFormulaBarVal(code); return; }
+            updateCell(rows[activeCell.rowIdx].id, 'col_desc', code);
+            setFormulaBarVal(code);
+          };
+          const chipCls = 'h-9 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 flex-shrink-0 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep';
+          return (
+            <div className="flex gap-1.5 px-2 py-1.5 overflow-x-auto" data-desc-chips>
+              {chips.map(c => (
+                <button key={c} className={chipCls + ' font-data'} onPointerDown={e => e.preventDefault()} onClick={() => apply(c)}>{c}</button>
+              ))}
+              <button className={chipCls} onPointerDown={e => e.preventDefault()} onClick={() => setCodesOpen(true)}><Ico.Pencil /> Codes</button>
+            </div>
+          );
+        })()}
         {/* ── Ref chips — colour-coded cell references in current formula ── */}
         {formulaRefs.length > 0 && (
           <div className="dp-ref-chips">
@@ -11501,6 +11572,10 @@
 
         {inverseOpen && (
           <InverseSheet rows={rows} initialFrom={inverseOpen.from} initialTo={inverseOpen.to} onClose={() => setInverseOpen(null)} />
+        )}
+        {codesOpen && (
+          <DescCodesSheet codes={descCodes} onClose={() => setCodesOpen(false)}
+            onSave={codes => { saveDescCodes(codes); setDescCodes(codes); setCodesOpen(false); toast.success('Codes saved'); }} />
         )}
 
         {/* ── GPS capture (points pages) — the row lands on THIS page ── */}
