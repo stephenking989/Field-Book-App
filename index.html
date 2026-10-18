@@ -9305,6 +9305,118 @@
     );
   }
 
+  // Bearing text → grid azimuth in decimal degrees, or null. Takes an azimuth
+  // in any DMS form parseDMSInput reads (123 45 30, 123.4530, 123°45'30"), or a
+  // quadrant bearing: N 45 12 30 E, S45.1230W.
+  function parseBearing(raw) {
+    const s = String(raw ?? '').trim();
+    if (!s) return null;
+    const q = s.match(/^([NS])\s*(.+?)\s*([EW])$/i);
+    if (q) {
+      const a = parseDMSInput(q[2]);
+      if (a === null || a < 0 || a > 90) return null;
+      const ns = q[1].toUpperCase(), ew = q[3].toUpperCase();
+      const az = ns === 'N' ? (ew === 'E' ? a : 360 - a) : (ew === 'E' ? 180 - a : 180 + a);
+      return az % 360;
+    }
+    const az = parseDMSInput(s);
+    return az === null || az < 0 || az >= 360 ? null : az;
+  }
+
+  // New point from a known point, a grid azimuth and a horizontal distance.
+  function forwardPoint(n, e, az, hd) {
+    const r = az * Math.PI / 180;
+    return { n: n + hd * Math.cos(r), e: e + hd * Math.sin(r) };
+  }
+
+  const ptKey = v => String(v ?? '').trim().toLowerCase();
+  const findPt = (rows, num) => num.trim() ? rows.find(r => ptKey(r.cells?.col_ptnum) === ptKey(num)) : null;
+  const ptNE = r => {
+    const num = v => { const x = parseFloat(String(v ?? '').replace(/,/g, '')); return isFinite(x) ? x : null; };
+    const n = num(r?.cells?.col_north), e = num(r?.cells?.col_east);
+    return n === null || e === null ? null : { n, e };
+  };
+  const sheetLabel = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
+  const sheetInput = 'w-full px-3 py-3 rounded-xl text-base font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint';
+
+  // Sheet: forward a new point (bearing + distance) from a point on this page.
+  function ForwardPointSheet({ rows, projectId, initialFrom, suggestNum, onAdd, onClose }) {
+    const [from, setFrom] = useState(initialFrom || '');
+    const [brg, setBrg]   = useState('');
+    const [dist, setDist] = useState('');
+    const [num, setNum]   = useState(suggestNum || '');
+    const [desc, setDesc] = useState('');
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+
+    const a  = findPt(rows, from);
+    const ne = ptNE(a);
+    const az = parseBearing(brg);
+    const hd = parseFloat(String(dist).replace(/,/g, ''));
+    const taken = num.trim() && isPtNumTaken(projectId, num.trim());
+    const res = ne && az !== null && isFinite(hd) && hd > 0 ? forwardPoint(ne.n, ne.e, az, hd) : null;
+    const problem = from.trim() && !a ? `No point ${from.trim()} on this page`
+      : a && !ne ? `Point ${from.trim()} needs a northing and easting`
+      : brg.trim() && az === null ? 'Can\'t read that bearing'
+      : dist.trim() && !(hd > 0) ? 'Distance must be more than 0'
+      : taken ? `Point ${num.trim()} is already used`
+      : null;
+    const canAdd = res && num.trim() && !taken;
+
+    function add() {
+      if (!canAdd) return;
+      onAdd({ number: num.trim(), n: res.n.toFixed(3), e: res.e.toFixed(3), desc: desc.trim() });
+    }
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" data-forward-sheet>
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Forward point</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted font-data">Grid</span>
+          </div>
+          <div className="flex gap-2 mb-3">
+            <div className="w-24">
+              <p className={sheetLabel}>From Pt #</p>
+              <input className={sheetInput} value={from} onChange={e => setFrom(e.target.value)} inputMode="numeric" autoFocus={!initialFrom} data-fwd-from />
+            </div>
+            <div className="flex-1">
+              <p className={sheetLabel}>Bearing or azimuth</p>
+              <input className={sheetInput} value={brg} onChange={e => setBrg(e.target.value)} placeholder="N 45 12 30 E" autoFocus={!!initialFrom} data-fwd-brg />
+            </div>
+          </div>
+          <div className="flex gap-2 mb-3">
+            <div className="flex-1">
+              <p className={sheetLabel}>HD (m)</p>
+              <input className={sheetInput} value={dist} onChange={e => setDist(e.target.value)} inputMode="decimal" data-fwd-dist />
+            </div>
+            <div className="w-24">
+              <p className={sheetLabel}>New Pt #</p>
+              <input className={sheetInput} value={num} onChange={e => setNum(e.target.value)} inputMode="numeric" data-fwd-num />
+            </div>
+          </div>
+          <p className={sheetLabel}>Description</p>
+          <input className={`${sheetInput} mb-3`} value={desc} onChange={e => setDesc(e.target.value)} data-fwd-desc />
+          {problem && <p className="text-sm text-fb-warn mb-3">{problem}</p>}
+          {res && (
+            <div className="rounded-xl px-4 py-3 text-center bg-fb-field border border-fb-border mb-3" data-forward-result>
+              <p className="text-xs text-fb-ink-muted font-data mb-1">{quadrantBearing(az, hd)} · Az {formatDMS(az)}</p>
+              <p className="font-data text-fb-ink text-[22px] leading-tight">N {res.n.toFixed(3)}</p>
+              <p className="font-data text-fb-ink text-[22px] leading-tight">E {res.e.toFixed(3)}</p>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={onClose}>Close</button>
+            <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint" disabled={!canAdd} onClick={add}>
+              {num.trim() ? `Add point ${num.trim()}` : 'Add point'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Description codes. The editable list is a device preference (fb_desc_codes);
   // recent codes come from the first word of this page's descriptions.
   const DEFAULT_DESC_CODES = ['IB', 'IP', 'CP', 'BM', 'PP', 'FH', 'CL', 'EP', 'TOB', 'BOB'];
@@ -9373,6 +9485,7 @@
     const [csvImportModal, setCsvImportModal] = useState(null); // null | { parsed, useHeader }
     const [gpsOpen, setGpsOpen]         = useState(false);  // GPS capture sheet (points pages)
     const [inverseOpen, setInverseOpen] = useState(null);   // { from, to } while the Inverse sheet is open
+    const [forwardOpen, setForwardOpen] = useState(null);   // { from } while the Forward point sheet is open
     const [descCodes, setDescCodes]     = useState(loadDescCodes);
     const [codesOpen, setCodesOpen]     = useState(false);
     const [srcFilter, setSrcFilter]     = useState('all');  // points pages: 'all' | a fbGeo.SOURCES key
@@ -10966,6 +11079,13 @@
                     setInverseOpen(b ? { from: pt(b.minR), to: b.maxR !== b.minR ? pt(b.maxR) : '' } : { from: '', to: '' });
                   }}>Inverse…</button>
                   <div className="dp-drop-sep" />
+                  <div className="dp-drop-section">Compute</div>
+                  <button data-menu-forward onClick={() => {
+                    setOpenTbMenu(null);
+                    const b = getSelectionBounds();
+                    setForwardOpen({ from: b ? String(rows[b.minR]?.cells?.col_ptnum ?? '').trim() : '' });
+                  }}>Forward point…</button>
+                  <div className="dp-drop-sep" />
                   <div className="dp-drop-section">Show points</div>
                   <button onClick={() => { setSrcFilter('all'); setOpenTbMenu(null); }}>
                     <span style={{ width: 14 }}>{srcFilter === 'all' ? '✓' : ''}</span> All ({rows.length})
@@ -11585,6 +11705,18 @@
 
         {inverseOpen && (
           <InverseSheet rows={rows} initialFrom={inverseOpen.from} initialTo={inverseOpen.to} onClose={() => setInverseOpen(null)} />
+        )}
+        {forwardOpen && (
+          <ForwardPointSheet rows={rows} projectId={projectId} initialFrom={forwardOpen.from}
+            suggestNum={nextPointNum(rows)} onClose={() => setForwardOpen(null)}
+            onAdd={pt => {
+              const cells = {};
+              columns.forEach(c => { cells[c.id] = ''; });
+              Object.assign(cells, { col_ptnum: pt.number, col_north: pt.n, col_east: pt.e, col_desc: pt.desc });
+              persistRows([...rows, { id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7), cells }]);
+              setForwardOpen(null);
+              toast.success(`Point ${pt.number} added`);
+            }} />
         )}
         {codesOpen && (
           <DescCodesSheet codes={descCodes} onClose={() => setCodesOpen(false)}
