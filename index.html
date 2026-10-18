@@ -9417,6 +9417,88 @@
     );
   }
 
+  // Stakeout from an occupied point: angle turned clockwise from the backsight
+  // to the target, and the horizontal distance to set out.
+  function stakeout(oc, bs, tg) {
+    const azBs = pointInverse(oc, bs), azTg = pointInverse(oc, tg);
+    if (!azBs || !azTg || !(azBs.hd > 0) || !(azTg.hd > 0)) return null;
+    const right = ((azTg.az - azBs.az) % 360 + 360) % 360;
+    return { right, left: right === 0 ? 0 : 360 - right, hd: azTg.hd, az: azTg.az, bsAz: azBs.az, bsHd: azBs.hd, dZ: azTg.dZ };
+  }
+
+  function StakeoutSheet({ rows, initialOc, onClose }) {
+    const [oc, setOc] = useState(initialOc || '');
+    const [bs, setBs] = useState('');
+    const [tg, setTg] = useState('');
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const toast = useToast();
+    const pts = [oc, bs, tg].map(v => findPt(rows, v));
+    const names = [oc, bs, tg].map(v => v.trim());
+    const missing = names.findIndex((v, i) => v && !pts[i]);
+    const noNE = names.findIndex((v, i) => pts[i] && !ptNE(pts[i]));
+    const same = names[0] && (ptKey(names[0]) === ptKey(names[1]) || ptKey(names[0]) === ptKey(names[2]));
+    const so = pts.every(Boolean) && noNE < 0 && !same ? stakeout(pts[0], pts[1], pts[2]) : null;
+    const problem = missing >= 0 ? `No point ${names[missing]} on this page`
+      : noNE >= 0 ? `Point ${names[noNE]} needs a northing and easting`
+      : same ? 'Backsight and target must differ from the occupied point'
+      : null;
+    const f = v => v.toFixed(3);
+
+    async function copy() {
+      if (!so) return;
+      const lines = [
+        `Stakeout ${names[2]} from ${names[0]}, BS ${names[1]}`,
+        `Turn right ${formatDMS(so.right)}  (left ${formatDMS(so.left)})`,
+        `HD ${f(so.hd)} m  Az ${formatDMS(so.az)}`,
+        `BS Az ${formatDMS(so.bsAz)}  HD ${f(so.bsHd)}`,
+      ];
+      if (so.dZ !== null) lines.push(`ΔElev ${f(so.dZ)}`);
+      try { await navigator.clipboard.writeText(lines.join('\n')); toast.success('Stakeout copied'); }
+      catch { toast.error('Copy failed'); }
+    }
+
+    const field = (label, val, set, key, focus) => (
+      <div className="flex-1">
+        <p className={sheetLabel}>{label}</p>
+        <input className={sheetInput} value={val} onChange={e => set(e.target.value)} inputMode="numeric" autoFocus={focus} data-so={key} />
+      </div>
+    );
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" data-stakeout-sheet>
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Stakeout</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted font-data">Grid</span>
+          </div>
+          <div className="flex gap-2 mb-3">
+            {field('Occupied', oc, setOc, 'oc', !initialOc)}
+            {field('Backsight', bs, setBs, 'bs', !!initialOc)}
+            {field('Target', tg, setTg, 'tg', false)}
+          </div>
+          {problem && <p className="text-sm text-fb-warn mb-3">{problem}</p>}
+          {so && (
+            <div className="rounded-xl px-4 py-3 text-center bg-fb-field border border-fb-border mb-3" data-stakeout-result>
+              <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1">Turn right from BS</p>
+              <p className="font-data text-fb-ink text-[26px] leading-tight">{formatDMS(so.right)}</p>
+              <p className="text-xs text-fb-ink-muted mt-1 font-data">Left {formatDMS(so.left)}</p>
+              <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mt-3 mb-1">HD to target</p>
+              <p className="font-data text-fb-ink text-[22px] leading-tight">{f(so.hd)} m</p>
+              <p className="text-xs text-fb-ink-muted mt-1 font-data">Az {formatDMS(so.az)} · BS Az {formatDMS(so.bsAz)}</p>
+              {so.dZ !== null && <p className="text-xs text-fb-ink-muted font-data">ΔElev {f(so.dZ)}</p>}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={onClose}>Close</button>
+            <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint" disabled={!so} onClick={copy}>Copy result</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Description codes. The editable list is a device preference (fb_desc_codes);
   // recent codes come from the first word of this page's descriptions.
   const DEFAULT_DESC_CODES = ['IB', 'IP', 'CP', 'BM', 'PP', 'FH', 'CL', 'EP', 'TOB', 'BOB'];
@@ -9486,6 +9568,7 @@
     const [gpsOpen, setGpsOpen]         = useState(false);  // GPS capture sheet (points pages)
     const [inverseOpen, setInverseOpen] = useState(null);   // { from, to } while the Inverse sheet is open
     const [forwardOpen, setForwardOpen] = useState(null);   // { from } while the Forward point sheet is open
+    const [stakeoutOpen, setStakeoutOpen] = useState(null); // { oc } while the Stakeout sheet is open
     const [descCodes, setDescCodes]     = useState(loadDescCodes);
     const [codesOpen, setCodesOpen]     = useState(false);
     const [srcFilter, setSrcFilter]     = useState('all');  // points pages: 'all' | a fbGeo.SOURCES key
@@ -11085,6 +11168,11 @@
                     const b = getSelectionBounds();
                     setForwardOpen({ from: b ? String(rows[b.minR]?.cells?.col_ptnum ?? '').trim() : '' });
                   }}>Forward point…</button>
+                  <button data-menu-stakeout onClick={() => {
+                    setOpenTbMenu(null);
+                    const b = getSelectionBounds();
+                    setStakeoutOpen({ oc: b ? String(rows[b.minR]?.cells?.col_ptnum ?? '').trim() : '' });
+                  }}>Stakeout…</button>
                   <div className="dp-drop-sep" />
                   <div className="dp-drop-section">Show points</div>
                   <button onClick={() => { setSrcFilter('all'); setOpenTbMenu(null); }}>
@@ -11705,6 +11793,9 @@
 
         {inverseOpen && (
           <InverseSheet rows={rows} initialFrom={inverseOpen.from} initialTo={inverseOpen.to} onClose={() => setInverseOpen(null)} />
+        )}
+        {stakeoutOpen && (
+          <StakeoutSheet rows={rows} initialOc={stakeoutOpen.oc} onClose={() => setStakeoutOpen(null)} />
         )}
         {forwardOpen && (
           <ForwardPointSheet rows={rows} projectId={projectId} initialFrom={forwardOpen.from}
