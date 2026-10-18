@@ -7162,8 +7162,8 @@
               {page.type === 'points' && (
                 <button data-export-points
                   onClick={() => { setShowExportMenu(false); setShowExportPts(true); }}
-                  className="flex items-center gap-2 w-full px-3.5 py-2.5 rounded-lg text-left text-[13px] font-semibold text-fb-heading active:bg-fb-page-alt">
-                  <Ico.Download /> Export points (CSV / KML / GPX)…
+                  className="flex items-center gap-2 w-full px-3.5 py-2.5 rounded-lg text-left text-[13px] font-semibold text-fb-heading whitespace-nowrap active:bg-fb-page-alt">
+                  <Ico.Download /> Export KML / GPX…
                 </button>
               )}
             </div>
@@ -7206,7 +7206,7 @@
             projectId={projectId}
             project={project}
             onReload={reload}
-            onRegisterExports={page.type === 'data' || page.type === 'photo' ? registerExports : undefined}
+            onRegisterExports={page.type === 'data' || page.type === 'points' || page.type === 'photo' ? registerExports : undefined}
             onBack={page.type === 'sketch' ? () => navigate(sketchOwner
               ? `#/project/${projectId}/page/${sketchOwner.id}` : `#/project/${projectId}`) : undefined}
             prevPageId={page.type === 'sketch' ? prevPage?.id : undefined}
