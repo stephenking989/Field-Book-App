@@ -42,6 +42,7 @@
   <script src="./gnss.js"></script>
   <!-- Sketch print areas: paper ratio, frame and print scale, labels (window.fbPrint) -->
   <script src="./print.js"></script>
+  <script src="./schedule.js"></script>
 
   <style>
     *, *::before, *::after { box-sizing: border-box; }
@@ -463,6 +464,29 @@
     /* ── Notes page body ────────────────────────────────────────────
        Tailwind's reset takes the size off headings and the markers and
        indent off lists, so the note's own formatting is styled here. */
+    /* Schedule (Gantt) — colours from brand tokens only (see ScheduleView) */
+    .sch-row { display: flex; border-bottom: 1px solid var(--fb-border); cursor: pointer; }
+    .sch-row.sch-selected .sch-left { background: var(--fb-accent-pale); }
+    .sch-head { position: sticky; top: 0; z-index: 3; display: flex; background: var(--fb-page-alt); border-bottom: 1px solid var(--fb-border); }
+    .sch-left { position: sticky; left: 0; z-index: 2; flex: none; display: flex; align-items: center; min-width: 0; padding: 0 8px; background: var(--fb-page); border-right: 1px solid var(--fb-border); overflow: hidden; }
+    .sch-head .sch-left { z-index: 4; background: var(--fb-page-alt); }
+    .sch-tl { position: relative; flex: none; }
+    .sch-tk { position: absolute; border-left: 1px solid var(--fb-border); font-family: var(--fb-font-mono); font-size: 10px; line-height: 1.2; color: var(--fb-ink-muted); padding: 2px 3px; white-space: nowrap; overflow: hidden; box-sizing: border-box; }
+    .sch-tk.sch-month { font-weight: 700; color: var(--fb-ink); font-size: 11px; }
+    .sch-today { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--fb-accent); }
+    .sch-wbs { font-family: var(--fb-font-mono); font-size: 11px; color: var(--fb-ink-muted); white-space: nowrap; }
+    .sch-warn { color: var(--fb-error); font-weight: 700; }
+    .sch-name { font-size: 14px; color: var(--fb-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sch-bar { position: absolute; border-radius: 3px; background: var(--fb-page-alt); border: 1px solid var(--fb-ink-faint); box-sizing: border-box; overflow: hidden; }
+    .sch-bar.sch-active { background: var(--fb-info); border-color: transparent; }
+    .sch-bar.sch-done { background: var(--fb-cover); border-color: transparent; }
+    .sch-bar.sch-late { background: var(--fb-error); border-color: transparent; }
+    .sch-bar .sch-prog { position: absolute; left: 0; top: 0; bottom: 0; background: var(--fb-ink); opacity: 0.25; }
+    .sch-sum { position: absolute; height: 6px; background: var(--fb-ink-muted); border-radius: 1px; }
+    .sch-ms { position: absolute; width: 14px; height: 14px; transform: rotate(45deg); background: var(--fb-accent); }
+    .sch-ms.sch-done { background: var(--fb-cover); }
+    .sch-ms.sch-late { background: var(--fb-error); }
+    .sch-divider { position: absolute; top: 0; bottom: 0; right: -6px; width: 12px; cursor: col-resize; touch-action: none; z-index: 5; }
     .fb-notes h2 { font-size: 1.5em;  font-weight: 700; line-height: 1.3;  margin: 0.3em 0 0.05em; }
     .fb-notes h3 { font-size: 1.25em; font-weight: 700; line-height: 1.35; margin: 0.25em 0 0.05em; }
     .fb-notes ul { list-style: disc outside;    padding-left: 1.4em; }
@@ -672,7 +696,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.187';
+  const APP_VERSION = '1.188';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1815,6 +1839,15 @@
       </svg>
     ),
     // Sky plot: horizon ring, north tick and an obstruction wedge — the Obstructions page type.
+    // Gantt: three task bars on a time axis (schedule / tracker page)
+    Gantt: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+        <line x1="3" y1="4" x2="3" y2="20" opacity="0.35"/>
+        <rect x="6" y="5" width="10" height="4" rx="1"/>
+        <rect x="9" y="11" width="11" height="4" rx="1"/>
+        <rect x="5" y="17" width="7" height="4" rx="1"/>
+      </svg>
+    ),
     SkyPlot: ({ size = 16 } = {}) => (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="12" r="9"/>
@@ -6051,6 +6084,7 @@
     notes:  { label: 'Notes',  ...FB_BRAND.PAGE_TYPES.notes,  Icon: () => <Ico.Pencil /> },
     gnss:   { label: 'GNSS Obs', ...FB_BRAND.PAGE_TYPES.gnss, Icon: () => <Ico.Antenna /> },
     obstructions: { label: 'Obstructions', ...FB_BRAND.PAGE_TYPES.obstructions, Icon: () => <Ico.SkyPlot /> },
+    tracker: { label: 'Tracker', ...FB_BRAND.PAGE_TYPES.tracker, Icon: () => <Ico.Gantt /> },
   };
 
   function ProjectView({ projectId }) {
@@ -7290,6 +7324,7 @@
       { id: 'points', Icon: Ico.Pin,    label: 'Points Page', desc: 'PNEZD point list' },
       { id: 'gnss',   Icon: () => <Ico.Antenna size={20} />, label: 'GNSS Obs Page', desc: 'Static session log' },
       { id: 'obstructions', Icon: () => <Ico.SkyPlot size={20} />, label: 'Obstructions Page', desc: 'Obstruction table and sky plot' },
+      { id: 'tracker', Icon: () => <Ico.Gantt size={20} />, label: 'Tracker Page', desc: 'Survey days and critical-path tasks' },
     ];
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -9022,6 +9057,420 @@
     toast({ message: 'PDF exported.', type: 'success' });
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SCHEDULE (Gantt) — the task list and timeline used by the tracker page.
+  // Logic (WBS, working days, roll-up, align) is fbSchedule in schedule.js.
+  // Phone in portrait: one timeline. Each row is a 48 px touch target; tapping
+  // it opens the task sheet, where every edit is made. Landscape or tablet:
+  // the task table sits on the left with a draggable divider. Bars are not
+  // dragged: dates are typed in the sheet, so a stray touch cannot move a task.
+  // ─────────────────────────────────────────────────────────────────────────────
+  const SCH_ROW = 48;
+  const SCH_HEAD = 46;
+
+  function useWideLayout() {
+    const q = '(min-width: 760px) and (orientation: landscape)';
+    const mq = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(q) : null;
+    const [wide, setWide] = useState(() => !!(mq && mq.matches));
+    useEffect(() => {
+      if (!mq) return;
+      const f = () => setWide(mq.matches);
+      if (mq.addEventListener) mq.addEventListener('change', f); else mq.addListener(f);
+      return () => { if (mq.removeEventListener) mq.removeEventListener('change', f); else mq.removeListener(f); };
+    }, []);
+    return wide;
+  }
+
+  // Index of the last row in the block that starts at row i (its children)
+  function schBlockEnd(R, i) {
+    let j = i;
+    while (j + 1 < R.length && R[j + 1].lvl > R[i].lvl) j++;
+    return j;
+  }
+  function schSiblingBefore(R, i) {
+    for (let k = i - 1; k >= 0; k--) {
+      if (R[k].lvl < R[i].lvl) return null;
+      if (R[k].lvl === R[i].lvl) return k;
+    }
+    return null;
+  }
+  function schSiblingAfter(R, i) {
+    const j = schBlockEnd(R, i) + 1;
+    return j < R.length && R[j].lvl === R[i].lvl ? j : null;
+  }
+  function schNewId() {
+    return 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+
+  function ScheduleView({ tasks, onChange, readOnly }) {
+    const wide = useWideLayout();
+    const toast = useToast();
+    const today = todayLocalISO();
+    const list = Array.isArray(tasks) ? tasks : [];
+    const R = fbSchedule.rows(list, today);
+    const RB = Object.fromEntries(R.map(r => [r.id, r]));
+    const conflictSet = new Set(fbSchedule.conflicts(list));
+    const wbsToId = Object.fromEntries(R.map(r => [r.wbs, r.id]));
+
+    const [selId, setSelId] = useState(null);
+    const [sheetOpen, setSheetOpen] = useState(false);
+    const [zoom, setZoom] = useState('week');
+    const [collapsed, setCollapsed] = useState(() => new Set());
+    const [split, setSplit] = useState(340);
+    const tlRef = useRef(null);
+
+    const sel = selId ? R.findIndex(r => r.id === selId) : -1;
+    const selRow = sel >= 0 ? R[sel] : null;
+
+    const visible = R.filter(r => {
+      let p = r.parentId;
+      while (p) { if (collapsed.has(p)) return false; p = RB[p] ? RB[p].parentId : null; }
+      return true;
+    });
+
+    // ── timeline geometry (day numbers; rs is a Monday) ──
+    const pxd = zoom === 'month' ? 5 : 14;
+    const todayN = fbSchedule.isoToDay(today);
+    const minS = R.length ? Math.min(todayN, ...R.map(r => r.s)) : todayN;
+    const maxF = R.length ? Math.max(todayN, ...R.map(r => r.f)) : todayN;
+    let rs = minS - 7;
+    while (new Date(rs * 864e5).getUTCDay() !== 1) rs--;
+    const re = maxF + 14;
+    const W = (re - rs + 1) * pxd;
+    const X = n => (n - rs) * pxd;
+    const leftW = wide ? split : 132;
+
+    const monthTicks = [];
+    for (let n = rs; n <= re;) {
+      const d = new Date(n * 864e5);
+      const nm = Math.min(re + 1, Math.round(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) / 864e5));
+      monthTicks.push({ n, w: (nm - n) * pxd, label: d.toLocaleString('en-CA', { month: 'short', year: 'numeric', timeZone: 'UTC' }) });
+      n = nm;
+    }
+
+    function toggle(id) {
+      setCollapsed(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+    }
+    function openRow(id) {
+      setSelId(id);
+      setSheetOpen(true);
+    }
+    function scrollToday() {
+      if (tlRef.current) tlRef.current.scrollLeft = Math.max(0, X(todayN) - 80);
+    }
+
+    // ── structure edits: each returns a new task list or null ──
+    function edit(next, msg) {
+      if (readOnly || !next) return;
+      onChange(next);
+      if (msg) toast.success(msg);
+    }
+    function opAdd(ms) {
+      const at = selRow ? schBlockEnd(R, sel) + 1 : R.length;
+      const lvl = selRow ? (selRow.isSum ? selRow.lvl + 1 : selRow.lvl) : 1;
+      const base = selRow ? selRow.f + 1 : todayN;
+      const start = fbSchedule.dayToIso(fbSchedule.nextWork(base));
+      const task = { id: schNewId(), name: ms ? 'New milestone' : 'New task', lvl, start, days: ms ? 0 : 1, ms: !!ms, pct: 0, who: [], preds: [], notes: '' };
+      const next = [...list.slice(0, at), task, ...list.slice(at)];
+      setSelId(task.id);
+      setSheetOpen(true);
+      edit(next);
+    }
+    function opIndent(d) {
+      if (!selRow) return;
+      if (d > 0 && !(sel > 0 && R[sel - 1].lvl >= selRow.lvl)) return;
+      if (d < 0 && selRow.lvl <= 1) return;
+      const end = schBlockEnd(R, sel);
+      edit(list.map((t, i) => (i >= sel && i <= end) ? { ...t, lvl: t.lvl + d } : t));
+    }
+    function opMove(dir) {
+      if (!selRow) return;
+      const other = dir < 0 ? schSiblingBefore(R, sel) : schSiblingAfter(R, sel);
+      if (other == null) return;
+      const a = dir < 0 ? other : sel, b = dir < 0 ? sel : other;
+      const a1 = schBlockEnd(R, a), b1 = schBlockEnd(R, b);
+      edit([...list.slice(0, a), ...list.slice(b, b1 + 1), ...list.slice(a, a1 + 1), ...list.slice(b1 + 1)]);
+    }
+    function opDelete() {
+      if (!selRow) return;
+      const end = schBlockEnd(R, sel);
+      const gone = new Set(R.slice(sel, end + 1).map(r => r.id));
+      const next = list
+        .filter((t, i) => !(i >= sel && i <= end))
+        .map(t => (t.preds || []).some(p => gone.has(p)) ? { ...t, preds: t.preds.filter(p => !gone.has(p)) } : t);
+      setSheetOpen(false);
+      setSelId(null);
+      edit(next, gone.size > 1 ? `Deleted ${gone.size} rows` : 'Deleted');
+    }
+    function opAlign() {
+      const before = fbSchedule.conflicts(list).length;
+      if (!before) { toast.success('Nothing to move. Every task follows its predecessors.'); return; }
+      edit(fbSchedule.alignAll(list), `Moved ${before} task${before === 1 ? '' : 's'} to follow their predecessors`);
+    }
+    // Save fields from the sheet
+    function applyFields(id, patch) {
+      edit(list.map(t => t.id === id ? { ...t, ...patch } : t));
+    }
+
+    // Divider between the task table and the timeline (landscape / tablet only)
+    const drag = useRef(null);
+    function dragStart(e) {
+      drag.current = { x: e.clientX, w: split };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+    function dragMove(e) {
+      if (!drag.current) return;
+      setSplit(Math.max(220, Math.min(560, drag.current.w + e.clientX - drag.current.x)));
+    }
+    function dragEnd() { drag.current = null; }
+
+    const selIndexInVisible = selRow ? visible.findIndex(r => r.id === selId) : -1;
+
+    return (
+      <div className="bg-fb-page">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-fb-border">
+          {!readOnly && (
+            <>
+              <button onClick={() => opAdd(false)} className="px-3 py-2 rounded-lg text-sm font-semibold text-white active:opacity-80" style={{ background: FBC.accent }}>+ Task</button>
+              <button onClick={() => opAdd(true)} className="px-3 py-2 rounded-lg text-sm font-semibold text-fb-ink border border-fb-border bg-fb-page-alt active:opacity-80">+ Milestone</button>
+              <button onClick={opAlign} className="px-3 py-2 rounded-lg text-sm font-semibold text-fb-ink border border-fb-border bg-fb-page-alt active:opacity-80">Align all</button>
+            </>
+          )}
+          <span className="flex-1" />
+          <div className="inline-flex rounded-lg border border-fb-border overflow-hidden">
+            {['week', 'month'].map(z => (
+              <button key={z} onClick={() => setZoom(z)} aria-pressed={zoom === z}
+                className={'px-3 py-2 text-sm capitalize ' + (zoom === z ? 'text-white font-semibold' : 'text-fb-ink bg-fb-page-alt')}
+                style={zoom === z ? { background: FBC.cover } : undefined}>{z}</button>
+            ))}
+          </div>
+          <button onClick={scrollToday} className="px-3 py-2 rounded-lg text-sm text-fb-ink border border-fb-border bg-fb-page-alt active:opacity-80">Today</button>
+          {conflictSet.size > 0 && (
+            <p className="w-full text-xs text-fb-error">{conflictSet.size} task{conflictSet.size === 1 ? '' : 's'} start before a predecessor finishes. Use Align all.</p>
+          )}
+        </div>
+
+        {list.length === 0 ? (
+          <div className="px-4 py-10 text-center text-fb-ink-muted text-sm">
+            <p className="font-semibold text-fb-ink mb-1">No tasks yet</p>
+            {readOnly ? 'This schedule is empty.' : 'Tap + Task to add the first one. Indent tasks in the sheet to group them under a summary row.'}
+          </div>
+        ) : (
+          <div ref={tlRef} style={{ overflowX: 'auto', overflowY: 'visible', position: 'relative' }}>
+            <div style={{ width: leftW + W, position: 'relative' }}>
+              {/* header */}
+              <div className="sch-head" style={{ height: SCH_HEAD }}>
+                <div className="sch-left" style={{ width: leftW, height: SCH_HEAD }}>
+                  <span className="text-[11px] font-bold uppercase tracking-widest text-fb-ink-muted">{wide ? 'WBS · Task' : 'Task'}</span>
+                  {wide && <div className="sch-divider" onPointerDown={dragStart} onPointerMove={dragMove} onPointerUp={dragEnd} onPointerCancel={dragEnd} aria-label="Resize task table" role="separator" />}
+                </div>
+                <div className="sch-tl" style={{ width: W, height: SCH_HEAD }}>
+                  {monthTicks.map((m, i) => (
+                    <div key={i} className="sch-tk sch-month" style={{ left: X(m.n), width: m.w, top: 0, height: 22 }}>{m.w > 60 ? m.label : ''}</div>
+                  ))}
+                  {zoom === 'week' && Array.from({ length: Math.ceil((re - rs + 1) / 7) }, (_, k) => rs + k * 7).map(n => (
+                    <div key={n} className="sch-tk" style={{ left: X(n), width: 7 * pxd, top: 22, height: 24 }}>{new Date(n * 864e5).getUTCDate()}</div>
+                  ))}
+                  <div className="sch-today" style={{ left: X(todayN) + pxd / 2 }} />
+                </div>
+              </div>
+
+              {/* rows */}
+              {visible.map(r => {
+                const t = list[r.idx];
+                const isSel = r.id === selId;
+                const name = t.name || 'Untitled task';
+                const bar = r.isSum ? (
+                  <div className="sch-sum" style={{ left: X(r.s), width: Math.max(pxd, (r.f - r.s + 1) * pxd), top: 20 }} />
+                ) : r.ms ? (
+                  <div className={'sch-ms sch-' + r.st} style={{ left: X(r.s) + pxd / 2 - 7, top: 17 }} />
+                ) : (
+                  <div className={'sch-bar sch-' + r.st} style={{ left: X(r.s), width: Math.max(pxd, (r.f - r.s + 1) * pxd), top: 13, height: 22 }}>
+                    <div className="sch-prog" style={{ width: r.pct + '%' }} />
+                  </div>
+                );
+                return (
+                  <div key={r.id} className={'sch-row' + (isSel ? ' sch-selected' : '')} style={{ height: SCH_ROW, width: leftW + W }} onClick={() => openRow(r.id)}>
+                    <div className="sch-left" style={{ width: leftW, height: SCH_ROW }}>
+                      {wide ? (
+                        <div className="flex items-center w-full min-w-0 gap-2" style={{ paddingLeft: (r.lvl - 1) * 12 }}>
+                          <span className="sch-wbs w-10 flex-none">{r.wbs}</span>
+                          <span className={'sch-name flex-1 min-w-0' + (r.isSum ? ' font-bold' : '')}>{name}</span>
+                          <span className="sch-wbs w-14 flex-none text-right">{r.isSum ? '' : fbSchedule.dayToIso(r.s).slice(5)}</span>
+                          <span className="sch-wbs w-12 flex-none text-right">{r.pct}%</span>
+                        </div>
+                      ) : (
+                        <div className="min-w-0 w-full" style={{ paddingLeft: (r.lvl - 1) * 10 }}>
+                          <div className="sch-wbs">{r.wbs}{conflictSet.has(r.id) ? <span className="sch-warn"> !</span> : null}</div>
+                          <div className={'sch-name' + (r.isSum ? ' font-bold' : '')}>{name}</div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="sch-tl" style={{ width: W, height: SCH_ROW }}>{bar}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {sheetOpen && selRow && (
+          <ScheduleTaskSheet
+            key={selRow.id}
+            task={list[sel]}
+            row={selRow}
+            wbsToId={wbsToId}
+            idToWbs={Object.fromEntries(R.map(r => [r.id, r.wbs]))}
+            readOnly={readOnly}
+            canIndent={sel > 0 && R[sel - 1].lvl >= selRow.lvl}
+            canOutdent={selRow.lvl > 1}
+            canUp={schSiblingBefore(R, sel) != null}
+            canDown={schSiblingAfter(R, sel) != null}
+            onApply={patch => applyFields(selRow.id, patch)}
+            onOp={op => {
+              if (op === 'indent') opIndent(1);
+              else if (op === 'outdent') opIndent(-1);
+              else if (op === 'up') opMove(-1);
+              else if (op === 'down') opMove(1);
+              else if (op === 'delete') opDelete();
+            }}
+            onClose={() => setSheetOpen(false)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  function ScheduleTaskSheet({ task, row, wbsToId, idToWbs, readOnly, canIndent, canOutdent, canUp, canDown, onApply, onOp, onClose }) {
+    const [name,   setName]   = useState(task.name || '');
+    const [start,  setStart]  = useState(task.start || '');
+    const [days,   setDays]   = useState(String(task.days ?? 1));
+    const [ms,     setMs]     = useState(!!task.ms);
+    const [pct,    setPct]    = useState(String(task.pct ?? 0));
+    const [preds,  setPreds]  = useState((task.preds || []).map(id => idToWbs[id]).filter(Boolean).join(', '));
+    const [err,    setErr]    = useState('');
+    const [armDel, setArmDel] = useState(false);
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const isSum = row.isSum;
+    const ro = !!readOnly;
+
+    function done() {
+      const patch = { name: name.trim() || 'Untitled task' };
+      if (!isSum) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) { setErr('Enter a start date.'); return; }
+        patch.start = start;
+        patch.ms = ms;
+        patch.days = ms ? 0 : Math.max(1, Math.round(+days || 1));
+        patch.pct = Math.max(0, Math.min(100, Math.round(+pct || 0)));
+      }
+      const codes = preds.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+      const bad = codes.filter(c => !wbsToId[c] || wbsToId[c] === task.id);
+      if (bad.length) { setErr('No other task with WBS ' + bad.join(', ')); return; }
+      patch.preds = [...new Set(codes.map(c => wbsToId[c]))];
+      onApply(patch);
+      onClose();
+    }
+
+    const field = 'w-full px-3 py-2 rounded-lg border border-fb-border bg-fb-page text-fb-ink text-base';
+    const lbl = 'flex flex-col gap-1 text-xs font-semibold uppercase tracking-widest text-fb-ink-muted';
+    const opBtn = 'flex-1 py-2 rounded-lg border border-fb-border text-sm font-semibold text-fb-ink bg-fb-page-alt active:opacity-80 disabled:opacity-40';
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <p className="text-xs font-data text-fb-ink-muted mb-1">WBS {row.wbs}{isSum ? ' · summary' : row.ms ? ' · milestone' : ''}</p>
+          <div className="space-y-3 mb-4">
+            <label className={lbl}>Task name
+              <input className={field} value={name} onChange={e => setName(e.target.value)} disabled={ro} maxLength={120} />
+            </label>
+            {isSum ? (
+              <p className="text-sm text-fb-ink-muted">Dates and % roll up from the tasks under this summary row.</p>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className={lbl}>Start
+                    <input type="date" className={field} value={start} onChange={e => setStart(e.target.value)} disabled={ro} />
+                  </label>
+                  <label className={lbl}>Working days
+                    <input type="number" inputMode="numeric" min="1" className={field} value={days} onChange={e => setDays(e.target.value)} disabled={ro || ms} />
+                  </label>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-fb-ink">
+                  <input type="checkbox" checked={ms} onChange={e => setMs(e.target.checked)} disabled={ro} /> Milestone (one day, no duration)
+                </label>
+                <label className={lbl}>% complete
+                  <input type="number" inputMode="numeric" min="0" max="100" className={field} value={pct} onChange={e => setPct(e.target.value)} disabled={ro} />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {[0, 25, 50, 75, 100].map(p => (
+                    <button key={p} disabled={ro} onClick={() => setPct(String(p))}
+                      className="px-3 py-2 rounded-lg border border-fb-border text-sm text-fb-ink bg-fb-page-alt active:opacity-80 disabled:opacity-40">{p === 100 ? 'Done' : p + '%'}</button>
+                  ))}
+                </div>
+              </>
+            )}
+            <label className={lbl}>Predecessors (WBS, comma separated)
+              <input className={field} value={preds} onChange={e => setPreds(e.target.value)} placeholder="e.g. 1.1, 1.3" disabled={ro} />
+            </label>
+            {err && <p className="text-sm text-fb-error">{err}</p>}
+          </div>
+
+          {!ro && (
+            <>
+              <div className="flex gap-2 mb-2">
+                <button className={opBtn} disabled={!canOutdent} onClick={() => { onOp('outdent'); onClose(); }}>← Outdent</button>
+                <button className={opBtn} disabled={!canIndent} onClick={() => { onOp('indent'); onClose(); }}>Indent →</button>
+              </div>
+              <div className="flex gap-2 mb-4">
+                <button className={opBtn} disabled={!canUp} onClick={() => { onOp('up'); onClose(); }}>↑ Move up</button>
+                <button className={opBtn} disabled={!canDown} onClick={() => { onOp('down'); onClose(); }}>↓ Move down</button>
+              </div>
+            </>
+          )}
+
+          <div className="flex gap-2">
+            {!ro && (
+              <button onClick={() => { if (!armDel) { setArmDel(true); return; } onOp('delete'); }}
+                className="flex-1 py-3 rounded-xl border font-semibold text-sm active:opacity-80"
+                style={armDel ? { background: FBC.error, borderColor: FBC.error, color: '#fff' } : { borderColor: FBC.error, color: FBC.error }}>
+                {armDel ? 'Tap again to delete' : 'Delete'}
+              </button>
+            )}
+            <button onClick={onClose} className="flex-1 py-3 rounded-xl border border-fb-border text-fb-ink-muted font-semibold text-sm active:opacity-80">
+              {ro ? 'Close' : 'Cancel'}
+            </button>
+            {!ro && (
+              <button onClick={done} className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80" style={{ background: FBC.accent }}>
+                Done
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Tracker page (type 'tracker'): the schedule for one project. Data is
+  // page.schedule = { tasks: [...] } (see schedule.js for the task shape).
+  function TrackerPage(props) {
+    return <TrackerPageBody key={props.page.id} {...props} />;
+  }
+
+  function TrackerPageBody({ page, projectId, onReload }) {
+    const { data, title, dirty, update, setTitle, flush } = useGnDraft({
+      page, projectId, onReload, slot: 'schedule',
+      initial: () => ({ tasks: Array.isArray(page.schedule?.tasks) ? page.schedule.tasks : [] }),
+    });
+    return (
+      <div className="bg-fb-page min-h-full" onBlur={() => { if (flush()) onReload(); }}>
+        <GnPageStrip kind="Tracker" page={page} title={title} setTitle={setTitle} dirty={dirty} />
+        <ScheduleView tasks={data.tasks} onChange={tasks => update({ tasks })} />
+      </div>
+    );
+  }
+
   function getPageComponent(type) {
     if (type === 'sketch') return window.SketchPage;  // defined by sketch.js
     if (type === 'title')  return TitlePage;
@@ -9030,6 +9479,7 @@
     if (type === 'points') return DataPage;           // DataPage with locked PNEZD columns
     if (type === 'gnss')   return GnssPage;
     if (type === 'obstructions') return ObstructionPage;
+    if (type === 'tracker')  return TrackerPage;
     return DataPage;
   }
 
