@@ -156,9 +156,43 @@
     return m;
   }
 
+  /* portfolio(projects) → { rows, minDay, maxDay }
+   * One row per project that has survey dates. A survey date is a title page
+   * with a surveyDate; each survey day gets one block (count = title pages that
+   * day). The span runs from the first to the last survey day. Projects with no
+   * survey dates are left out. Status: 'locked' | 'archived' | 'live'.
+   */
+  function portfolio(projects) {
+    const rows = [];
+    for (const p of projects || []) {
+      const byDay = new Map();
+      for (const pg of p.pages || []) {
+        if (pg.type !== 'title' || !/^\d{4}-\d{2}-\d{2}$/.test(pg.surveyDate || '')) continue;
+        const n = isoToDay(pg.surveyDate);
+        byDay.set(n, (byDay.get(n) || 0) + 1);
+      }
+      if (!byDay.size) continue;
+      const days = [...byDay.keys()].sort((a, b) => a - b)
+        .map(n => ({ day: n, iso: dayToIso(n), count: byDay.get(n) }));
+      rows.push({
+        projectId: p.id,
+        name: p.name || '',
+        jobNumber: p.jobNumber || '',
+        status: p.lock ? 'locked' : p.archived ? 'archived' : 'live',
+        days,
+        s: days[0].day,
+        f: days[days.length - 1].day,
+      });
+    }
+    rows.sort((a, b) => a.s - b.s || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const minDay = rows.length ? Math.min(...rows.map(r => r.s)) : null;
+    const maxDay = rows.length ? Math.max(...rows.map(r => r.f)) : null;
+    return { rows, minDay, maxDay };
+  }
+
   const api = {
     isoToDay, dayToIso, isWeekend, nextWork, workdays, addWorkdays,
-    rows, conflicts, alignAll,
+    rows, conflicts, alignAll, portfolio,
   };
   root.fbSchedule = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

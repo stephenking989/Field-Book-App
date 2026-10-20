@@ -696,7 +696,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.188';
+  const APP_VERSION = '1.189';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1555,6 +1555,7 @@
     if (pageMatch) return { view: 'page', projectId: pageMatch[1], pageId: pageMatch[2] };
     const projMatch = path.match(/^\/project\/([^/]+)$/);
     if (projMatch) return { view: 'project', projectId: projMatch[1] };
+    if (path === '/timeline') return { view: 'timeline' };
     return { view: 'home' };
   }
 
@@ -3781,6 +3782,9 @@
                   <Ico.Download />
                 </button>
               )}
+              <button onClick={() => navigate('#/timeline')} className="p-2 rounded-xl active:opacity-70 transition-colors" title="Survey timeline">
+                <Ico.Gantt />
+              </button>
               <button onClick={() => importInputRef.current && importInputRef.current.click()} className="p-2 rounded-xl active:bg-white/10 transition-colors" title="Import project (.fieldbook)">
                 <Ico.Upload />
               </button>
@@ -9471,6 +9475,200 @@
     );
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SURVEY TIMELINE (#/timeline) — every project's survey days on one timeline.
+  // Rows come from fbSchedule.portfolio (schedule.js) and are read from the
+  // device each time the page opens, so it shows whatever is live or archived
+  // here. Survey days after today (title pages made ahead) show as planned.
+  // Export is a landscape PDF of the same rows.
+  // ─────────────────────────────────────────────────────────────────────────────
+  const TL_PX = 14;   // screen pixels per day
+
+  // Day range for the timeline: whole weeks, from the Monday before the first
+  // survey day to a few days after the last one (or today).
+  function timelineRange(data) {
+    const todayN = fbSchedule.isoToDay(todayLocalISO());
+    const lo = Math.min(data.minDay ?? todayN, todayN) - 3;
+    const hi = Math.max(data.maxDay ?? todayN, todayN) + 3;
+    let rs = lo;
+    while (new Date(rs * 864e5).getUTCDay() !== 1) rs--;
+    return { rs, re: hi, todayN };
+  }
+
+  function timelineBlockClass(status, day, todayN) {
+    if (day > todayN) return 'sch-planned';
+    return status === 'live' ? 'sch-active' : 'sch-done';
+  }
+
+  function TimelinePage() {
+    const [data, setData] = useState(() => fbSchedule.portfolio(DB.getProjects()));
+    const [busy, setBusy] = useState(false);
+    const toast = useToast();
+    const R = timelineRange(data);
+    const pxd = TL_PX;
+    const W = (R.re - R.rs + 1) * pxd;
+    const X = n => (n - R.rs) * pxd;
+    const leftW = 150;
+
+    const monthTicks = [];
+    for (let n = R.rs; n <= R.re;) {
+      const d = new Date(n * 864e5);
+      const nm = Math.min(R.re + 1, Math.round(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) / 864e5));
+      monthTicks.push({ n, w: (nm - n) * pxd, label: d.toLocaleString('en-CA', { month: 'short', year: 'numeric', timeZone: 'UTC' }) });
+      n = nm;
+    }
+    const weekStarts = [];
+    for (let n = R.rs; n <= R.re; n += 7) weekStarts.push(n);
+
+    const navBack = () => navigate('#/');
+
+    return (
+      <div className="flex flex-col h-full bg-fb-page">
+        <NavBar title="Survey Timeline" onBack={navBack} actions={
+          <button onClick={() => exportTimelinePDF(data, toast, setBusy)} disabled={busy || !data.rows.length}
+            className="p-2 rounded-xl active:opacity-70 transition-colors disabled:opacity-40" title="Export timeline PDF">
+            <Ico.Download />
+          </button>
+        } />
+        {data.rows.length === 0 ? (
+          <div className="px-4 py-10 text-center text-fb-ink-muted text-sm">
+            <p className="font-semibold text-fb-ink mb-1">No survey dates yet</p>
+            Add a survey date on a project's title page and it will appear here.
+          </div>
+        ) : (
+          <div className="flex-1 overflow-auto">
+            <div style={{ width: leftW + W, position: 'relative' }}>
+              <div className="sch-head" style={{ height: 46 }}>
+                <div className="sch-left" style={{ width: leftW, height: 46 }}>
+                  <span className="text-[11px] font-bold uppercase tracking-widest text-fb-ink-muted">Project</span>
+                </div>
+                <div className="sch-tl" style={{ width: W, height: 46 }}>
+                  {monthTicks.map((m, i) => (
+                    <div key={i} className="sch-tk sch-month" style={{ left: X(m.n), width: m.w, top: 0, height: 22 }}>{m.w > 60 ? m.label : ''}</div>
+                  ))}
+                  {weekStarts.map(n => (
+                    <div key={n} className="sch-tk" style={{ left: X(n), width: 7 * pxd, top: 22, height: 24 }}>{new Date(n * 864e5).getUTCDate()}</div>
+                  ))}
+                  <div className="sch-today" style={{ left: X(R.todayN) + pxd / 2 }} />
+                </div>
+              </div>
+
+              {data.rows.map(r => (
+                <div key={r.projectId} className="sch-row" style={{ height: 46, width: leftW + W }}
+                  onClick={() => navigate('#/project/' + r.projectId)}>
+                  <div className="sch-left" style={{ width: leftW, height: 46 }}>
+                    <div className="min-w-0 w-full">
+                      <div className="sch-name">{r.name || 'Untitled project'}</div>
+                      <div className="sch-wbs">{r.jobNumber ? '#' + r.jobNumber : ''}{r.status !== 'live' ? (r.jobNumber ? ' · ' : '') + r.status : ''}</div>
+                    </div>
+                  </div>
+                  <div className="sch-tl" style={{ width: W, height: 46 }}>
+                    <div className="sch-sum" style={{ left: X(r.s) + pxd / 2, width: (r.f - r.s) * pxd, top: 36 }} />
+                    {r.days.map(d => (
+                      <div key={d.day} className={'sch-bar ' + timelineBlockClass(r.status, d.day, R.todayN)}
+                        title={`${d.iso}${d.count > 1 ? ' · ' + d.count + ' title pages' : ''}`}
+                        style={{ left: X(d.day) + 2, width: pxd - 4, top: 9, height: 22 }} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Landscape A4 PDF of the timeline: project names on the left, one row per
+  // project, a block per survey day, the span as a thin rule, today as a line.
+  // Black, white and grey only (see DESIGN.md → PDF Export rules).
+  async function exportTimelinePDF(data, toast, setBusy) {
+    if (!window.jspdf?.jsPDF) { toast.error('PDF library not loaded'); return; }
+    if (!data.rows.length) { toast.error('No survey dates to export yet'); return; }
+    setBusy(true);
+    try {
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+      const PW = 297, PH = 210, m = 12, labelW = 62;
+      const x0 = m + labelW, x1 = PW - m;
+      const R = timelineRange(data);
+      const total = R.re - R.rs + 1;
+      const mm = (x1 - x0) / total;
+      const X = n => x0 + (n - R.rs) * mm;
+      const topRows = 40, rowH = 9;
+      const perPage = Math.floor((PH - topRows - 14) / rowH);
+      const pages = Math.max(1, Math.ceil(data.rows.length / perPage));
+      const dtN = n => new Date(n * 864e5).toLocaleString('en-CA', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+      const todayIso = todayLocalISO();
+      const dateLine = `${dtN(data.minDay)} to ${dtN(Math.max(data.maxDay, R.todayN))}`;
+
+      for (let pg = 0; pg < pages; pg++) {
+        if (pg > 0) pdf.addPage('a4', 'landscape');
+        pdf.setTextColor(30, 30, 30);
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(15);
+        pdf.text('Survey Timeline', m, 16);
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(90, 90, 90);
+        pdf.text(`${dateLine}   ·   generated ${todayIso}   ·   ${data.rows.length} project${data.rows.length === 1 ? '' : 's'}`, m, 22);
+
+        // month and week scale
+        pdf.setDrawColor(160, 160, 160); pdf.setLineWidth(0.2);
+        pdf.line(x0, topRows - 6, x1, topRows - 6);
+        for (let n = R.rs; n <= R.re; n += 7) {
+          const x = X(n);
+          pdf.setFontSize(7); pdf.setTextColor(90, 90, 90);
+          pdf.text(dtN(n), x + 0.8, topRows - 9);
+          pdf.setDrawColor(215, 215, 215);
+          pdf.line(x, topRows - 6, x, PH - 12);
+        }
+        // today
+        const tx = X(R.todayN) + mm / 2;
+        pdf.setDrawColor(30, 30, 30); pdf.setLineWidth(0.3);
+        pdf.line(tx, topRows - 6, tx, PH - 12);
+
+        const slice = data.rows.slice(pg * perPage, (pg + 1) * perPage);
+        slice.forEach((r, k) => {
+          const y = topRows + k * rowH;
+          pdf.setTextColor(30, 30, 30); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9);
+          const full = _pdfPlain(r.name || 'Untitled project');
+          let name = full;
+          while (pdf.getTextWidth(name) > labelW - 3 && name.length > 1) {
+            name = name.slice(0, -1);
+            if (pdf.getTextWidth(name + '..') <= labelW - 3) { name += '..'; break; }
+          }
+          pdf.text(name, m, y + 4.2);
+          if (r.jobNumber || r.status !== 'live') {
+            pdf.setFontSize(7); pdf.setTextColor(110, 110, 110);
+            pdf.text(_pdfPlain([r.jobNumber ? '#' + r.jobNumber : '', r.status !== 'live' ? r.status : ''].filter(Boolean).join('  ')), m, y + 7.6);
+          }
+          // span rule
+          pdf.setDrawColor(110, 110, 110); pdf.setLineWidth(0.25);
+          pdf.line(X(r.s) + mm / 2, y + 4.5, X(r.f) + mm / 2, y + 4.5);
+          // survey day blocks
+          r.days.forEach(d => {
+            const x = X(d.day) + 0.5, w = mm - 1, h = 4;
+            if (d.iso > todayIso) {
+              pdf.setFillColor(255, 255, 255); pdf.setDrawColor(30, 30, 30); pdf.setLineWidth(0.25);
+              pdf.rect(x, y + 2.5, w, h, 'FD');
+            } else {
+              const grey = r.status === 'live' ? 40 : 150;
+              pdf.setFillColor(grey, grey, grey); pdf.setDrawColor(grey, grey, grey);
+              pdf.rect(x, y + 2.5, w, h, 'F');
+            }
+          });
+        });
+
+        pdf.setFontSize(8); pdf.setTextColor(90, 90, 90); pdf.setFont('helvetica', 'normal');
+        pdf.text(`Page ${pg + 1} of ${pages}`, PW - m, PH - 6, { align: 'right' });
+      }
+      pdf.save(`Survey Timeline ${todayIso}.pdf`);
+    } catch (err) {
+      console.error('[exportTimelinePDF]', err);
+      toast.error('Could not make the PDF');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function getPageComponent(type) {
     if (type === 'sketch') return window.SketchPage;  // defined by sketch.js
     if (type === 'title')  return TitlePage;
@@ -14479,6 +14677,7 @@
           {route.view === 'home'    && <HomePage installPrompt={installPrompt} onInstalled={() => setInstallPrompt(null)} />}
           {route.view === 'project' && <ProjectView projectId={route.projectId} />}
           {route.view === 'page'    && <PageView    projectId={route.projectId} pageId={route.pageId} />}
+          {route.view === 'timeline' && <TimelinePage />}
         </div>
         {/* App-level: PWA file-open import modal */}
         {pendingFileImport && (
