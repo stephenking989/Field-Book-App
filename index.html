@@ -696,7 +696,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.189';
+  const APP_VERSION = '1.190';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -9106,15 +9106,25 @@
     return 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   }
 
-  function ScheduleView({ tasks, onChange, readOnly }) {
+  // The schedule. `tasks` are the tracker's own tasks (saved on the page).
+  // `autoTasks` are read-only rows that come first (the project's survey days,
+  // from fbSchedule.surveyTasks). Every index below runs over `all` = auto + own,
+  // and `off` is how many auto rows there are; own rows are all[off..].
+  function ScheduleView({ tasks, autoTasks, onChange, readOnly }) {
     const wide = useWideLayout();
     const toast = useToast();
     const today = todayLocalISO();
     const list = Array.isArray(tasks) ? tasks : [];
-    const R = fbSchedule.rows(list, today);
+    const auto = Array.isArray(autoTasks) ? autoTasks : [];
+    const off = auto.length;
+    const all = [...auto, ...list];
+    const R = fbSchedule.rows(all, today);
     const RB = Object.fromEntries(R.map(r => [r.id, r]));
-    const conflictSet = new Set(fbSchedule.conflicts(list));
-    const wbsToId = Object.fromEntries(R.map(r => [r.wbs, r.id]));
+    const conflictSet = new Set(fbSchedule.conflicts(all));
+    // WBS numbers the user can type as predecessors: own rows only
+    const wbsToId = {};
+    R.forEach((r, i) => { if (i >= off) wbsToId[r.wbs] = r.id; });
+    const idToWbs = Object.fromEntries(R.map(r => [r.id, r.wbs]));
 
     const [selId, setSelId] = useState(null);
     const [sheetOpen, setSheetOpen] = useState(false);
@@ -9125,6 +9135,7 @@
 
     const sel = selId ? R.findIndex(r => r.id === selId) : -1;
     const selRow = sel >= 0 ? R[sel] : null;
+    const selOwn = sel >= off;   // only own rows can be edited
 
     const visible = R.filter(r => {
       let p = r.parentId;
@@ -9156,6 +9167,8 @@
       setCollapsed(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
     }
     function openRow(id) {
+      const i = R.findIndex(r => r.id === id);
+      if (i < off) { setSelId(id); return; }   // survey rows: select only, no sheet
       setSelId(id);
       setSheetOpen(true);
     }
@@ -9163,43 +9176,45 @@
       if (tlRef.current) tlRef.current.scrollLeft = Math.max(0, X(todayN) - 80);
     }
 
-    // ── structure edits: each returns a new task list or null ──
-    function edit(next, msg) {
-      if (readOnly || !next) return;
-      onChange(next);
+    // Every change goes through here. `nextAll` is the full list; the auto rows
+    // at the front are never saved, only the own rows after them.
+    function edit(nextAll, msg) {
+      if (readOnly || !nextAll) return;
+      onChange(nextAll.slice(off));
       if (msg) toast.success(msg);
     }
     function opAdd(ms) {
-      const at = selRow ? schBlockEnd(R, sel) + 1 : R.length;
-      const lvl = selRow ? (selRow.isSum ? selRow.lvl + 1 : selRow.lvl) : 1;
-      const base = selRow ? selRow.f + 1 : todayN;
+      const inOwn = selRow && selOwn;
+      const at = inOwn ? schBlockEnd(R, sel) + 1 : all.length;
+      const lvl = inOwn ? (selRow.isSum ? selRow.lvl + 1 : selRow.lvl) : 1;
+      const base = inOwn ? selRow.f + 1 : todayN;
       const start = fbSchedule.dayToIso(fbSchedule.nextWork(base));
       const task = { id: schNewId(), name: ms ? 'New milestone' : 'New task', lvl, start, days: ms ? 0 : 1, ms: !!ms, pct: 0, who: [], preds: [], notes: '' };
-      const next = [...list.slice(0, at), task, ...list.slice(at)];
+      const next = [...all.slice(0, at), task, ...all.slice(at)];
       setSelId(task.id);
       setSheetOpen(true);
       edit(next);
     }
     function opIndent(d) {
-      if (!selRow) return;
-      if (d > 0 && !(sel > 0 && R[sel - 1].lvl >= selRow.lvl)) return;
+      if (!selRow || !selOwn) return;
+      if (d > 0 && !(sel - 1 >= off && R[sel - 1].lvl >= selRow.lvl)) return;
       if (d < 0 && selRow.lvl <= 1) return;
       const end = schBlockEnd(R, sel);
-      edit(list.map((t, i) => (i >= sel && i <= end) ? { ...t, lvl: t.lvl + d } : t));
+      edit(all.map((t, i) => (i >= sel && i <= end) ? { ...t, lvl: t.lvl + d } : t));
     }
     function opMove(dir) {
-      if (!selRow) return;
+      if (!selRow || !selOwn) return;
       const other = dir < 0 ? schSiblingBefore(R, sel) : schSiblingAfter(R, sel);
-      if (other == null) return;
+      if (other == null || other < off) return;
       const a = dir < 0 ? other : sel, b = dir < 0 ? sel : other;
       const a1 = schBlockEnd(R, a), b1 = schBlockEnd(R, b);
-      edit([...list.slice(0, a), ...list.slice(b, b1 + 1), ...list.slice(a, a1 + 1), ...list.slice(b1 + 1)]);
+      edit([...all.slice(0, a), ...all.slice(b, b1 + 1), ...all.slice(a, a1 + 1), ...all.slice(b1 + 1)]);
     }
     function opDelete() {
-      if (!selRow) return;
+      if (!selRow || !selOwn) return;
       const end = schBlockEnd(R, sel);
       const gone = new Set(R.slice(sel, end + 1).map(r => r.id));
-      const next = list
+      const next = all
         .filter((t, i) => !(i >= sel && i <= end))
         .map(t => (t.preds || []).some(p => gone.has(p)) ? { ...t, preds: t.preds.filter(p => !gone.has(p)) } : t);
       setSheetOpen(false);
@@ -9207,13 +9222,14 @@
       edit(next, gone.size > 1 ? `Deleted ${gone.size} rows` : 'Deleted');
     }
     function opAlign() {
-      const before = fbSchedule.conflicts(list).length;
+      const before = fbSchedule.conflicts(all).length;
       if (!before) { toast.success('Nothing to move. Every task follows its predecessors.'); return; }
-      edit(fbSchedule.alignAll(list), `Moved ${before} task${before === 1 ? '' : 's'} to follow their predecessors`);
+      onChange(fbSchedule.alignAll(list));
+      toast.success(`Moved ${before} task${before === 1 ? '' : 's'} to follow their predecessors`);
     }
     // Save fields from the sheet
     function applyFields(id, patch) {
-      edit(list.map(t => t.id === id ? { ...t, ...patch } : t));
+      edit(all.map(t => t.id === id ? { ...t, ...patch } : t));
     }
 
     // Divider between the task table and the timeline (landscape / tablet only)
@@ -9227,8 +9243,6 @@
       setSplit(Math.max(220, Math.min(560, drag.current.w + e.clientX - drag.current.x)));
     }
     function dragEnd() { drag.current = null; }
-
-    const selIndexInVisible = selRow ? visible.findIndex(r => r.id === selId) : -1;
 
     return (
       <div className="bg-fb-page">
@@ -9252,9 +9266,12 @@
           {conflictSet.size > 0 && (
             <p className="w-full text-xs text-fb-error">{conflictSet.size} task{conflictSet.size === 1 ? '' : 's'} start before a predecessor finishes. Use Align all.</p>
           )}
+          {auto.length > 0 && (
+            <p className="w-full text-xs text-fb-ink-muted">Survey days come from this project's title pages. Change them on the title page.</p>
+          )}
         </div>
 
-        {list.length === 0 ? (
+        {all.length === 0 ? (
           <div className="px-4 py-10 text-center text-fb-ink-muted text-sm">
             <p className="font-semibold text-fb-ink mb-1">No tasks yet</p>
             {readOnly ? 'This schedule is empty.' : 'Tap + Task to add the first one. Indent tasks in the sheet to group them under a summary row.'}
@@ -9281,8 +9298,9 @@
 
               {/* rows */}
               {visible.map(r => {
-                const t = list[r.idx];
+                const t = all[r.idx];
                 const isSel = r.id === selId;
+                const isAuto = r.idx < off;
                 const name = t.name || 'Untitled task';
                 const bar = r.isSum ? (
                   <div className="sch-sum" style={{ left: X(r.s), width: Math.max(pxd, (r.f - r.s + 1) * pxd), top: 20 }} />
@@ -9294,7 +9312,7 @@
                   </div>
                 );
                 return (
-                  <div key={r.id} className={'sch-row' + (isSel ? ' sch-selected' : '')} style={{ height: SCH_ROW, width: leftW + W }} onClick={() => openRow(r.id)}>
+                  <div key={r.id} className={'sch-row' + (isSel ? ' sch-selected' : '') + (isAuto ? ' sch-auto' : '')} style={{ height: SCH_ROW, width: leftW + W }} onClick={() => openRow(r.id)}>
                     <div className="sch-left" style={{ width: leftW, height: SCH_ROW }}>
                       {wide ? (
                         <div className="flex items-center w-full min-w-0 gap-2" style={{ paddingLeft: (r.lvl - 1) * 12 }}>
@@ -9318,17 +9336,17 @@
           </div>
         )}
 
-        {sheetOpen && selRow && (
+        {sheetOpen && selRow && selOwn && (
           <ScheduleTaskSheet
             key={selRow.id}
-            task={list[sel]}
+            task={all[sel]}
             row={selRow}
             wbsToId={wbsToId}
-            idToWbs={Object.fromEntries(R.map(r => [r.id, r.wbs]))}
+            idToWbs={idToWbs}
             readOnly={readOnly}
-            canIndent={sel > 0 && R[sel - 1].lvl >= selRow.lvl}
+            canIndent={sel - 1 >= off && R[sel - 1].lvl >= selRow.lvl}
             canOutdent={selRow.lvl > 1}
-            canUp={schSiblingBefore(R, sel) != null}
+            canUp={sel - 1 >= off && schSiblingBefore(R, sel) != null}
             canDown={schSiblingAfter(R, sel) != null}
             onApply={patch => applyFields(selRow.id, patch)}
             onOp={op => {
@@ -9456,8 +9474,9 @@
     );
   }
 
-  // Tracker page (type 'tracker'): the schedule for one project. Data is
-  // page.schedule = { tasks: [...] } (see schedule.js for the task shape).
+  // Tracker page (type 'tracker'): the project's survey days (read from its title
+  // pages, never saved) and the tasks the user adds. Data is page.schedule =
+  // { tasks: [...] } (see schedule.js for the task shape).
   function TrackerPage(props) {
     return <TrackerPageBody key={props.page.id} {...props} />;
   }
@@ -9467,10 +9486,12 @@
       page, projectId, onReload, slot: 'schedule',
       initial: () => ({ tasks: Array.isArray(page.schedule?.tasks) ? page.schedule.tasks : [] }),
     });
+    const proj = DB.getProject(projectId);
+    const survey = fbSchedule.surveyTasks(proj?.pages || [], todayLocalISO());
     return (
       <div className="bg-fb-page min-h-full" onBlur={() => { if (flush()) onReload(); }}>
         <GnPageStrip kind="Tracker" page={page} title={title} setTitle={setTitle} dirty={dirty} />
-        <ScheduleView tasks={data.tasks} onChange={tasks => update({ tasks })} />
+        <ScheduleView tasks={data.tasks} autoTasks={survey} onChange={tasks => update({ tasks })} />
       </div>
     );
   }

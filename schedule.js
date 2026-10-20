@@ -190,9 +190,41 @@
     return { rows, minDay, maxDay };
   }
 
+  /* surveyTasks(pages, today) → task list for the project's survey days.
+   * Each distinct surveyDate on a title page becomes a one-day child row under a
+   * 'Survey days' summary row. These rows are read-only (auto: true) and come
+   * from the title pages, so they are never saved into the tracker's own tasks.
+   * A survey day before today is done (100 %); a later one is planned (0 %).
+   */
+  function surveyTasks(pages, today) {
+    const byDay = new Map();
+    for (const pg of pages || []) {
+      if (pg.type !== 'title' || !/^\d{4}-\d{2}-\d{2}$/.test(pg.surveyDate || '')) continue;
+      const n = isoToDay(pg.surveyDate);
+      if (!byDay.has(n)) byDay.set(n, []);
+      byDay.get(n).push(pg);
+    }
+    if (!byDay.size) return [];
+    const T = todayDay(today);
+    const root = { id: 'auto-survey', name: 'Survey days', lvl: 1, auto: true, days: 0, pct: 0, preds: [], who: [] };
+    const kids = [...byDay.keys()].sort((a, b) => a - b).map(n => ({
+      id: 'auto-' + dayToIso(n),
+      name: byDay.get(n).map(p => (p.title || '').trim() || 'Title page').join(' · '),
+      lvl: 2,
+      start: dayToIso(n),
+      days: 1,
+      ms: false,
+      pct: T != null && n < T ? 100 : 0,
+      auto: true,
+      preds: [],
+      who: [],
+    }));
+    return [root, ...kids];
+  }
+
   const api = {
     isoToDay, dayToIso, isWeekend, nextWork, workdays, addWorkdays,
-    rows, conflicts, alignAll, portfolio,
+    rows, conflicts, alignAll, portfolio, surveyTasks,
   };
   root.fbSchedule = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
