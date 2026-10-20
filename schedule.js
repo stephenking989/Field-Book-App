@@ -222,9 +222,18 @@
     return [root, ...kids];
   }
 
+  /* portfolioFor(projects, projectIds) → portfolio() for one group.
+   * Only the listed projects count, in portfolio order. Ids that no longer
+   * match a project (deleted here) are ignored, so a group never breaks.
+   */
+  function portfolioFor(projects, projectIds) {
+    const want = new Set(projectIds || []);
+    return portfolio((projects || []).filter(p => want.has(p.id)));
+  }
+
   const api = {
     isoToDay, dayToIso, isWeekend, nextWork, workdays, addWorkdays,
-    rows, conflicts, alignAll, portfolio, surveyTasks,
+    rows, conflicts, alignAll, portfolio, portfolioFor, surveyTasks,
   };
   root.fbSchedule = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
