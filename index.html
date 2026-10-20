@@ -672,7 +672,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.186';
+  const APP_VERSION = '1.187';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1096,6 +1096,13 @@
   function _getProjectRaw(id) {
     return _projectCache[id] ?? null;
   }
+  // A locked project is read-only. A blocked write is dropped and fb:locked is
+  // fired so the open project view can tell the user why nothing changed.
+  function _writeBlocked(proj) {
+    if (!proj || !proj.lock) return false;
+    try { window.dispatchEvent(new Event('fb:locked')); } catch {}
+    return true;
+  }
   function _saveProjectRaw(proj) {
     _projectCache[proj.id] = proj;
     if (_backend === 'idb') { _deleted.delete(proj.id); _dirty.add(proj.id); _scheduleFlush(); }
@@ -1266,6 +1273,34 @@
         _saveIndex([entry, ...idx.filter(e => e.id !== id)]);
       }
     },
+    // Locking makes a project read-only (proj.lock = { by, at }). Locking is
+    // done only after the .fieldbook file has been saved, so the file carries
+    // the lock. Reopening needs a name and is logged in the transfer history.
+    lockProject(id, by, at) {
+      const proj = _getProjectRaw(id);
+      if (!proj) return;
+      _saveProjectRaw({ ...proj, lock: { by, at }, archived: true, archivedAt: at });
+    },
+    reopenProject(id, by) {
+      const proj = _getProjectRaw(id);
+      if (!proj) return;
+      const now = new Date().toISOString();
+      const record = {
+        seq: (proj.exportChain || []).length + 1,
+        action: 'reopen',
+        timestamp: now,
+        by: by || '',
+        location: '',
+        device: deviceHint(),
+        appVersion: 'fieldbook-v' + APP_VERSION,
+      };
+      const next = { ...proj, exportChain: [...(proj.exportChain || []), record] };
+      delete next.lock; delete next.archived; delete next.archivedAt;
+      _saveProjectRaw(next);
+      const idx = _getIndex();
+      const entry = idx.find(e => e.id === id);
+      if (entry) _saveIndex([entry, ...idx.filter(e => e.id !== id)]);
+    },
     createProject(data) {
       const proj = {
         id: Date.now().toString(),
@@ -1280,9 +1315,12 @@
     getProject(id) {
       return _getProjectRaw(id);
     },
-    updateProject(id, updates) {
+    // force: true is for lock bookkeeping and transfer records only, which
+    // must still be written to a locked project.
+    updateProject(id, updates, opts) {
       const proj = _getProjectRaw(id);
       if (!proj) return;
+      if (!(opts && opts.force) && _writeBlocked(proj)) return;
       _saveProjectRaw({ ...proj, ...updates });
     },
     deleteProject(id) {
@@ -1300,6 +1338,7 @@
       newProj.exportChain = [];
       delete newProj.archived;
       delete newProj.archivedAt;
+      delete newProj.lock;
       const pageIds = {};
       newProj.pages = newProj.pages.map(pg => ({
         ...pg,
@@ -1315,7 +1354,7 @@
     // of appending — used to add a page inside a specific day folder.
     addPage(projectId, pageData, atIndex) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return null;
+      if (!proj || _writeBlocked(proj)) return null;
       const page = {
         id: Date.now().toString(),
         pageNumber: proj.pages.length + 1,
@@ -1351,7 +1390,7 @@
     },
     updatePage(projectId, pageId, updates) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return;
+      if (!proj || _writeBlocked(proj)) return;
       const gi = proj.pages.findIndex(g => g.id === pageId);
       if (gi === -1) return;
       proj.pages[gi] = { ...proj.pages[gi], ...updates };
@@ -1363,14 +1402,14 @@
     },
     deletePage(projectId, pageId) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return;
+      if (!proj || _writeBlocked(proj)) return;
       proj.pages = proj.pages.filter(g => g.id !== pageId);
       proj.pages.forEach((g, i) => { g.pageNumber = i + 1; });
       _saveProjectRaw(proj);
     },
     duplicatePage(projectId, pageId) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return null;
+      if (!proj || _writeBlocked(proj)) return null;
       const src = proj.pages.find(g => g.id === pageId);
       if (!src) return null;
       let n = Date.now();
@@ -1396,7 +1435,7 @@
     },
     reorderPages(projectId, fromIdx, toIdx) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return;
+      if (!proj || _writeBlocked(proj)) return;
       const pages = [...proj.pages];
       const [moved] = pages.splice(fromIdx, 1);
       pages.splice(toIdx, 0, moved);
@@ -1408,7 +1447,7 @@
     // dir: -1 = up, 1 = down.
     moveGroup(projectId, titlePageId, dir) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return;
+      if (!proj || _writeBlocked(proj)) return;
       const groups = groupPages(proj.pages);
       const gi = groups.findIndex(g => g.title && g.title.id === titlePageId);
       const ni = gi + dir;
@@ -1423,7 +1462,7 @@
     // pages above the first title page).
     movePageToGroup(projectId, pageId, titlePageId) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return;
+      if (!proj || _writeBlocked(proj)) return;
       const moved = proj.pages.find(g => g.id === pageId);
       if (!moved || moved.type === 'title') return;
       const pages = proj.pages.filter(g => g.id !== pageId);
@@ -1442,7 +1481,7 @@
     // excludeMap: { [pageId]: bool } — pages left out of PDF exports by default.
     setPdfExclude(projectId, excludeMap) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return;
+      if (!proj || _writeBlocked(proj)) return;
       proj.pages.forEach(pg => {
         if (!(pg.id in excludeMap)) return;
         if (excludeMap[pg.id]) pg.pdfExclude = true;
@@ -2117,7 +2156,7 @@
               <button onClick={onImportProject} style={btnStyle}>
                 <span className="text-fb-heading flex-shrink-0"><Ico.Folder size={22} /></span>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: FBC.ink }}>Import Project</div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: FBC.ink }}>Open Project</div>
                   <div style={{ fontSize: 12, color: FBC.inkMuted, marginTop: 1 }}>Add a project from a .fieldbook file</div>
                 </div>
               </button>
@@ -2309,11 +2348,12 @@
 
   // Build and trigger a .fieldbook file download for a project.
   // Appends an export record to the chain and persists it locally too.
-  async function exportProjectToFile(project, by, location) {
+  // action: 'export' (default) or 'lock' when saving a file to lock the project.
+  async function exportProjectToFile(project, by, location, action) {
     const chain = project.exportChain || [];
     const record = {
       seq:       chain.length + 1,
-      action:    'export',
+      action:    action || 'export',
       timestamp: new Date().toISOString(),
       by:        by || 'Unknown',
       location:  location || '',
@@ -2322,8 +2362,8 @@
     };
     const updatedChain = [...chain, record];
 
-    // Persist the updated chain on this device
-    DB.updateProject(project.id, { exportChain: updatedChain });
+    // Persist the updated chain on this device (allowed on a locked project)
+    DB.updateProject(project.id, { exportChain: updatedChain }, { force: true });
 
     // Inline photo dataUrls so the exported file is portable across devices.
     const projectWithPhotos = await inlinePhotosForExport({ ...project, exportChain: updatedChain });
@@ -2550,6 +2590,17 @@
   // EXPORT MODAL  — collects exporter name + location, triggers download
   // ─────────────────────────────────────────────────────────────────────────────
 
+  // Labels for project transfer history records (.fieldbook files)
+  function transferLabel(rec) {
+    switch (rec.action) {
+      case 'export': return '↑ Saved';
+      case 'import': return '↓ Opened';
+      case 'lock':   return 'Locked';
+      case 'reopen': return 'Reopened';
+      default:       return rec.action;
+    }
+  }
+
   function ExportModal({ project, onClose, onDone }) {
     const [by,       setBy]       = useState('');
     const [location, setLocation] = useState('');
@@ -2565,7 +2616,7 @@
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
         <div ref={trapRef} className="modal-sheet">
           <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-5" />
-          <h2 className="text-xl font-bold text-fb-text mb-1">Export Project</h2>
+          <h2 className="text-xl font-bold text-fb-text mb-1">Save Project File</h2>
           <p className="text-sm text-fb-muted mb-5">
             Creates a <code className="font-data text-fb-mid">.fieldbook</code> file to share or open on another device.
           </p>
@@ -2614,7 +2665,7 @@
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
         <div ref={trapRef} className="modal-sheet">
           <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-5" />
-          <h2 className="text-xl font-bold text-fb-text mb-4">Import Project</h2>
+          <h2 className="text-xl font-bold text-fb-text mb-4">Open Project</h2>
 
           {/* Project preview card */}
           <div className="rounded-xl px-4 py-3 mb-4" style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
@@ -2637,8 +2688,8 @@
               <div className="divide-y" style={{ borderColor: FBC.border }}>
                 {[...chain].reverse().map((rec, i) => (
                   <div key={i} className="px-3 py-2 text-xs" style={{ background: FBC.page }}>
-                    <span className="font-semibold" style={{ color: rec.action === 'export' ? FBC.accent : '#1d4ed8' }}>
-                      {rec.action === 'export' ? '↑ Export' : '↓ Import'} #{rec.seq}
+                    <span className="font-semibold" style={{ color: ['export','lock'].includes(rec.action) ? FBC.accent : '#1d4ed8' }}>
+                      {transferLabel(rec)} #{rec.seq}
                     </span>
                     <span className="text-fb-muted ml-2">{rec.by || 'Unknown'}</span>
                     <span className="text-fb-muted ml-2">
@@ -2665,7 +2716,7 @@
             <button onClick={doImport}
               className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80"
               style={{ background: FBC.accent }}>
-              ↓ Import Project
+              ↓ Open Project
             </button>
           </div>
         </div>
@@ -3404,9 +3455,10 @@
     const [tab,        setTab]        = useState('transfer');
     const [showExport, setShowExport] = useState(false);
     const [showExportPts, setShowExportPts] = useState(false);
+    const [lockMode,      setLockMode]      = useState(null); // null | 'lock' | 'reopen'
     const toast    = useToast();
     const trapRef  = useRef(null);
-    useFocusTrap(trapRef, !showExportPts, onClose);
+    useFocusTrap(trapRef, !showExportPts && !lockMode, onClose);
 
     const chain = project.exportChain || [];
 
@@ -3443,7 +3495,7 @@
               <button onClick={() => setShowExport(true)}
                 className="w-full py-3 rounded-xl font-semibold text-sm text-white active:opacity-80 flex items-center justify-center gap-2 mb-1"
                 style={{ background: FBC.accent }}>
-                <span style={{ fontSize: 16 }}>↑</span> Export Project File
+                <span style={{ fontSize: 16 }}>↑</span> Save Project File
               </button>
               <p className="text-xs text-fb-muted text-center mb-4">
                 Downloads a <code className="font-data">.fieldbook</code> file — share or import on any device
@@ -3471,8 +3523,8 @@
                         style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
                         <div className="flex items-center gap-2 mb-0.5">
                           <span className="text-xs font-bold px-1.5 py-0.5 rounded-md text-white"
-                            style={{ background: rec.action === 'export' ? FBC.accent : '#1d4ed8', fontSize: 9 }}>
-                            {rec.action === 'export' ? '↑ Export' : '↓ Import'} #{rec.seq}
+                            style={{ background: ['export','lock'].includes(rec.action) ? FBC.accent : '#1d4ed8', fontSize: 9 }}>
+                            {transferLabel(rec)} #{rec.seq}
                           </span>
                           <span className="text-xs font-semibold text-fb-text">{rec.by || 'Unknown'}</span>
                         </div>
@@ -3493,22 +3545,56 @@
           {tab === 'settings' && (
             <>
               <ProjectGeoSettings project={project} projectId={projectId} onReload={onReload} />
-              <button
-                onClick={() => {
-                  const archiving = !project.archived;
-                  DB.setProjectArchived(projectId, archiving);
-                  onClose();
-                  if (archiving) { toast.success('Project archived'); navigate('#/'); }
-                  else { onReload(); toast.success('Project restored'); }
-                }}
-                className="w-full py-3 rounded-xl font-semibold text-sm text-fb-text active:opacity-80 mb-1"
-                style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
-                {project.archived ? 'Restore Project to Active' : 'Archive Project'}
-              </button>
-              {!project.archived && <p className="text-xs text-fb-muted text-center">Nothing is deleted.</p>}
+              {project.lock ? (
+                <>
+                  <p className="text-xs text-fb-muted text-center mb-2">
+                    Locked by {project.lock.by} on {new Date(project.lock.at).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' })} · read only
+                  </p>
+                  <button onClick={() => setLockMode('reopen')}
+                    className="w-full py-3 rounded-xl font-semibold text-sm text-white active:opacity-80 mb-1"
+                    style={{ background: FBC.cover }}>
+                    Reopen Project…
+                  </button>
+                </>
+              ) : project.archived ? (
+                <button
+                  onClick={() => { DB.setProjectArchived(projectId, false); onReload(); toast.success('Project restored'); }}
+                  className="w-full py-3 rounded-xl font-semibold text-sm text-fb-text active:opacity-80 mb-1"
+                  style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
+                  Restore Project to Active
+                </button>
+              ) : (
+                <>
+                  <button onClick={() => setLockMode('lock')}
+                    className="w-full py-3 rounded-xl font-semibold text-sm text-fb-text active:opacity-80 mb-1"
+                    style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
+                    Lock Project…
+                  </button>
+                  <p className="text-xs text-fb-muted text-center">Saves a .fieldbook file, then closes the project or keeps it viewable.</p>
+                </>
+              )}
             </>
           )}
         </div>
+
+        {lockMode && (
+          <LockProjectSheet
+            project={DB.getProject(projectId) || project}
+            mode={lockMode}
+            onClose={() => setLockMode(null)}
+            onDone={kind => {
+              setLockMode(null);
+              if (kind === 'closed') {
+                onClose();
+                navigate('#/');
+                toast.success('Project saved and closed. Import the file to open it again.');
+              } else {
+                onReload();
+                toast.success(kind === 'archived' ? 'Project locked and kept viewable' : 'Project reopened for editing');
+              }
+            }}
+          />
+        )}
 
         {showExport && (
           <ExportModal
@@ -3582,6 +3668,7 @@
     }
 
     function handleRename(p) {
+      if (p.lock) { toast.error('This project is locked. Reopen it to make changes.'); return; }
       const name = window.prompt('Rename project:', p.name);
       if (name && name.trim() && name.trim() !== p.name) {
         DB.updateProject(p.id, { name: name.trim() });
@@ -3596,13 +3683,25 @@
       toast.success(`"${p.name}" duplicated`);
     }
 
+    // Archive now goes through the lock flow (save file, then close or keep
+    // viewable). A locked project is reopened with a name. Legacy archived
+    // projects that were never locked are restored as before.
+    const [lockTarget, setLockTarget] = useState(null); // { project, mode }
     function handleArchive(p) {
-      const archiving = !p.archived;
-      DB.setProjectArchived(p.id, archiving);
+      if (p.lock) { setLockTarget({ project: p, mode: 'reopen' }); return; }
+      if (!p.archived) { setLockTarget({ project: p, mode: 'lock' }); return; }
+      DB.setProjectArchived(p.id, false);
       setProjects(DB.getProjects());
-      toast.success(archiving
-        ? `"${p.name}" archived — find it under Archived at the bottom`
-        : `"${p.name}" restored`);
+      toast.success(`"${p.name}" restored`);
+    }
+    function handleLockDone(kind) {
+      const p = lockTarget?.project;
+      setLockTarget(null);
+      setProjects(DB.getProjects());
+      if (!p) return;
+      if (kind === 'closed') toast.success(`"${p.name}" saved and closed`);
+      else if (kind === 'archived') toast.success(`"${p.name}" locked, under Archived`);
+      else toast.success(`"${p.name}" reopened for editing`);
     }
 
     function handleMove(p, dir) {
@@ -3674,7 +3773,7 @@
                     <button onClick={() => importInputRef.current && importInputRef.current.click()}
                       className="text-xs font-semibold px-3 py-2 rounded-lg active:opacity-70"
                       style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}`, color: FBC.heading }}>
-                      ↓ Import Project
+                      ↓ Open Project
                     </button>
                   </div>
                   {active.length === 0 && (
@@ -3735,7 +3834,20 @@
             onRename={p => { setActionTarget(null); handleRename(p); }}
             onDuplicate={p => { setActionTarget(null); handleDuplicate(p); }}
             onArchive={p => { setActionTarget(null); handleArchive(p); }}
-            onDelete={p => { setActionTarget(null); setDelTarget(p.id); }}
+            onDelete={p => {
+              setActionTarget(null);
+              if (p.lock) { toast.error('Locked projects cannot be deleted. Save the file, then close it.'); return; }
+              setDelTarget(p.id);
+            }}
+          />
+        )}
+
+        {lockTarget && (
+          <LockProjectSheet
+            project={lockTarget.project}
+            mode={lockTarget.mode}
+            onClose={() => setLockTarget(null)}
+            onDone={handleLockDone}
           />
         )}
 
@@ -3802,7 +3914,9 @@
                 )}
                 <span className="text-xs text-fb-muted">{pageCount} page{pageCount !== 1 ? 's' : ''}</span>
                 <span className="text-xs text-fb-muted ml-auto font-data">
-                  {project.archived && project.archivedAt
+                  {project.lock
+                    ? `Locked by ${project.lock.by} ${new Date(project.lock.at).toLocaleDateString('en-CA')}`
+                    : project.archived && project.archivedAt
                     ? `Archived ${new Date(project.archivedAt).toLocaleDateString('en-CA')}`
                     : new Date(project.createdAt).toLocaleDateString('en-CA')}
                 </span>
@@ -3815,11 +3929,127 @@
           <ContextMenu x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)} items={[
             { icon: <Ico.Rename />,          label: 'Rename',    action: () => onRename(project)    },
             { icon: <Ico.Duplicate />,        label: 'Duplicate', action: () => onDuplicate(project) },
-            { icon: <Ico.File />,             label: project.archived ? 'Restore to Active' : 'Archive', action: () => onArchive(project) },
+            { icon: <Ico.File />,             label: project.lock ? 'Reopen…' : project.archived ? 'Restore to Active' : 'Lock & Archive', action: () => onArchive(project) },
             { icon: <Ico.DeleteProject />,    label: 'Delete',    action: () => onDelete(), danger: true },
           ]} />
         )}
       </>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // LOCK / REOPEN SHEET
+  // mode 'lock':   name → save a .fieldbook → Keep viewable (locked + archived)
+  //                or Close (removed from this device; open it again by importing the file)
+  // mode 'reopen': name → Reopen for editing. Name and time go in the transfer history.
+  // ─────────────────────────────────────────────────────────────────────────────
+  function LockProjectSheet({ project, mode, onClose, onDone }) {
+    const [by,       setBy]       = useState('');
+    const [step,     setStep]     = useState('name'); // 'name' | 'saved'
+    const [lockAt,   setLockAt]   = useState(null);
+    const [armClose, setArmClose] = useState(false);
+    const [busy,     setBusy]     = useState(false);
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const name = by.trim();
+
+    async function saveFile() {
+      if (!name || busy) return;
+      setBusy(true);
+      const at = new Date().toISOString();
+      await exportProjectToFile({ ...DB.getProject(project.id), lock: { by: name, at } }, name, '', 'lock');
+      setLockAt(at);
+      setBusy(false);
+      setStep('saved');
+    }
+    function keepViewable() {
+      DB.lockProject(project.id, name, lockAt);
+      onDone('archived');
+    }
+    function closeProject() {
+      if (!armClose) { setArmClose(true); return; }
+      DB.deleteProject(project.id);
+      onDone('closed');
+    }
+    function reopen() {
+      if (!name) return;
+      DB.reopenProject(project.id, name);
+      onDone('reopened');
+    }
+
+    const cancel = (
+      <button onClick={onClose}
+        className="flex-1 py-3 rounded-xl border border-fb-border text-fb-muted font-semibold text-sm active:bg-fb-page-alt">
+        Cancel
+      </button>
+    );
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-5" />
+
+          {mode === 'reopen' && (
+            <>
+              <h2 className="text-xl font-bold text-fb-text mb-1">Reopen Project</h2>
+              <p className="text-sm text-fb-muted mb-5">
+                Locked by {project.lock?.by || 'someone'} on {project.lock?.at ? new Date(project.lock.at).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' }) : 'an earlier date'}. Reopening lets you edit again.
+              </p>
+              <div className="mb-6"><Field label="Your Name" value={by} onChange={setBy} placeholder="Your name" autoFocus /></div>
+              <div className="flex gap-2">
+                {cancel}
+                <button onClick={reopen} disabled={!name}
+                  className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80 disabled:opacity-40"
+                  style={{ background: FBC.accent }}>
+                  Reopen
+                </button>
+              </div>
+            </>
+          )}
+
+          {mode === 'lock' && step === 'name' && (
+            <>
+              <h2 className="text-xl font-bold text-fb-text mb-1">Lock Project</h2>
+              <p className="text-sm text-fb-muted mb-5">
+                Saves a <code className="font-data text-fb-mid">.fieldbook</code> file first. Then you choose to close the project or keep it viewable.
+              </p>
+              <div className="mb-6"><Field label="Your Name" value={by} onChange={setBy} placeholder="Your name" autoFocus /></div>
+              <div className="flex gap-2">
+                {cancel}
+                <button onClick={saveFile} disabled={!name || busy}
+                  className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80 disabled:opacity-40"
+                  style={{ background: FBC.accent }}>
+                  Save File &amp; Continue
+                </button>
+              </div>
+            </>
+          )}
+
+          {mode === 'lock' && step === 'saved' && (
+            <>
+              <h2 className="text-xl font-bold text-fb-text mb-1">File Saved</h2>
+              <p className="text-sm text-fb-muted mb-5">
+                Check your Downloads for the <code className="font-data text-fb-mid">.fieldbook</code> file before you choose. Closing removes the project from this device. Import the file to open it again.
+              </p>
+              <div className="flex flex-col gap-2">
+                <button onClick={keepViewable}
+                  className="w-full py-3 rounded-xl border border-fb-border text-fb-text font-semibold text-sm active:bg-fb-page-alt">
+                  Keep Viewable (Archive)
+                </button>
+                <button onClick={closeProject}
+                  className="w-full py-3 rounded-xl font-semibold text-sm text-white active:opacity-80"
+                  style={{ background: armClose ? FBC.error : FBC.cover }}>
+                  {armClose ? 'Tap Again to Close Project' : 'Close Project'}
+                </button>
+                <button onClick={onClose}
+                  className="w-full py-3 text-fb-muted font-semibold text-sm">
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     );
   }
 
@@ -3840,7 +4070,7 @@
               <Ico.Duplicate /> Duplicate
             </button>
             <button onClick={() => onArchive(project)} className={rowCls + ' flex items-center gap-3'} style={{ background: '#f4f4f4' }}>
-              {project.archived ? <><Ico.ChevUp /> Restore to Active</> : <><Ico.Book /> Archive Project</>}
+              {project.lock ? <><Ico.ChevUp /> Reopen…</> : project.archived ? <><Ico.ChevUp /> Restore to Active</> : <><Ico.Book /> Lock &amp; Archive</>}
             </button>
             <button onClick={() => onDelete(project)}
               className="w-full flex items-center gap-3 text-left px-4 py-3 rounded-xl font-medium transition-colors active:bg-red-100"
@@ -3877,7 +4107,7 @@
           <button onClick={onImport}
             className="mt-3 px-6 py-3 rounded-2xl font-semibold text-sm active:opacity-70"
             style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}`, color: FBC.heading }}>
-            ↓ Import Project (.fieldbook)
+            ↓ Open Project (.fieldbook)
           </button>
         )}
       </div>
@@ -5840,8 +6070,23 @@
     const [copyFromOpen,     setCopyFromOpen]     = useState(false);
     const [importPageModal,  setImportPageModal]  = useState(null); // { fileData }
     const [pageChainTarget,  setPageChainTarget]  = useState(null); // page object
+    const [lockMode,         setLockMode]         = useState(null); // null | 'lock' | 'reopen'
     const pageImportInputRef = useRef(null);
     const toast = useToast();
+
+    // Writes to a locked project are dropped in the DB layer; say so here,
+    // at most once every few seconds (autosave can fire repeatedly).
+    useEffect(() => {
+      let last = 0;
+      const onLocked = () => {
+        const t = Date.now();
+        if (t - last < 2500) return;
+        last = t;
+        toast.error('This project is locked. Reopen it to make changes.');
+      };
+      window.addEventListener('fb:locked', onLocked);
+      return () => window.removeEventListener('fb:locked', onLocked);
+    }, []);
 
     // getProject returns the in-memory cached object, and DB mutations (reorder,
     // duplicate, etc.) mutate that same object in place. Passing the identical
@@ -6044,7 +6289,21 @@
           }
         />
 
-        {project.archived && (
+        {project.lock && (
+          <div className="flex items-center justify-between gap-3 px-4 py-2"
+            style={{ background: FBC.pageAlt, borderBottom: `1px solid ${FBC.border}` }}>
+            <p className="text-xs font-bold uppercase tracking-widest text-fb-muted">
+              Locked by {project.lock.by} · read only
+            </p>
+            <button onClick={() => setLockMode('reopen')}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white active:opacity-80"
+              style={{ background: FBC.cover }}>
+              Reopen
+            </button>
+          </div>
+        )}
+
+        {project.archived && !project.lock && (
           <div className="flex items-center justify-between gap-3 px-4 py-2"
             style={{ background: FBC.pageAlt, borderBottom: `1px solid ${FBC.border}` }}>
             <p className="text-xs font-bold uppercase tracking-widest text-fb-muted">Archived project</p>
@@ -6252,6 +6511,19 @@
           }} />
 
         {showExportPts && <ExportPointsModal projectId={projectId} onClose={() => setShowExportPts(false)} />}
+
+        {lockMode && (
+          <LockProjectSheet
+            project={DB.getProject(projectId) || project}
+            mode={lockMode}
+            onClose={() => setLockMode(null)}
+            onDone={kind => {
+              setLockMode(null);
+              reload();
+              toast.success(kind === 'archived' ? 'Project locked and kept viewable' : 'Project reopened for editing');
+            }}
+          />
+        )}
 
         {showGps && (
           <GpsCaptureSheet projectId={projectId}
