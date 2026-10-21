@@ -672,7 +672,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.186';
+  const APP_VERSION = '1.187';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -10078,11 +10078,15 @@
       setColModalForm({ label: col.label, colType: col.colType || 'num', width: col.width || 80 });
     }
 
+    // Width is kept as typed while editing (clamping every keystroke turned
+    // "1" into 50 and "120" into 300) and clamped to 50–300 on blur and save.
+    const clampColWidth = w => Math.max(50, Math.min(300, parseInt(w, 10) || 80));
+
     function saveColModal() {
       if (!colModalForm.label.trim()) { setColModal(null); return; }
       const updated = columns.map(c =>
         c.id === colModal.col.id
-          ? { ...c, label: colModalForm.label.trim(), colType: colModalForm.colType, width: colModalForm.width }
+          ? { ...c, label: colModalForm.label.trim(), colType: colModalForm.colType, width: clampColWidth(colModalForm.width) }
           : c
       );
       persistColumns(updated);
@@ -11367,7 +11371,8 @@
                 <div>
                   <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-1">Width (px)</p>
                   <input type="number" value={colModalForm.width}
-                    onChange={e => setColModalForm(f => ({ ...f, width: Math.max(50, Math.min(300, parseInt(e.target.value) || 80)) }))}
+                    onChange={e => setColModalForm(f => ({ ...f, width: e.target.value }))}
+                    onBlur={() => setColModalForm(f => ({ ...f, width: clampColWidth(f.width) }))}
                     min={50} max={300}
                     className="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 focus:border-fb-mid outline-none text-fb-text text-sm font-data"
                   />
