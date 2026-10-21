@@ -10409,6 +10409,13 @@
     return { n: n + hd * Math.cos(r), e: e + hd * Math.sin(r) };
   }
 
+  // Slope shot → HD and VD. Zenith in decimal degrees (0 = straight up,
+  // 90 = level). The new elevation is from + HI + VD − HR.
+  function slopeReduce(sd, zen) {
+    const r = zen * Math.PI / 180;
+    return { hd: sd * Math.sin(r), vd: sd * Math.cos(r) };
+  }
+
   const ptKey = v => String(v ?? '').trim().toLowerCase();
   const findPt = (rows, num) => num.trim() ? rows.find(r => ptKey(r.cells?.col_ptnum) === ptKey(num)) : null;
   const ptNE = r => {
@@ -10426,27 +10433,44 @@
     const [dist, setDist] = useState('');
     const [num, setNum]   = useState(suggestNum || '');
     const [desc, setDesc] = useState('');
+    const [slope, setSlope] = useState(false);   // false: HD entry · true: SD + zenith + HI/HR
+    const [zen, setZen]   = useState('');
+    const [hi, setHi]     = useState('');
+    const [hr, setHr]     = useState('');
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
 
+    const numOf = v => { const x = parseFloat(String(v ?? '').replace(/,/g, '')); return isFinite(x) ? x : null; };
     const a  = findPt(rows, from);
     const ne = ptNE(a);
     const az = parseBearing(brg);
-    const hd = parseFloat(String(dist).replace(/,/g, ''));
+    const d  = numOf(dist);
+    const z  = slope && zen.trim() ? parseDMSInput(zen) : null;
+    const zOk = z !== null && z > 0 && z < 180;
+    const red = slope && zOk && d > 0 ? slopeReduce(d, z) : null;
+    const hd = slope ? (red ? red.hd : null) : d;
+    const fromZ = numOf(a?.cells?.col_elev);
+    const hiV = hi.trim() ? numOf(hi) : 0, hrV = hr.trim() ? numOf(hr) : 0;
+    const elev = red && fromZ !== null && hiV !== null && hrV !== null ? fromZ + hiV + red.vd - hrV : null;
     const taken = num.trim() && isPtNumTaken(projectId, num.trim());
-    const res = ne && az !== null && isFinite(hd) && hd > 0 ? forwardPoint(ne.n, ne.e, az, hd) : null;
+    const res = ne && az !== null && hd > 0 ? forwardPoint(ne.n, ne.e, az, hd) : null;
     const problem = from.trim() && !a ? `No point ${from.trim()} on this page`
       : a && !ne ? `Point ${from.trim()} needs a northing and easting`
       : brg.trim() && az === null ? 'Can\'t read that bearing'
-      : dist.trim() && !(hd > 0) ? 'Distance must be more than 0'
+      : dist.trim() && !(d > 0) ? 'Distance must be more than 0'
+      : slope && zen.trim() && !zOk ? 'Zenith must be between 0° and 180°'
+      : slope && (hiV === null || hrV === null) ? 'Can\'t read HI or HR'
       : taken ? `Point ${num.trim()} is already used`
       : null;
-    const canAdd = res && num.trim() && !taken;
+    const canAdd = res && num.trim() && !taken && !problem;
 
     function add() {
       if (!canAdd) return;
-      onAdd({ number: num.trim(), n: res.n.toFixed(3), e: res.e.toFixed(3), desc: desc.trim() });
+      onAdd({ number: num.trim(), n: res.n.toFixed(3), e: res.e.toFixed(3), z: elev !== null ? elev.toFixed(3) : '', desc: desc.trim() });
     }
+    const chip = on => `flex-1 h-9 rounded-lg text-sm font-semibold border ${on
+      ? 'bg-fb-cover border-fb-cover text-white'
+      : 'bg-fb-page-alt border-fb-border text-fb-heading'}`;
 
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -10467,15 +10491,37 @@
             </div>
           </div>
           <div className="flex gap-2 mb-3">
+            <button className={chip(!slope)} onClick={() => setSlope(false)} data-fwd-mode-hd>HD</button>
+            <button className={chip(slope)} onClick={() => setSlope(true)} data-fwd-mode-slope>Slope shot</button>
+          </div>
+          <div className="flex gap-2 mb-3">
             <div className="flex-1">
-              <p className={sheetLabel}>HD (m)</p>
+              <p className={sheetLabel}>{slope ? 'SD (m)' : 'HD (m)'}</p>
               <input className={sheetInput} value={dist} onChange={e => setDist(e.target.value)} inputMode="decimal" data-fwd-dist />
             </div>
+            {slope && (
+              <div className="flex-1">
+                <p className={sheetLabel}>Zenith</p>
+                <input className={sheetInput} value={zen} onChange={e => setZen(e.target.value)} placeholder="90 00 00" data-fwd-zen />
+              </div>
+            )}
             <div className="w-24">
               <p className={sheetLabel}>New Pt #</p>
               <input className={sheetInput} value={num} onChange={e => setNum(e.target.value)} inputMode="numeric" data-fwd-num />
             </div>
           </div>
+          {slope && (
+            <div className="flex gap-2 mb-3">
+              <div className="flex-1">
+                <p className={sheetLabel}>HI (m)</p>
+                <input className={sheetInput} value={hi} onChange={e => setHi(e.target.value)} inputMode="decimal" placeholder="0.000" data-fwd-hi />
+              </div>
+              <div className="flex-1">
+                <p className={sheetLabel}>HR (m)</p>
+                <input className={sheetInput} value={hr} onChange={e => setHr(e.target.value)} inputMode="decimal" placeholder="0.000" data-fwd-hr />
+              </div>
+            </div>
+          )}
           <p className={sheetLabel}>Description</p>
           <input className={`${sheetInput} mb-3`} value={desc} onChange={e => setDesc(e.target.value)} data-fwd-desc />
           {problem && <p className="text-sm text-fb-warn mb-3">{problem}</p>}
@@ -10484,6 +10530,9 @@
               <p className="text-xs text-fb-ink-muted font-data mb-1">{quadrantBearing(az, hd)} · Az {formatDMS(az)}</p>
               <p className="font-data text-fb-ink text-[22px] leading-tight">N {res.n.toFixed(3)}</p>
               <p className="font-data text-fb-ink text-[22px] leading-tight">E {res.e.toFixed(3)}</p>
+              {red && <p className="font-data text-fb-ink text-[22px] leading-tight">{elev !== null ? `Z ${elev.toFixed(3)}` : 'Z —'}</p>}
+              {red && <p className="text-xs text-fb-ink-muted font-data mt-1">HD {red.hd.toFixed(3)} · VD {red.vd.toFixed(3)}</p>}
+              {red && fromZ === null && <p className="text-xs text-fb-warn mt-1">Point {from.trim()} has no elevation</p>}
             </div>
           )}
           <div className="flex gap-2">
@@ -10492,6 +10541,250 @@
               {num.trim() ? `Add point ${num.trim()}` : 'Add point'}
             </button>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Angle calculator (beta) — the Survey Calculator's angle page, in a sheet ──
+  // Everything works in decimal degrees; results are rounded to whole seconds.
+  const angNorm = dd => { const s = Math.round(dd * 3600); return (((s % 1296000) + 1296000) % 1296000) / 3600; };
+
+  // Compact D.MMSS (1–4 decimal digits, padded: 45.3 → 45°30'00"), else any form parseDMSInput reads.
+  function parseAngleDMS(raw) {
+    const s = String(raw ?? '').trim();
+    if (!s) return null;
+    const c = s.match(/^(-?)(\d+)\.(\d{1,4})$/);
+    if (c) {
+      const fr = (c[3] + '0000').slice(0, 4), m = +fr.slice(0, 2), sec = +fr.slice(2);
+      if (m > 59 || sec > 59) return null;
+      return (c[1] ? -1 : 1) * (+c[2] + m / 60 + sec / 3600);
+    }
+    return parseDMSInput(s);
+  }
+  function parseAngleBrg(raw) {
+    const s = String(raw ?? '').trim().toUpperCase();
+    const one = { N: 0, E: 90, S: 180, W: 270 }[s];
+    if (one !== undefined) return one;
+    const q = s.match(/^([NS])\s*(.+?)\s*([EW])$/);
+    if (!q) return null;
+    const a = parseAngleDMS(q[2]);
+    if (a === null || a < 0 || a > 90) return null;
+    return q[1] === 'N' ? (q[3] === 'E' ? a : 360 - a) : (q[3] === 'E' ? 180 - a : 180 + a);
+  }
+  // DMS with a chosen number of decimals on the seconds.
+  function dmsStr(dd, dp = 0) {
+    const neg = dd < 0, v = Math.abs(dd);
+    let d = Math.floor(v), m = Math.floor((v - d) * 60);
+    let s = +(((v - d) * 60 - m) * 60).toFixed(dp);
+    if (s >= 60) { s = 0; m++; } if (m >= 60) { m = 0; d++; }
+    const ss = s.toFixed(dp).padStart(dp ? dp + 3 : 2, '0');
+    return `${neg ? '-' : ''}${d}°${String(m).padStart(2, '0')}'${ss}"`;
+  }
+  function compactStr(dd) {
+    const neg = dd < 0, v = Math.abs(dd);
+    let d = Math.floor(v), m = Math.floor((v - d) * 60), s = Math.round(((v - d) * 60 - m) * 60);
+    if (s >= 60) { s = 0; m++; } if (m >= 60) { m = 0; d++; }
+    return `${neg ? '-' : ''}${d}.${String(m).padStart(2, '0')}${String(s).padStart(2, '0')}`;
+  }
+  function brgParts(az) {
+    const a = ((az % 360) + 360) % 360, E = 1e-8;
+    if (Math.abs(a) < E || Math.abs(a - 360) < E) return { card: 'N' };
+    if (Math.abs(a - 90) < E) return { card: 'E' };
+    if (Math.abs(a - 180) < E) return { card: 'S' };
+    if (Math.abs(a - 270) < E) return { card: 'W' };
+    if (a < 90) return { p: 'N', q: 'E', sub: a };
+    if (a < 180) return { p: 'S', q: 'E', sub: 180 - a };
+    if (a < 270) return { p: 'S', q: 'W', sub: a - 180 };
+    return { p: 'N', q: 'W', sub: 360 - a };
+  }
+  const brgStr = (az, dp = 0) => { const b = brgParts(az); return b.card || `${b.p} ${dmsStr(b.sub, dp)} ${b.q}`; };
+  const brgCompact = az => { const b = brgParts(az); return b.card || `${b.p}${compactStr(b.sub)}${b.q}`; };
+
+  const ANG_CALC_FMTS = {
+    dms: { label: 'DMS', ph: '45.3423', parse: parseAngleDMS, show: dmsStr, short: compactStr },
+    dd:  { label: 'DD',  ph: '45.573056', parse: r => { const x = parseFloat(r); return isFinite(x) ? x : null; }, show: dd => dd.toFixed(6) + '°', short: dd => dd.toFixed(6) },
+    brg: { label: 'BRG', ph: 'N45.4530E', parse: parseAngleBrg, show: brgStr, short: brgCompact },
+  };
+  const ANG_CONV_FMTS = [
+    { id: 'dd',      label: 'DD',     name: 'DD',          ph: '45.758333', parse: r => { const x = parseFloat(r); return isFinite(x) ? x : null; } },
+    { id: 'dms',     label: 'DMS',    name: 'DMS',         ph: '45 45 30',  parse: r => /^-?\d+\.\d+$/.test(r.trim()) ? null : parseDMSInput(r) },
+    { id: 'compact', label: 'D.MMSS', name: 'Compact DMS', ph: '45.4530',   parse: parseAngleDMS },
+    { id: 'rad',     label: 'RAD',    name: 'Radians',     ph: '0.798584',  parse: r => { const x = parseFloat(r); return isFinite(x) ? x * 180 / Math.PI : null; } },
+    { id: 'grad',    label: 'GRAD',   name: 'Grads',       ph: '50.8426',   parse: r => { const x = parseFloat(r); return isFinite(x) ? x * 0.9 : null; } },
+    { id: 'bearing', label: 'BRG',    name: 'Bearing',     ph: 'N45.4530E', parse: parseAngleBrg },
+  ];
+  // Seconds decimals to show: as many as were typed (DMS / bearing), else what the value needs.
+  function angleDP(dd, raw, fmt) {
+    if (fmt === 'compact') return 0;
+    if (fmt === 'dms' || fmt === 'bearing') {
+      let t = raw.trim();
+      if (fmt === 'bearing') {
+        t = t.replace(/^[NS]\s*/i, '').replace(/\s*[EW]$/i, '');
+        if (!/[\s°'"′″dms]/i.test(t)) return 0;   // compact N45.4530E: whole seconds
+      }
+      const m = t.match(/(\d+(?:\.(\d+))?)\s*["″sS]?$/);
+      return m && m[2] ? Math.min(m[2].length, 6) : 0;
+    }
+    const v = Math.abs(dd), d = Math.floor(v), mt = (v - d) * 60, s = Math.round((mt - Math.floor(mt)) * 60 * 1e9) / 1e9;
+    for (let dp = 0; dp <= 6; dp++) if (Math.abs(+s.toFixed(dp) - s) < 5e-8) return dp;
+    return 6;
+  }
+  function loadAngleLog() { try { const v = JSON.parse(localStorage.getItem('fb_angle_log') || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } }
+  function saveAngleLog(log) { try { localStorage.setItem('fb_angle_log', JSON.stringify(log.slice(-50))); } catch {} }
+
+  function AngleSheet({ onClose }) {
+    const [tab, setTab]   = useState('calc');
+    const [fmt, setFmt]   = useState('dms');
+    const [a, setA]       = useState('');
+    const [b, setB]       = useState('');
+    const [op, setOp]     = useState('add');
+    const [log, setLog]   = useState(loadAngleLog);
+    const [cvFmt, setCvFmt] = useState('dd');
+    const [cvIn, setCvIn] = useState('');
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const toast = useToast();
+    const F = ANG_CALC_FMTS[fmt];
+
+    const pa = a.trim() ? F.parse(a) : 0, pb = b.trim() ? F.parse(b) : 0;
+    const bad = pa === null || pb === null;
+    const [flip, setFlip] = useState(false);
+    useEffect(() => { setFlip(false); }, [a, b, op, fmt]);
+    const raw = !bad && (a.trim() || b.trim()) ? angNorm(op === 'add' ? pa + pb : pa - pb) : null;
+    const result = raw !== null && flip ? angNorm(raw + 180) : raw;
+    const flipVal = (v, set) => { const x = v.trim() ? F.parse(v) : null; if (x !== null) set(F.short(angNorm(x + 180))); };
+
+    async function copyText(text, msg) {
+      try { await navigator.clipboard.writeText(text); toast.success(msg); }
+      catch { toast.error('Copy failed'); }
+    }
+    function logStep() {
+      if (result === null) return;
+      const next = [...log, { n: (log.length ? log[log.length - 1].n : 0) + 1, a: a.trim() || '0', op: op === 'add' ? '+' : '−', b: b.trim() || '0', res: F.show(result), dd: result.toFixed(6) }];
+      setLog(next); saveAngleLog(next);
+    }
+    const logLine = e => `${e.n}. ${e.a} ${e.op} ${e.b} = ${e.res}`;
+
+    const cv = ANG_CONV_FMTS.find(x => x.id === cvFmt);
+    const cvDD = cvIn.trim() ? cv.parse(cvIn) : null;
+    const cvDP = cvDD !== null ? angleDP(cvDD, cvIn, cvFmt) : 0;
+    const cvRows = cvDD === null ? [] : [
+      { id: 'dd', name: 'DD', v: cvDD.toFixed(6) + '°' },
+      { id: 'dms', name: 'DMS', v: dmsStr(cvDD, cvDP) },
+      { id: 'compact', name: 'Compact DMS', v: compactStr(cvDD) },
+      { id: 'rad', name: 'Radians', v: (cvDD * Math.PI / 180).toFixed(6) + ' rad' },
+      { id: 'grad', name: 'Grads', v: (cvDD * 400 / 360).toFixed(4) + ' grad' },
+      { id: 'bearing', name: 'Bearing', v: brgStr(cvDD, cvDP) },
+    ];
+    const cvWide = cvDD !== null && Math.abs(cvDD) > 360;
+
+    const seg = on => `flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${on ? 'bg-fb-page text-fb-heading shadow-sm' : 'text-fb-ink-faint'}`;
+    const chip = on => `flex-1 h-9 rounded-lg text-sm font-semibold border ${on ? 'bg-fb-cover border-fb-cover text-white' : 'bg-fb-page-alt border-fb-border text-fb-heading'}`;
+    const act = 'h-9 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep disabled:text-fb-ink-faint';
+    const angInput = (val, set, key) => (
+      <div className="flex gap-2 items-center">
+        <input className={sheetInput} value={val} onChange={e => set(e.target.value)} placeholder={F.ph}
+          inputMode={fmt === 'brg' ? 'text' : 'decimal'} autoCapitalize="characters" data-angle-input={key} />
+        <button className={act} onClick={() => flipVal(val, set)} disabled={!val.trim()} data-angle-flip={key}>Flip 180°</button>
+        <button className={act} onClick={() => set('')} disabled={!val.trim()}>Clear</button>
+      </div>
+    );
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" data-angle-sheet>
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Angles</h2>
+          </div>
+          <div className="flex gap-1 p-1 rounded-xl bg-fb-page-alt mb-4">
+            <button className={seg(tab === 'calc')} onClick={() => setTab('calc')} data-angle-tab="calc">Calculator</button>
+            <button className={seg(tab === 'conv')} onClick={() => setTab('conv')} data-angle-tab="conv">Converter</button>
+          </div>
+
+          {tab === 'calc' ? (<>
+            <div className="flex gap-2 mb-3">
+              {Object.keys(ANG_CALC_FMTS).map(k => (
+                <button key={k} className={chip(fmt === k)} data-angle-fmt={k}
+                  onClick={() => { setFmt(k); setA(''); setB(''); }}>{ANG_CALC_FMTS[k].label}</button>
+              ))}
+            </div>
+            <p className={sheetLabel}>Angle A</p>
+            {angInput(a, setA, 'a')}
+            <div className="flex gap-2 my-3">
+              <button className={chip(op === 'add')} onClick={() => setOp('add')} data-angle-op="add">+</button>
+              <button className={chip(false)} onClick={() => { setA(b); setB(a); }} data-angle-swap>Swap A/B</button>
+              <button className={chip(op === 'sub')} onClick={() => setOp('sub')} data-angle-op="sub">−</button>
+            </div>
+            <p className={sheetLabel}>Angle B</p>
+            {angInput(b, setB, 'b')}
+            {bad && <p className="text-sm text-fb-warn mt-3">Can't read that angle</p>}
+            <div className="rounded-xl px-4 py-3 text-center bg-fb-field border border-fb-border mt-3 mb-2" data-angle-result>
+              <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1">Result</p>
+              <p className="font-data text-fb-ink text-[26px] leading-tight">{result !== null ? F.show(result) : '—'}</p>
+              <p className="text-xs text-fb-ink-muted mt-1 font-data">{result !== null ? `${result.toFixed(6)}° decimal` : 'Enter A and B'}</p>
+            </div>
+            <div className="flex flex-wrap gap-2 mb-3">
+              <button className={act} disabled={result === null} onClick={() => setFlip(f => !f)} data-angle-flip-res>Flip result 180°</button>
+              <button className={act} disabled={result === null} onClick={() => setA(F.short(result))} data-angle-to-a>Result to A</button>
+              <button className={act} disabled={result === null} onClick={() => setB(F.short(result))}>Result to B</button>
+              <button className={act} disabled={result === null} onClick={logStep} data-angle-log>Log step</button>
+              <button className={act} onClick={() => { setA(''); setB(''); setOp('add'); }}>Clear</button>
+            </div>
+            <p className={sheetLabel}>History</p>
+            {log.length ? (
+              <div className="rounded-xl bg-fb-page-alt border border-fb-border mb-2 max-h-40 overflow-y-auto" data-angle-history>
+                {log.map((e, i) => (
+                  <div key={i} className="flex items-center gap-2 px-3 py-2 border-b border-fb-border last:border-b-0">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-fb-ink-muted font-data truncate">{e.n}. {e.a} {e.op} {e.b}</p>
+                      <p className="text-sm text-fb-ink font-data">= {e.res}</p>
+                    </div>
+                    <button className={act} onClick={() => copyText(e.res, 'Step copied')}>Copy</button>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-sm text-fb-ink-muted py-4 text-center rounded-xl bg-fb-page-alt mb-2">No steps logged yet.</p>}
+            <div className="flex gap-2 mb-3">
+              <button className={act} disabled={!log.length} onClick={() => { setLog([]); saveAngleLog([]); }}>Clear history</button>
+              <button className={act} disabled={!log.length} onClick={() => copyText(['Angle calculations', ...log.map(logLine)].join('\n'), 'History copied')}>Copy all</button>
+            </div>
+            <div className="flex gap-2">
+              <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={onClose}>Close</button>
+              <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint"
+                disabled={result === null} onClick={() => copyText(F.show(result), 'Result copied')} data-angle-copy>Copy result</button>
+            </div>
+          </>) : (<>
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              {ANG_CONV_FMTS.map(x => (
+                <button key={x.id} className={chip(cvFmt === x.id)} onClick={() => setCvFmt(x.id)} data-angle-cvfmt={x.id}>{x.label}</button>
+              ))}
+            </div>
+            <p className={sheetLabel}>{cv.name}</p>
+            <input className={`${sheetInput} mb-3`} value={cvIn} onChange={e => setCvIn(e.target.value)} placeholder={cv.ph}
+              inputMode={cvFmt === 'bearing' ? 'text' : 'decimal'} autoCapitalize="characters" data-angle-cvin />
+            {cvIn.trim() && cvDD === null && <p className="text-sm text-fb-warn mb-3">Can't read that as {cv.name}</p>}
+            {cvWide && <p className="text-sm text-fb-warn mb-3">Over 360° — bearing shown for {angNorm(cvDD).toFixed(4)}°</p>}
+            {cvRows.length > 0 && (
+              <div className="rounded-xl bg-fb-field border border-fb-border mb-3" data-angle-cvrows>
+                {cvRows.map(r => (
+                  <div key={r.id} className="flex items-center gap-2 px-3 py-2 border-b border-fb-border last:border-b-0">
+                    <span className={`w-24 text-[10px] font-bold uppercase tracking-widest ${r.id === cvFmt ? 'text-fb-accent' : 'text-fb-ink-muted'}`}>{r.name}</span>
+                    <span className="flex-1 text-sm text-fb-ink font-data text-right" data-angle-cv={r.id}>{r.v}</span>
+                    <button className={act} onClick={() => copyText(r.v, `${r.name} copied`)}>Copy</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={onClose}>Close</button>
+              <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint"
+                disabled={!cvRows.length}
+                onClick={() => copyText(['Angle conversions', `Input: ${cvIn.trim()} (${cv.name})`, '', ...cvRows.map(r => `${r.name}: ${r.v}`)].join('\n'), 'Conversions copied')}
+                data-angle-cvcopy>Copy all</button>
+            </div>
+          </>)}
         </div>
       </div>
     );
@@ -10579,6 +10872,153 @@
     );
   }
 
+  // Intersection of two lines (bearings) and/or circles (distances) from two
+  // known points. Each `a`/`b` is { n, e, az } or { n, e, d }. Bearings are
+  // rays: a solution has to lie ahead of the point along its bearing.
+  function intersect(a, b) {
+    const EPS = 1e-9;
+    const dir = az => { const r = az * Math.PI / 180; return { n: Math.cos(r), e: Math.sin(r) }; };
+    if (a.az != null && b.az != null) {
+      const u = dir(a.az), v = dir(b.az);
+      const den = u.e * v.n - u.n * v.e;
+      if (Math.abs(den) < EPS) return [];
+      const dn = b.n - a.n, de = b.e - a.e;
+      const t = (de * v.n - dn * v.e) / den;
+      const s = (de * u.n - dn * u.e) / den;
+      if (t <= EPS || s <= EPS) return [];
+      return [{ n: a.n + t * u.n, e: a.e + t * u.e }];
+    }
+    if (a.d != null && b.d != null) {
+      const dn = b.n - a.n, de = b.e - a.e, D = Math.hypot(dn, de);
+      if (D < EPS || D > a.d + b.d + 1e-6 || D < Math.abs(a.d - b.d) - 1e-6) return [];
+      const x = (a.d * a.d - b.d * b.d + D * D) / (2 * D);
+      const h = Math.sqrt(Math.max(0, a.d * a.d - x * x));
+      const mn = a.n + x * dn / D, me = a.e + x * de / D;
+      if (h < 1e-6) return [{ n: mn, e: me }];
+      return [{ n: mn - h * de / D, e: me + h * dn / D }, { n: mn + h * de / D, e: me - h * dn / D }];
+    }
+    const ln = a.az != null ? a : b, ci = a.az != null ? b : a;
+    const u = dir(ln.az), fn = ln.n - ci.n, fe = ln.e - ci.e;
+    const p = fn * u.n + fe * u.e, q = fn * fn + fe * fe - ci.d * ci.d;
+    const disc = p * p - q;
+    if (disc < -1e-6) return [];
+    const r = Math.sqrt(Math.max(0, disc));
+    const ts = r < 1e-6 ? [-p] : [-p - r, -p + r];
+    return ts.filter(t => t > EPS).map(t => ({ n: ln.n + t * u.n, e: ln.e + t * u.e }));
+  }
+
+  const ISECT_MODES = [['bb', 'Brg–Brg'], ['dd', 'Dist–Dist'], ['bd', 'Brg–Dist'], ['db', 'Dist–Brg']];
+
+  // Sheet: intersection from two points on this page; adds the chosen solution.
+  function IntersectionSheet({ rows, projectId, initialA, initialB, suggestNum, onAdd, onClose }) {
+    const [mode, setMode] = useState('bb');
+    const [pa, setPa] = useState(initialA || '');
+    const [pb, setPb] = useState(initialB || '');
+    const [va, setVa] = useState('');
+    const [vb, setVb] = useState('');
+    const [pick, setPick] = useState(0);
+    const [num, setNum]   = useState(suggestNum || '');
+    const [desc, setDesc] = useState('');
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+
+    const kinds = [mode[0], mode[1]];
+    const read = (k, v) => {
+      if (!String(v).trim()) return undefined;
+      if (k === 'b') return parseBearing(v);
+      const d = parseFloat(String(v).replace(/,/g, ''));
+      return d > 0 ? d : null;
+    };
+    const names = [pa.trim(), pb.trim()];
+    const pts = names.map(v => findPt(rows, v));
+    const nes = pts.map(ptNE);
+    const vals = [read(kinds[0], va), read(kinds[1], vb)];
+    const ready = nes.every(Boolean) && vals.every(v => v != null) && ptKey(names[0]) !== ptKey(names[1]);
+    const sols = ready
+      ? intersect(...[0, 1].map(i => ({ ...nes[i], [kinds[i] === 'b' ? 'az' : 'd']: vals[i] })))
+      : [];
+    const sel = sols[Math.min(pick, sols.length - 1)];
+    const taken = num.trim() && isPtNumTaken(projectId, num.trim());
+    const missing = names.findIndex((v, i) => v && !pts[i]);
+    const noNE = names.findIndex((v, i) => pts[i] && !nes[i]);
+    const badVal = vals.findIndex(v => v === null);
+    const problem = missing >= 0 ? `No point ${names[missing]} on this page`
+      : noNE >= 0 ? `Point ${names[noNE]} needs a northing and easting`
+      : names[0] && ptKey(names[0]) === ptKey(names[1]) ? 'Use two different points'
+      : badVal >= 0 ? (kinds[badVal] === 'b' ? 'Can\'t read that bearing' : 'Distance must be more than 0')
+      : ready && !sols.length ? 'No intersection with these values'
+      : taken ? `Point ${num.trim()} is already used`
+      : null;
+    const canAdd = sel && num.trim() && !taken;
+
+    function add() {
+      if (!canAdd) return;
+      onAdd({ number: num.trim(), n: sel.n.toFixed(3), e: sel.e.toFixed(3), desc: desc.trim() });
+    }
+
+    const valLabel = k => k === 'b' ? 'Bearing or azimuth' : 'HD (m)';
+    const row = (label, p, setP, v, setV, k, key, focus) => (
+      <div className="flex gap-2 mb-3">
+        <div className="w-24">
+          <p className={sheetLabel}>{label}</p>
+          <input className={sheetInput} value={p} onChange={e => setP(e.target.value)} inputMode="numeric" autoFocus={focus} data-isect={`p${key}`} />
+        </div>
+        <div className="flex-1">
+          <p className={sheetLabel}>{valLabel(k)}</p>
+          <input className={sheetInput} value={v} onChange={e => setV(e.target.value)}
+            inputMode={k === 'b' ? 'text' : 'decimal'} placeholder={k === 'b' ? 'N 45 12 30 E' : ''} data-isect={`v${key}`} />
+        </div>
+      </div>
+    );
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" data-intersection-sheet>
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Intersection</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted font-data">Grid</span>
+          </div>
+          <div className="mb-3">
+            <GnSegmented options={ISECT_MODES} value={mode} label="Intersection type"
+              onChange={m => { setMode(m); setVa(''); setVb(''); setPick(0); }} />
+          </div>
+          {row('Point A', pa, setPa, va, setVa, kinds[0], 'a', !initialA)}
+          {row('Point B', pb, setPb, vb, setVb, kinds[1], 'b', false)}
+          {problem && <p className="text-sm text-fb-warn mb-3">{problem}</p>}
+          {sols.length > 0 && (
+            <div className={`grid gap-2 mb-3 ${sols.length > 1 ? 'grid-cols-2' : ''}`} data-intersection-result>
+              {sols.map((s, i) => (
+                <button key={i} type="button" onClick={() => setPick(i)} aria-pressed={sel === s}
+                  className={`rounded-xl px-3 py-3 text-center border ${sel === s ? 'bg-fb-field border-fb-accent' : 'bg-fb-field border-fb-border opacity-60'}`}>
+                  {sols.length > 1 && <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1">Solution {i + 1}</p>}
+                  <p className="font-data text-fb-ink text-lg leading-tight">N {s.n.toFixed(3)}</p>
+                  <p className="font-data text-fb-ink text-lg leading-tight">E {s.e.toFixed(3)}</p>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2 mb-3">
+            <div className="w-24">
+              <p className={sheetLabel}>New Pt #</p>
+              <input className={sheetInput} value={num} onChange={e => setNum(e.target.value)} inputMode="numeric" data-isect="num" />
+            </div>
+            <div className="flex-1">
+              <p className={sheetLabel}>Description</p>
+              <input className={sheetInput} value={desc} onChange={e => setDesc(e.target.value)} data-isect="desc" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={onClose}>Close</button>
+            <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint" disabled={!canAdd} onClick={add}>
+              {num.trim() ? `Add point ${num.trim()}` : 'Add point'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Description codes. The editable list is a device preference (fb_desc_codes);
   // recent codes come from the first word of this page's descriptions.
   const DEFAULT_DESC_CODES = ['IB', 'IP', 'CP', 'BM', 'PP', 'FH', 'CL', 'EP', 'TOB', 'BOB'];
@@ -10649,6 +11089,8 @@
     const [inverseOpen, setInverseOpen] = useState(null);   // { from, to } while the Inverse sheet is open
     const [forwardOpen, setForwardOpen] = useState(null);   // { from } while the Forward point sheet is open
     const [stakeoutOpen, setStakeoutOpen] = useState(null); // { oc } while the Stakeout sheet is open
+    const [isectOpen, setIsectOpen]     = useState(null);   // { a, b } while the Intersection sheet is open
+    const [angleOpen, setAngleOpen]     = useState(false);  // Angle calculator sheet
     const [descCodes, setDescCodes]     = useState(loadDescCodes);
     const [codesOpen, setCodesOpen]     = useState(false);
     const [srcFilter, setSrcFilter]     = useState('all');  // points pages: 'all' | a fbGeo.SOURCES key
@@ -12253,6 +12695,13 @@
                     const b = getSelectionBounds();
                     setStakeoutOpen({ oc: b ? String(rows[b.minR]?.cells?.col_ptnum ?? '').trim() : '' });
                   }}>Stakeout…</button>
+                  <button data-menu-intersection onClick={() => {
+                    setOpenTbMenu(null);
+                    const b = getSelectionBounds();
+                    const pt = i => String(rows[i]?.cells?.col_ptnum ?? '').trim();
+                    setIsectOpen(b ? { a: pt(b.minR), b: b.maxR !== b.minR ? pt(b.maxR) : '' } : { a: '', b: '' });
+                  }}>Intersection…</button>
+                  <button data-menu-angles onClick={() => { setOpenTbMenu(null); setAngleOpen(true); }}>Angles…</button>
                   <div className="dp-drop-sep" />
                   <div className="dp-drop-section">Show points</div>
                   <button onClick={() => { setSrcFilter('all'); setOpenTbMenu(null); }}>
@@ -12877,18 +13326,31 @@
         {stakeoutOpen && (
           <StakeoutSheet rows={rows} initialOc={stakeoutOpen.oc} onClose={() => setStakeoutOpen(null)} />
         )}
+        {isectOpen && (
+          <IntersectionSheet rows={rows} projectId={projectId} initialA={isectOpen.a} initialB={isectOpen.b}
+            suggestNum={nextPointNum(rows)} onClose={() => setIsectOpen(null)}
+            onAdd={pt => {
+              const cells = {};
+              columns.forEach(c => { cells[c.id] = ''; });
+              Object.assign(cells, { col_ptnum: pt.number, col_north: pt.n, col_east: pt.e, col_desc: pt.desc });
+              persistRows([...rows, { id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7), cells }]);
+              setIsectOpen(null);
+              toast.success(`Point ${pt.number} added`);
+            }} />
+        )}
         {forwardOpen && (
           <ForwardPointSheet rows={rows} projectId={projectId} initialFrom={forwardOpen.from}
             suggestNum={nextPointNum(rows)} onClose={() => setForwardOpen(null)}
             onAdd={pt => {
               const cells = {};
               columns.forEach(c => { cells[c.id] = ''; });
-              Object.assign(cells, { col_ptnum: pt.number, col_north: pt.n, col_east: pt.e, col_desc: pt.desc });
+              Object.assign(cells, { col_ptnum: pt.number, col_north: pt.n, col_east: pt.e, col_elev: pt.z || '', col_desc: pt.desc });
               persistRows([...rows, { id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7), cells }]);
               setForwardOpen(null);
               toast.success(`Point ${pt.number} added`);
             }} />
         )}
+        {angleOpen && <AngleSheet onClose={() => setAngleOpen(false)} />}
         {codesOpen && (
           <DescCodesSheet codes={descCodes} onClose={() => setCodesOpen(false)}
             onSave={codes => { saveDescCodes(codes); setDescCodes(codes); setCodesOpen(false); toast.success('Codes saved'); }} />
