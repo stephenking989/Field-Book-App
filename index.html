@@ -696,7 +696,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.192';
+  const APP_VERSION = '1.193';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -11897,7 +11897,15 @@
     function duplicateRow(rowIdx) {
       const src = rows[rowIdx];
       if (!src) return;
-      const newRow = { id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2), cells: { ...src.cells } };
+      // Spread the row so fields this page doesn't know about (geo, note, …)
+      // ride along. A copy of a photo / voice / notes-pin point is NOT that
+      // record's point: it loses the link, the same way removeMediaPoint
+      // demotes a point — or deleting the copy would orphan the original.
+      const newRow = { ...src, id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2), cells: { ...src.cells } };
+      if (src.geo && (src.geo.mediaId || src.geo.mediaPageId || src.geo.notePageId)) {
+        const { mediaId: _m, mediaPageId: _p, notePageId: _n, ...geo } = src.geo;
+        newRow.geo = { ...geo, source: 'gps' };
+      }
       const next = [...rows];
       next.splice(rowIdx + 1, 0, newRow);
       persistRows(next);
