@@ -562,7 +562,8 @@
   }
 
   // KML (lat/lon), one folder per source category. Returns { text, count, skipped }.
-  function toKML(points, project) {
+  // opts.linework (optional, Map page): figures / code lines → a "Linework" folder.
+  function toKML(points, project, opts) {
     const crs = projectCrs(project);
     const extras = rowExtras(project);
     const pts = points.filter(p => p.lat !== null && p.lon !== null);
@@ -578,12 +579,22 @@
       }).join('\n');
       return `    <Folder><name>${xmlEsc(SOURCES[src].label)}</name>\n${marks}\n    </Folder>`;
     }).filter(Boolean).join('\n');
+    const lines = lineworkCoords(opts && opts.linework);
+    const ll = c => `${c.lon.toFixed(8)},${c.lat.toFixed(8)}`;
+    const lineFolder = !lines.length ? '' : '\n    <Folder><name>Linework</name>\n' + lines.map(l => {
+      const ring = l.closed && l.coords.length >= 3;
+      const body = ring
+        ? `<Polygon><outerBoundaryIs><LinearRing><coordinates>${l.coords.concat([l.coords[0]]).map(ll).join(' ')}</coordinates></LinearRing></outerBoundaryIs></Polygon>`
+        : `<LineString><tessellate>1</tessellate><coordinates>${l.coords.map(ll).join(' ')}</coordinates></LineString>`;
+      const what = `${figureLayer(l.layer).label}${ring ? ' · closed' : ''}${l.source === 'code' ? ' · from codes' : ''}`;
+      return `      <Placemark><name>${xmlEsc(l.name)}</name><description>${xmlEsc(what)}</description>${body}</Placemark>`;
+    }).join('\n') + '\n    </Folder>';
     const text = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
     <name>${xmlEsc((project.name || 'FieldBook') + ' — points')}</name>
     <description>${xmlEsc(`Exported from FieldBook. Grid: ${crs.label}. Positions are NAD83(CSRS) lat/lon, used as WGS84.`)}</description>
-${folders}
+${folders}${lineFolder}
   </Document>
 </kml>
 `;
@@ -591,8 +602,9 @@ ${folders}
   }
 
   // GPX 1.1 waypoints — OsmAnd's native format. <type> carries the source
-  // category, which OsmAnd uses to group the waypoints.
-  function toGPX(points, project) {
+  // category, which OsmAnd uses to group the waypoints. opts.linework
+  // (optional) adds one track per line; a closed figure repeats its first point.
+  function toGPX(points, project, opts) {
     const crs = projectCrs(project);
     const extras = rowExtras(project);
     const pts = points.filter(p => p.lat !== null && p.lon !== null);
@@ -603,6 +615,12 @@ ${folders}
              `<name>${xmlEsc(pointName(p))}</name><desc>${xmlEsc(describe(p, crs, extras[p.id] && extras[p.id].note).join(' | '))}</desc>` +
              `<type>${xmlEsc(SOURCES[p.source] ? SOURCES[p.source].label : p.source)}</type></wpt>`;
     }).join('\n');
+    const trks = lineworkCoords(opts && opts.linework).map(l => {
+      const cs = l.closed && l.coords.length >= 3 ? l.coords.concat([l.coords[0]]) : l.coords;
+      return `  <trk><name>${xmlEsc(l.name)}</name><type>${xmlEsc(figureLayer(l.layer).label)}</type><trkseg>` +
+        cs.map(c => `<trkpt lat="${c.lat.toFixed(8)}" lon="${c.lon.toFixed(8)}">${fin(c.Z) ? `<ele>${c.Z.toFixed(1)}</ele>` : ''}</trkpt>`).join('') +
+        `</trkseg></trk>`;
+    }).join('\n');
     const text = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="FieldBook" xmlns="http://www.topografix.com/GPX/1/1">
   <metadata>
@@ -610,7 +628,7 @@ ${folders}
     <desc>${xmlEsc(`Grid: ${crs.label}. Positions are NAD83(CSRS) lat/lon, used as WGS84.`)}</desc>
     <time>${new Date().toISOString()}</time>
   </metadata>
-${wpts}
+${wpts}${trks ? '\n' + trks : ''}
 </gpx>
 `;
     return { text, count: pts.length, skipped: points.length - pts.length };
@@ -779,6 +797,96 @@ ${wpts}
   }
   function fmtArea(m2) {
     return { m2: fmtThin(m2, 1) + ' m²', ha: (m2 / 10000).toFixed(4) + ' ha' };
+  }
+
+  // ─── Linework (Map page) ───────────────────────────────────────────────────
+  // project.figures = [{ id, name, kind: 'line' | 'polygon', layer, pts: [{ id, num }], createdAt }]
+  // A vertex is a Points row, kept as row id + point number: row ids are
+  // regenerated when a project is imported or duplicated, so a vertex is found
+  // by id first and by number after (the same fallback as refreshPins).
+  const FIGURE_LAYERS = [
+    { id: 'lot',      label: 'Lot' },
+    { id: 'building', label: 'Building' },
+    { id: 'fence',    label: 'Fence' },
+    { id: 'water',    label: 'Water' },
+    { id: 'road',     label: 'Road' },
+    { id: 'other',    label: 'Other' },
+  ];
+  const figureLayer = id => FIGURE_LAYERS.find(l => l.id === id) || FIGURE_LAYERS[FIGURE_LAYERS.length - 1];
+
+  function getFigures(project) {
+    return Array.isArray(project && project.figures)
+      ? project.figures.filter(f => f && f.id && Array.isArray(f.pts)) : [];
+  }
+  // Points rows with N/E, by id and by number (first row wins a number).
+  function vertexLookup(project) {
+    const byId = {}, byNum = {};
+    rowPoints(project).forEach(p => {
+      byId[p.id] = p;
+      if (p.number && !byNum[p.number]) byNum[p.number] = p;
+    });
+    return { byId, byNum };
+  }
+  // A figure's live vertices. Vertices whose point is gone (or has no N/E)
+  // are listed in `missing` — the figure keeps the rest, never dropped.
+  function resolveFigure(fig, lookup) {
+    const verts = [], missing = [];
+    (fig.pts || []).forEach(v => {
+      const num = String(v.num ?? '').trim();
+      const p = lookup.byId[v.id] || (num ? lookup.byNum[num] : null);
+      if (p && p.N !== null && p.E !== null) verts.push(p);
+      else missing.push(num || '?');
+    });
+    const closed = fig.kind === 'polygon';
+    return {
+      verts, missing, closed,
+      length: pathLength(verts, closed),
+      area: closed && verts.length >= 3 ? shoelaceArea(verts) : null,
+    };
+  }
+  // "Lot 1", "Lot 2"… — the next free number for that layer.
+  function nextFigureName(project, layer) {
+    const label = figureLayer(layer).label;
+    const used = new Set(getFigures(project).map(f => String(f.name || '').trim().toLowerCase()));
+    let n = 1;
+    while (used.has(`${label} ${n}`.toLowerCase())) n++;
+    return `${label} ${n}`;
+  }
+  // Where a polygon's name and area go: its area centroid (falls back to the
+  // vertex mean for a degenerate ring). In { N, E }.
+  function figureLabelPoint(verts) {
+    let a = 0, cn = 0, ce = 0;
+    for (let i = 0; i < verts.length; i++) {
+      const p = verts[i], q = verts[(i + 1) % verts.length];
+      const k = p.E * q.N - q.E * p.N;
+      a += k; ce += (p.E + q.E) * k; cn += (p.N + q.N) * k;
+    }
+    if (Math.abs(a) < 1e-9) {
+      return { N: verts.reduce((s, v) => s + v.N, 0) / verts.length, E: verts.reduce((s, v) => s + v.E, 0) / verts.length };
+    }
+    return { N: cn / (3 * a), E: ce / (3 * a) };
+  }
+  // Row ids changed (project duplicate / import): point the vertices at the new ids.
+  function remapFigureRows(figures, idMap) {
+    if (!Array.isArray(figures)) return figures;
+    return figures.map(f => (f && Array.isArray(f.pts))
+      ? { ...f, pts: f.pts.map(v => (v && idMap[v.id]) ? { ...v, id: idMap[v.id] } : v) } : f);
+  }
+  // Every drawable line for export: figures (and, from the Map page, code
+  // lines) as { name, layer, closed, source, coords: [{ lat, lon, Z }] }.
+  // Vertices without a map position are skipped; fewer than two → left out.
+  function figureLinework(project) {
+    const lookup = vertexLookup(project);
+    return getFigures(project).map(f => {
+      const r = resolveFigure(f, lookup);
+      return { name: f.name || figureLayer(f.layer).label, layer: f.layer, closed: r.closed, source: 'figure', verts: r.verts };
+    });
+  }
+  function lineworkCoords(lines) {
+    return (lines || []).map(l => ({
+      ...l,
+      coords: (l.verts || []).filter(v => fin(v.lat) && fin(v.lon)).map(v => ({ lat: v.lat, lon: v.lon, Z: v.Z })),
+    })).filter(l => l.coords.length >= 2);
   }
 
   // Grid-line spacing for the map's grid ticks: the smallest of 10/50/100/
@@ -952,6 +1060,8 @@ ${wpts}
     DEFAULT_SYMBOL_CODES, SYMBOL_CODE_KINDS, parseCodeList, symbolCodes, pointCode, pointSymbol,
     mediaForPoint, convertGrid, gridInverse, fmtAzimuth, fmtQuadrant, fmtThin,
     shoelaceArea, pathLength, fmtArea, GRID_STEPS, gridStep,
+    FIGURE_LAYERS, figureLayer, getFigures, vertexLookup, resolveFigure, nextFigureName, figureLabelPoint,
+    remapFigureRows, figureLinework, lineworkCoords,
     GPS_GRID_DECIMALS, GPS_ELEV_DECIMALS,
     geoSelfTest, mapSelfTest, mapChecks,
   };

@@ -716,7 +716,7 @@
       background-image: repeating-linear-gradient(transparent 0 23px, rgb(var(--fb-rule-tan-rgb) / 0.45) 23px 24px);
       background-position: 0 4px; resize: none; min-height: 56px;
     }
-    .fb-map-sym, .fb-map-me, .fb-map-sel, .fb-map-label, .fb-map-tick { background: none; border: none; }
+    .fb-map-sym, .fb-map-me, .fb-map-sel, .fb-map-label, .fb-map-tick, .fb-map-figlabel { background: none; border: none; }
     .fb-map-sym svg, .fb-map-me svg { display: block; overflow: visible; }
     .fb-map-sel span {
       display: block; width: 36px; height: 36px; border-radius: 50%;
@@ -727,6 +727,14 @@
       text-shadow: 0 0 2px var(--fb-page), 0 0 2px var(--fb-page), 0 0 3px var(--fb-page), 0 0 4px var(--fb-page);
     }
     .fb-map-tick span { font-size: 10px; color: var(--fb-info); }
+    .fb-map-figlabel span {
+      display: inline-flex; flex-direction: column; align-items: center; transform: translate(-50%, -50%);
+      white-space: nowrap; text-align: center; line-height: 1.15;
+      text-shadow: 0 0 2px var(--fb-page), 0 0 2px var(--fb-page), 0 0 3px var(--fb-page), 0 0 4px var(--fb-page);
+    }
+    .fb-map-figlabel b { font-family: var(--fb-font-print); font-weight: 500; font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fb-heading); }
+    .fb-map-figlabel i { font-style: normal; font-family: var(--fb-font-mono); font-size: 11px; color: var(--fb-ink); }
+    .fb-map-figlabel small { font-family: var(--fb-font-mono); font-size: 9px; color: var(--fb-ink-muted); }
     .fb-map-page .leaflet-container { font-family: var(--fb-font-ui); background: var(--fb-page); }
     /* The bottom panel's rounded top overlaps the map by 18 px — keep the
        attribution (always visible, OSM licence) clear of it. */
@@ -793,7 +801,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.194';
+  const APP_VERSION = '1.195';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1460,14 +1468,16 @@
       delete newProj.archived;
       delete newProj.archivedAt;
       delete newProj.lock;
-      const pageIds = {};
+      const pageIds = {}, rowIds = {};
       newProj.pages = newProj.pages.map(pg => ({
         ...pg,
         id: (pageIds[pg.id] = uid()),
-        rows:   (pg.rows   || []).map(r => ({ ...r, id: uid() })),
+        rows:   (pg.rows   || []).map(r => ({ ...r, id: (rowIds[r.id] = uid()) })),
         shapes: (pg.shapes || []).map(s => ({ ...s, id: uid() })),
       }));
       remapPageLinks(newProj.pages, pageIds);
+      // Map figures name their vertices by row id — follow the new ids.
+      if (newProj.figures) newProj.figures = window.fbGeo.remapFigureRows(newProj.figures, rowIds);
       _saveProjectRaw(newProj);
       return newProj;
     },
@@ -2620,7 +2630,7 @@
     // Generate fresh IDs so the imported project doesn't collide with existing ones
     let n = Date.now();
     const uid = () => String(++n);
-    const pageIds = {};
+    const pageIds = {}, rowIds = {};
     const newProject = {
       ...srcProject,
       id:            uid(),
@@ -2629,10 +2639,12 @@
       pages: (srcProject.pages || []).map(pg => ({
         ...pg,
         id:   (pageIds[pg.id] = uid()),
-        rows: (pg.rows || []).map(r => ({ ...r, id: uid() })),
+        rows: (pg.rows || []).map(r => ({ ...r, id: (rowIds[r.id] = uid()) })),
       })),
     };
     remapPageLinks(newProject.pages, pageIds);
+    // Map figures name their vertices by row id — follow the new ids.
+    if (newProject.figures) newProject.figures = window.fbGeo.remapFigureRows(newProject.figures, rowIds);
 
     // Move any inline photo dataUrls into photoDB so the project lives under
     // the new photoRef scheme after import.
@@ -7012,6 +7024,129 @@
     }
   }
 
+  // ── Linework ───────────────────────────────────────────────────────────────
+  // Layer styles (colours from brand.js). Fill only for closed figures, and
+  // only on the layers that have one.
+  function mapLineStyle(layer, closed) {
+    const st = {
+      lot:      { color: FBC.coverEdge, weight: 2.2, dashArray: '9 5', fillColor: FBC.accent,   fillOpacity: 0.08 },
+      building: { color: FBC.inkMuted,  weight: 2,                     fillColor: FBC.inkMuted, fillOpacity: 0.12 },
+      fence:    { color: FBC.ink,       weight: 1.6, dashArray: '9 3 2 3' },
+      water:    { color: FBC.info,      weight: 2.2,                   fillColor: FBC.info,     fillOpacity: 0.1 },
+      road:     { color: FBC.ruleTan,   weight: 3 },
+      other:    { color: FBC.ink,       weight: 1.6 },
+    }[layer] || { color: FBC.ink, weight: 1.6 };
+    return { ...st, fill: !!(closed && st.fillColor), opacity: 1 };
+  }
+
+  function MapFigureNameSheet({ defaultName, onSave, onClose }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const [name, setName] = useState(defaultName);
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 28 }}>
+          <div tabIndex={0} className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4 outline-none" />
+          <h2 className="text-xl font-bold text-fb-ink mb-3">Name this figure</h2>
+          <input type="text" value={name} onChange={e => setName(e.target.value)} aria-label="Figure name"
+            className="w-full px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent mb-4" />
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Back</button>
+            <button type="button" disabled={!name.trim()} onClick={() => onSave(name.trim())}
+              className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">Save figure</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // A manual figure (editable) or a code line (read-only, can become a figure).
+  function MapFigureSheet({ line, locked, onClose, onRename, onLayer, onReverse, onDelete, onConvert }) {
+    const isCode = line.source === 'code';
+    const [editName, setEditName] = useState(null);
+    const [confirmDel, setConfirmDel] = useState(false);
+    const r = line.r;
+    const nums = (isCode ? line.r.verts.map(v => v.number) : line.fig.pts.map(v => String(v.num ?? '')));
+    const area = r.area !== null ? fbGeo.fmtArea(r.area) : null;
+    const canEdit = !isCode && !locked;
+    return (
+      <MapDockSheet label={`Figure ${line.name}`} onClose={onClose} maxH="60%">
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <span className="font-heading text-[11px] tracking-[0.12em] uppercase px-2 py-0.5 rounded-md bg-fb-accent-pale text-fb-cover-deep">
+            {fbGeo.figureLayer(line.layer).label} · {line.closed ? 'closed' : 'line'}{isCode ? ' · from codes' : ''}
+          </span>
+          <button type="button" aria-label="Close figure" onClick={onClose} className="w-11 h-11 -mr-2 flex items-center justify-center text-fb-ink-muted active:bg-fb-page-deep rounded-xl"><Ico.Close /></button>
+        </div>
+        {editName === null ? (
+          <div className="flex items-center gap-3 mb-2">
+            <span className="font-heading text-[26px] tracking-wide text-fb-heading flex-1 min-w-0 truncate">{line.name}</span>
+            {canEdit && (
+              <button type="button" aria-label="Rename figure" onClick={() => setEditName(line.name)}
+                className="w-11 h-11 rounded-[10px] border border-fb-border bg-fb-page-alt flex items-center justify-center text-fb-ink active:bg-fb-page-deep"><Ico.Edit /></button>
+            )}
+          </div>
+        ) : (
+          <div className="flex gap-2 mb-2">
+            <input type="text" value={editName} onChange={e => setEditName(e.target.value)} aria-label="Figure name" autoFocus
+              className="flex-1 min-w-0 px-3 py-2.5 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
+            <button type="button" disabled={!editName.trim()} onClick={() => { onRename(editName.trim()); setEditName(null); }}
+              className="px-4 rounded-xl text-sm font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">Save</button>
+          </div>
+        )}
+
+        {r.missing.length > 0 && (
+          <Notice className="mb-3">Point{r.missing.length === 1 ? '' : 's'} {r.missing.join(', ')} no longer on the Points page — left out of this figure.</Notice>
+        )}
+
+        <div className="rounded-xl px-3.5 py-2.5 mb-3 bg-fb-field border border-fb-border">
+          <div className="flex items-baseline justify-between gap-3 py-0.5">
+            <span className={MAP_LBL}>{line.closed ? 'Perimeter' : 'Length'}</span>
+            <span className="font-data text-base text-fb-ink">{r.length.toFixed(3)} m <span className="text-xs text-fb-ink-muted">grid</span></span>
+          </div>
+          {area && (
+            <div className="flex items-baseline justify-between gap-3 py-0.5">
+              <span className={MAP_LBL}>Grid area</span>
+              <span className="font-data text-base text-fb-ink text-right">{area.m2}<br />{area.ha}</span>
+            </div>
+          )}
+          <p className="font-data text-xs text-fb-ink-muted mt-1 break-words">
+            {nums.join(' → ')}{line.closed && nums.length > 2 ? ` → ${nums[0]}` : ''}
+          </p>
+        </div>
+
+        {!isCode && (
+          <div className="mb-3">
+            <p className={MAP_LBL + ' mb-1.5'}>Layer</p>
+            <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+              {fbGeo.FIGURE_LAYERS.map(l => (
+                <button key={l.id} type="button" disabled={!canEdit} aria-pressed={line.layer === l.id} onClick={() => onLayer(l.id)}
+                  className={`h-9 px-3 rounded-lg text-sm font-semibold border inline-flex items-center flex-shrink-0 whitespace-nowrap disabled:opacity-60 ${line.layer === l.id
+                    ? 'bg-fb-cover border-fb-cover text-white' : 'bg-fb-page-alt border-fb-border text-fb-heading'}`}>{l.label}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {isCode ? (
+          <button type="button" disabled={locked} onClick={onConvert}
+            className="w-full min-h-[52px] rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">Convert to figure</button>
+        ) : confirmDel ? (
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setConfirmDel(false)} className="flex-1 py-3 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Keep it</button>
+            <button type="button" onClick={onDelete} className="flex-1 py-3 rounded-xl text-sm font-semibold text-white bg-fb-error active:opacity-80">Delete {line.name}</button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <button type="button" disabled={!canEdit} onClick={onReverse}
+              className="flex-1 min-h-[48px] rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-50">Reverse</button>
+            <button type="button" disabled={!canEdit} onClick={() => setConfirmDel(true)}
+              className="flex-1 min-h-[48px] rounded-xl text-sm font-semibold text-fb-error bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-50">Delete</button>
+          </div>
+        )}
+      </MapDockSheet>
+    );
+  }
+
   // ── The page ───────────────────────────────────────────────────────────────
   function MapView({ projectId }) {
     const toast = useToast();
@@ -7047,8 +7182,10 @@
     }, [project, local]);
 
     const [selId, setSelId]       = useState(null);
-    const [sheet, setSheet]       = useState(null);    // 'detail' | 'layers' | 'find' | 'gps' | 'pin' | 'export' | 'inverse'
-    const [mode, setMode]         = useState(null);    // null | 'pin' | 'inverse'
+    const [sheet, setSheet]       = useState(null);    // 'detail' | 'layers' | 'find' | 'gps' | 'pin' | 'export' | 'inverse' | 'figure' | 'figname'
+    const [mode, setMode]         = useState(null);    // null | 'pin' | 'inverse' | 'figure'
+    const [draft, setDraft]       = useState(null);    // figure being drawn: { kind, layer, pts: [{ id, num }] }
+    const [lineKey, setLineKey]   = useState(null);    // the figure / code line whose sheet is open
     const [navId, setNavId]       = useState(null);
     const [inv, setInv]           = useState(null);    // { a, b } point entries
     const [follow, setFollow]     = useState(false);
@@ -7057,6 +7194,29 @@
     const [view, setView]         = useState(0);       // bumped on every map move
     const sel = selId ? feats.byId[selId] : null;
     const navTarget = navId ? feats.byId[navId] : null;
+
+    // Linework with its map positions: manual figures.
+    const lines = React.useMemo(() => {
+      if (!project) return [];
+      const lookup = fbGeo.vertexLookup(project);
+      const toLL = v => (local ? [v.N, v.E] : (v.lat !== null ? [v.lat, v.lon] : null));
+      const labelAt = verts => {
+        const c = fbGeo.figureLabelPoint(verts);
+        if (local) return [c.N, c.E];
+        const ll = fbGeo.toLatLon(c.N, c.E, crsId);
+        return ll ? [ll.lat, ll.lon] : null;
+      };
+      return fbGeo.getFigures(project).map(f => {
+        const r = fbGeo.resolveFigure(f, lookup);
+        return {
+          key: 'fig:' + f.id, fig: f, source: 'figure', name: f.name || fbGeo.figureLayer(f.layer).label,
+          layer: f.layer, closed: r.closed, r, lls: r.verts.map(toLL).filter(Boolean),
+          labelLL: r.closed && r.verts.length >= 3 ? labelAt(r.verts) : null,
+        };
+      });
+    }, [project, local, crsId]);
+    const openLine = lineKey ? lines.find(l => l.key === lineKey) : null;
+    const exportLines = lines.map(l => ({ name: l.name, layer: l.layer, closed: l.closed, source: l.source, verts: l.r.verts }));
 
     // ── Leaflet ──
     const wrapRef = useRef(null), elRef = useRef(null), scaleBoxRef = useRef(null);
@@ -7121,7 +7281,9 @@
       const ro = new ResizeObserver(() => map.invalidateSize());
       ro.observe(elRef.current);
       setView(v => v + 1);
-      return () => { ro.disconnect(); map.remove(); mapRef.current = null; layersRef.current = {}; };
+      // For browser-tests/part11-map.js: canvas dots have no DOM element to tap.
+      window._fbMapTest = { map, tap: id => hRef.current.pointTap && hRef.current.pointTap(id), line: key => hRef.current.lineTap && hRef.current.lineTap(key) };
+      return () => { ro.disconnect(); map.remove(); mapRef.current = null; layersRef.current = {}; delete window._fbMapTest; };
     }, [L, !!project, local]);
 
     // Base map
@@ -7135,13 +7297,30 @@
       return () => { if (layer) map.removeLayer(layer); };
     }, [base, local, !!mapRef.current]);
 
-    // Points and stations
+    // Linework, then points and stations. They share one canvas and the last
+    // drawn wins a tap, so lines are always redrawn first — a point on a lot
+    // line is still the point.
     useEffect(() => {
       const map = mapRef.current, lay = layersRef.current;
       if (!map || !lay.pts) return;
+      lay.lines.clearLayers();
       lay.pts.clearLayers();
       const PT = FB_BRAND.PAGE_TYPES;
       const tap = id => e => { L.DomEvent.stopPropagation(e); hRef.current.pointTap && hRef.current.pointTap(id); };
+      const lineTap = key => e => { L.DomEvent.stopPropagation(e); hRef.current.lineTap && hRef.current.lineTap(key); };
+      lines.forEach(l => {
+        if (!prefs.lines || l.lls.length < 2) return;
+        const style = { ...mapLineStyle(l.layer, l.closed), renderer: lay.renderer };
+        (l.closed && l.lls.length >= 3 ? L.polygon(l.lls, style) : L.polyline(l.lls, style)).on('click', lineTap(l.key)).addTo(lay.lines);
+        if (l.labelLL) {
+          const a = fbGeo.fmtArea(l.r.area);
+          const el = document.createElement('span');
+          el.innerHTML = '<b></b><i></i><small>grid area</small>';
+          el.querySelector('b').textContent = l.name;
+          el.querySelector('i').textContent = `${a.m2} · ${a.ha}`;
+          L.marker(l.labelLL, { icon: L.divIcon({ className: 'fb-map-figlabel', html: el.outerHTML, iconSize: null, iconAnchor: [0, 0] }), interactive: false, keyboard: false }).addTo(lay.lines);
+        }
+      });
       feats.pts.forEach(p => {
         if (!p.ll) return;
         if (MAP_DIV_SYMBOLS.has(p.sym) || p.hasPhoto) {
@@ -7163,7 +7342,7 @@
           keyboard: false, title: s.name, zIndexOffset: 200,
         }).on('click', tap(s.id)).addTo(lay.pts);
       });
-    }, [feats, !!mapRef.current]);
+    }, [feats, lines, prefs.lines, !!mapRef.current]);
 
     // Labels — only close in, and only while there aren't too many to read.
     useEffect(() => {
@@ -7285,10 +7464,21 @@
       if (inv && inv.b && inv.a.ll && inv.b.ll) {
         L.polyline([inv.a.ll, inv.b.ll], { renderer: lay.renderer, color: FBC.ink, weight: 2, dashArray: '6 4', interactive: false }).addTo(lay.sel);
       }
-    }, [sel, inv]);
+      if (openLine && openLine.lls.length >= 2) {
+        const pts = openLine.closed ? openLine.lls.concat([openLine.lls[0]]) : openLine.lls;
+        L.polyline(pts, { renderer: lay.renderer, color: FBC.ink, weight: 7, opacity: 0.22, interactive: false }).addTo(lay.sel);
+      }
+      if (draft && draft.pts.length) {
+        const lls = draft.pts.map(v => feats.byId[v.id] && feats.byId[v.id].ll).filter(Boolean);
+        const style = { ...mapLineStyle(draft.layer, false), renderer: lay.renderer, interactive: false };
+        if (lls.length >= 2) L.polyline(draft.kind === 'polygon' && lls.length >= 3 ? lls.concat([lls[0]]) : lls, style).addTo(lay.sel);
+        lls.forEach((ll, i) => L.circleMarker(ll, { renderer: lay.renderer, radius: i ? 7 : 9, color: FBC.ink, weight: 2, fill: false, interactive: false }).addTo(lay.sel));
+      }
+    }, [sel, inv, openLine, draft, feats]);
 
     // ── Taps ──
     hRef.current.pointTap = id => {
+      if (mode === 'figure') { addVertex(id); return; }
       if (mode === 'inverse') {
         const b = feats.byId[id];
         if (!b || b.N === null || b.N === undefined || b.E === null) { toast.error('That point has no stored N/E'); return; }
@@ -7306,6 +7496,12 @@
     hRef.current.mapClick = () => {
       if (mode || sheet) return;
       setSelId(null);
+    };
+    hRef.current.lineTap = key => {
+      if (mode) return;
+      setSelId(null);
+      setLineKey(key);
+      setSheet('figure');
     };
 
     // Keep the selected point in the strip of map left between the
@@ -7336,7 +7532,7 @@
     }
 
     // ── Readouts ──
-    const dCrs = fbGeo.getCrs(displayId), pCrs = fbGeo.getCrs(crsId);
+    const pCrs = fbGeo.getCrs(crsId);
     const myGrid = fix && !local ? fbGeo.toGrid(fix.lat, fix.lon, displayId) : null;
     const myH = fix && !local ? fbGeo.orthoHeight(fix.alt, fix.lat, fix.lon).H : null;
     const centre = local && mapRef.current ? mapRef.current.getCenter() : null;
@@ -7400,11 +7596,50 @@
       setSelId(row.id);
       toast.success(`Map pin ${number} saved to Points`);
     }
+    // Figures. Saved on the project as written — entries this version can't
+    // read are carried along untouched, never filtered out.
+    function saveFigures(fn) {
+      const fresh = DB.getProject(projectId);
+      if (!fresh) return;
+      DB.updateProject(projectId, { figures: fn(Array.isArray(fresh.figures) ? fresh.figures : []) });
+      reload();
+    }
+    const editFigure = (id, fn) => saveFigures(list => list.map(f => (f && f.id === id ? fn(f) : f)));
+    function startFigure() {
+      if (locked) return;
+      setSheet(null); setSelId(null); setNavId(null);
+      setDraft({ kind: 'line', layer: 'lot', pts: [] });
+      setMode('figure');
+    }
+    function cancelFigure() { setDraft(null); setMode(null); if (sheet === 'figname') setSheet(null); }
+    function addVertex(id) {
+      const p = feats.byId[id];
+      if (!draft) return;
+      if (!p || !p.isRow || p.N === null || p.E === null) { toast('Only Points-page points with N/E can be vertices'); return; }
+      if (draft.pts.length && draft.pts[0].id === id) {
+        if (draft.pts.length >= 3) { setDraft({ ...draft, kind: 'polygon' }); setSheet('figname'); }
+        else toast('A closed figure needs three points');
+        return;
+      }
+      if (draft.pts.some(v => v.id === id)) { toast(`Pt ${p.number} is already in this figure`); return; }
+      setDraft({ ...draft, pts: [...draft.pts, { id, num: p.number }] });
+    }
+    const draftReady = draft && (draft.kind === 'polygon' ? draft.pts.length >= 3 : draft.pts.length >= 2);
+    function finishFigure(name) {
+      const fig = {
+        id: 'fig_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        name, kind: draft.kind, layer: draft.layer, pts: draft.pts, createdAt: new Date().toISOString(),
+      };
+      saveFigures(list => [...list, fig]);
+      setDraft(null); setMode(null); setSheet(null);
+      toast.success(`${name} saved`);
+    }
+
     function openExport(fmt) { setExportFmt(fmt); setSheet('export'); }
     async function openIn() {
       const ids = visibleIds();
       const chosen = fbGeo.getProjectPoints(project).filter(p => ids.has(p.id));
-      const out = fbGeo.toGPX(chosen, project);
+      const out = fbGeo.toGPX(chosen, project, { linework: exportLines });
       if (!out.count) { toast.error('No points in view to send'); return; }
       const name = (project.name || 'project').replace(/[^a-z0-9_\-]+/gi, '_').replace(/^_+|_+$/g, '') || 'project';
       try {
@@ -7418,7 +7653,7 @@
       navigate(`#/project/${projectId}/page/${p.pageId}`);
     }
 
-    const pinMode = mode === 'pin', invMode = mode === 'inverse';
+    const pinMode = mode === 'pin', invMode = mode === 'inverse', figMode = mode === 'figure' && !!draft;
     const banner = invMode ? `Tap a point to inverse from Pt ${inv?.a?.number}` : null;
 
     return (
@@ -7516,10 +7751,8 @@
             <div className="fb-map-crosshair" aria-hidden="true"><Ico.Pin size={44} /></div>
           )}
 
-          {/* Bottom left: scale + zone */}
-          <div ref={scaleBoxRef} className="fb-map-scale fb-map-float rounded-lg px-2.5 py-1.5">
-            <span className="block font-data text-[11px] text-fb-ink-muted">{local ? 'Local grid' : dCrs.label.replace('NAD83(CSRS) / ', '')}</span>
-          </div>
+          {/* Bottom left: scale bar only — the grid in use is in the top bar. */}
+          <div ref={scaleBoxRef} className="fb-map-scale fb-map-float rounded-lg px-2 pt-1 pb-0.5" />
           {/* Bottom right: me */}
           {!local && (
             <button type="button" aria-label={follow ? 'Following my position — double-tap to stop' : 'Centre on my position (double-tap to follow)'} aria-pressed={follow}
@@ -7533,7 +7766,29 @@
 
         {/* Bottom panel */}
         <section aria-label="Map actions" className="fb-map-bottom flex-shrink-0">
-          {banner ? (
+          {figMode ? (
+            <div className="mb-2.5" data-map-figure-bar>
+              <div className="flex items-center gap-2 mb-2">
+                <div role="group" aria-label="Figure type" className="flex gap-1 p-1 rounded-xl bg-fb-page-alt">
+                  {[['line', 'Line'], ['polygon', 'Closed']].map(([k, l]) => (
+                    <button key={k} type="button" aria-pressed={draft.kind === k} onClick={() => setDraft({ ...draft, kind: k })}
+                      className={`h-9 px-3 rounded-lg text-sm font-semibold ${draft.kind === k ? 'bg-fb-page text-fb-heading shadow-sm' : 'text-fb-ink-muted'}`}>{l}</button>
+                  ))}
+                </div>
+                <span className="flex-1 text-right font-data text-sm text-fb-ink-muted">{draft.pts.length} pt{draft.pts.length === 1 ? '' : 's'}</span>
+                <button type="button" disabled={!draft.pts.length} onClick={() => setDraft({ ...draft, pts: draft.pts.slice(0, -1) })}
+                  className="h-9 px-3 rounded-lg text-[13px] font-semibold whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep disabled:opacity-50">Undo last</button>
+              </div>
+              <div role="group" aria-label="Layer" className="flex gap-1.5 overflow-x-auto pb-0.5">
+                {fbGeo.FIGURE_LAYERS.map(l => (
+                  <button key={l.id} type="button" aria-pressed={draft.layer === l.id} onClick={() => setDraft({ ...draft, layer: l.id })}
+                    className={`h-9 px-3 rounded-lg text-sm font-semibold border inline-flex items-center flex-shrink-0 whitespace-nowrap ${draft.layer === l.id
+                      ? 'bg-fb-cover border-fb-cover text-white' : 'bg-fb-page-alt border-fb-border text-fb-heading'}`}>{l.label}</button>
+                ))}
+              </div>
+              <p className="text-xs text-fb-ink-muted mt-1.5">Tap points in order{draft.kind === 'polygon' ? ' — tap the first again to close' : ''}.</p>
+            </div>
+          ) : banner ? (
             <div className="flex items-center gap-2 min-h-[44px] mb-2.5">
               <span className="flex-1 text-sm font-semibold text-fb-ink">{banner}</span>
               <button type="button" onClick={() => { setMode(null); setInv(null); }} className="py-2.5 px-4 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Cancel</button>
@@ -7566,7 +7821,13 @@
             </div>
           )}
           <div className="flex gap-2">
-            {pinMode ? (
+            {figMode ? (
+              <>
+                <button type="button" onClick={cancelFigure} className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Cancel</button>
+                <button type="button" disabled={!draftReady} onClick={() => setSheet('figname')}
+                  className="flex-1 min-h-[52px] rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">Finish</button>
+              </>
+            ) : pinMode ? (
               <button type="button" onClick={placePin}
                 className="flex-1 min-h-[52px] rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 inline-flex items-center justify-center gap-2">
                 <Ico.Pin size={18} /> Place here
@@ -7578,8 +7839,12 @@
                   <Ico.ZoomIn /> Store GPS point
                 </button>
                 <button type="button" disabled={locked || !!mode} onClick={startPin}
-                  className="min-h-[52px] px-4 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-50">
-                  Drop pin
+                  className="min-h-[52px] w-[74px] rounded-xl text-[12px] font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-50 flex flex-col items-center justify-center gap-0.5">
+                  <Ico.Pin size={18} /> Drop pin
+                </button>
+                <button type="button" disabled={locked || !!mode} onClick={startFigure}
+                  className="min-h-[52px] w-[74px] rounded-xl text-[12px] font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-50 flex flex-col items-center justify-center gap-0.5">
+                  <Ico.Figure /> Figure
                 </button>
               </>
             )}
@@ -7607,10 +7872,11 @@
         {sheet === 'layers' && (
           <MapLayersSheet project={project} projectId={projectId} prefs={prefs} setPrefs={setPrefs} local={local}
             displayId={displayId} visibleCount={visibleIds().size} locked={locked} onSaved={reload}
-            onExport={openExport} onOpenIn={openIn} onClose={() => setSheet(null)} />
+            onExport={openExport} onOpenIn={openIn} onClose={() => setSheet(null)}
+            extraToggles={<MapToggleTile label="Lines & lots" on={prefs.lines} onChange={v => setPrefs({ lines: v })} />} />
         )}
         {sheet === 'export' && (
-          <ExportPointsModal projectId={projectId} initialIds={visibleIds()} initialFormat={exportFmt} onClose={() => setSheet(null)} />
+          <ExportPointsModal projectId={projectId} initialIds={visibleIds()} initialFormat={exportFmt} linework={exportLines} onClose={() => setSheet(null)} />
         )}
         {sheet === 'gps' && (
           <GpsCaptureSheet projectId={projectId}
@@ -7622,6 +7888,17 @@
               if (row) setSelId(row.id);
               toast.success(`GPS point ${pt.number} saved to Points`);
             }} />
+        )}
+        {sheet === 'figname' && draft && (
+          <MapFigureNameSheet defaultName={fbGeo.nextFigureName(project, draft.layer)} onSave={finishFigure} onClose={() => setSheet(null)} />
+        )}
+        {sheet === 'figure' && openLine && (
+          <MapFigureSheet key={openLine.key} line={openLine} locked={locked}
+            onClose={() => { setSheet(null); setLineKey(null); }}
+            onRename={name => editFigure(openLine.fig.id, f => ({ ...f, name }))}
+            onLayer={layer => editFigure(openLine.fig.id, f => ({ ...f, layer }))}
+            onReverse={() => editFigure(openLine.fig.id, f => ({ ...f, pts: f.pts.slice().reverse() }))}
+            onDelete={() => { saveFigures(list => list.filter(f => !(f && f.id === openLine.fig.id))); setSheet(null); setLineKey(null); toast.success(`${openLine.name} deleted`); }} />
         )}
         {sheet === 'pin' && pinAt && (
           <MapPinSheet project={project} where={pinAt} local={local} crsId={crsId} onSave={savePin}
