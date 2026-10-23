@@ -801,7 +801,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.195';
+  const APP_VERSION = '1.196';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -3446,6 +3446,56 @@
             {fbGeo.useZ(project) ? 'ON' : 'OFF'}
           </span>
         </button>
+
+        <LineCodeSettings project={project} projectId={projectId} onReload={onReload} />
+      </div>
+    );
+  }
+
+  // Settings → Linework codes: which description codes draw lines on the map
+  // (FN, BLDG, EP…), on which layer, and whether they close. Stored on the
+  // project only once it is edited; until then the defaults apply.
+  function LineCodeSettings({ project, projectId, onReload }) {
+    const [list, setList] = useState(() => fbGeo.lineCodeTable(project));
+    const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
+    function save(next) {
+      setList(next);
+      const clean = next.map(x => ({ code: String(x.code || '').trim().toUpperCase(), layer: x.layer, closed: !!x.closed })).filter(x => x.code);
+      if (JSON.stringify(clean) === JSON.stringify(fbGeo.lineCodeTable(DB.getProject(projectId)))) return;
+      DB.updateProject(projectId, { lineCodes: clean });
+      onReload();
+    }
+    const edit = (i, patch) => list.map((x, j) => (j === i ? { ...x, ...patch } : x));
+    return (
+      <div data-line-codes>
+        <p className={lbl + ' mt-5'}>Linework Codes</p>
+        <div className="rounded-xl bg-fb-page-alt border border-fb-border px-2.5 py-1.5 mb-1.5">
+          {list.map((x, i) => (
+            <div key={i} className="flex items-center gap-2 py-1">
+              <input type="text" value={x.code} aria-label="Code"
+                onChange={e => setList(edit(i, { code: e.target.value }))} onBlur={() => save(list)}
+                className="w-[78px] rounded-lg px-2 py-2 text-sm font-data uppercase text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
+              <select value={x.layer} aria-label={`Layer for ${x.code || 'code'}`} onChange={e => save(edit(i, { layer: e.target.value }))}
+                className="flex-1 min-w-0 rounded-lg px-2 py-2 text-sm text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent">
+                {fbGeo.FIGURE_LAYERS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+              </select>
+              <button type="button" aria-pressed={x.closed} aria-label={`${x.code || 'Code'} closes`} onClick={() => save(edit(i, { closed: !x.closed }))}
+                className={`h-9 px-2.5 rounded-lg text-xs font-bold flex-shrink-0 ${x.closed ? 'bg-fb-accent text-white' : 'bg-fb-border text-fb-ink'}`}>
+                {x.closed ? 'Closed' : 'Open'}
+              </button>
+              <button type="button" aria-label={`Remove ${x.code || 'code'}`} onClick={() => save(list.filter((_, j) => j !== i))}
+                className="w-9 h-9 flex items-center justify-center rounded-lg text-fb-ink-muted active:bg-fb-page-deep flex-shrink-0"><Ico.Trash /></button>
+            </div>
+          ))}
+          {!list.length && <p className="text-sm text-fb-ink-muted py-2">No codes — the map draws no code lines.</p>}
+        </div>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setList([...list, { code: '', layer: 'other', closed: false }])}
+            className="h-9 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep">Add code</button>
+          <button type="button" onClick={() => save(fbGeo.DEFAULT_LINE_CODES.map(x => ({ ...x })))}
+            className="h-9 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep">Reset to defaults</button>
+        </div>
+        <p className="text-xs text-fb-ink-muted mt-1.5 leading-snug">First word of the description. B begins, E ends, CLO closes.</p>
       </div>
     );
   }
@@ -7195,7 +7245,9 @@
     const sel = selId ? feats.byId[selId] : null;
     const navTarget = navId ? feats.byId[navId] : null;
 
-    // Linework with its map positions: manual figures.
+    // Linework with its map positions: manual figures, then the lines the
+    // description codes draw (computed each time, never stored). A code line
+    // already converted to a figure isn't drawn twice.
     const lines = React.useMemo(() => {
       if (!project) return [];
       const lookup = fbGeo.vertexLookup(project);
@@ -7206,7 +7258,7 @@
         const ll = fbGeo.toLatLon(c.N, c.E, crsId);
         return ll ? [ll.lat, ll.lon] : null;
       };
-      return fbGeo.getFigures(project).map(f => {
+      const figs = fbGeo.getFigures(project).map(f => {
         const r = fbGeo.resolveFigure(f, lookup);
         return {
           key: 'fig:' + f.id, fig: f, source: 'figure', name: f.name || fbGeo.figureLayer(f.layer).label,
@@ -7214,9 +7266,22 @@
           labelLL: r.closed && r.verts.length >= 3 ? labelAt(r.verts) : null,
         };
       });
+      const run = verts => verts.map(v => v.id).join('|');
+      const taken = new Set();
+      figs.forEach(l => { taken.add(run(l.r.verts)); taken.add(run(l.r.verts.slice().reverse())); });
+      const codes = fbGeo.codeLines(project).filter(c => !taken.has(run(c.pts))).map(c => {
+        const area = c.closed ? fbGeo.shoelaceArea(c.pts) : null;
+        return {
+          key: 'code:' + c.name, code: c, source: 'code', name: c.name, layer: c.layer, closed: c.closed,
+          r: { verts: c.pts, missing: [], closed: c.closed, length: fbGeo.pathLength(c.pts, c.closed), area },
+          lls: c.pts.map(toLL).filter(Boolean), labelLL: c.closed ? labelAt(c.pts) : null,
+        };
+      });
+      return [...figs, ...codes];
     }, [project, local, crsId]);
     const openLine = lineKey ? lines.find(l => l.key === lineKey) : null;
-    const exportLines = lines.map(l => ({ name: l.name, layer: l.layer, closed: l.closed, source: l.source, verts: l.r.verts }));
+    const exportLines = lines.filter(l => l.source === 'figure' || prefs.codeLines)
+      .map(l => ({ name: l.name, layer: l.layer, closed: l.closed, source: l.source, verts: l.r.verts }));
 
     // ── Leaflet ──
     const wrapRef = useRef(null), elRef = useRef(null), scaleBoxRef = useRef(null);
@@ -7309,8 +7374,9 @@
       const tap = id => e => { L.DomEvent.stopPropagation(e); hRef.current.pointTap && hRef.current.pointTap(id); };
       const lineTap = key => e => { L.DomEvent.stopPropagation(e); hRef.current.lineTap && hRef.current.lineTap(key); };
       lines.forEach(l => {
-        if (!prefs.lines || l.lls.length < 2) return;
+        if (!(l.source === 'code' ? prefs.codeLines : prefs.lines) || l.lls.length < 2) return;
         const style = { ...mapLineStyle(l.layer, l.closed), renderer: lay.renderer };
+        if (l.source === 'code') style.opacity = 0.8;   // computed lines read a touch lighter
         (l.closed && l.lls.length >= 3 ? L.polygon(l.lls, style) : L.polyline(l.lls, style)).on('click', lineTap(l.key)).addTo(lay.lines);
         if (l.labelLL) {
           const a = fbGeo.fmtArea(l.r.area);
@@ -7342,7 +7408,7 @@
           keyboard: false, title: s.name, zIndexOffset: 200,
         }).on('click', tap(s.id)).addTo(lay.pts);
       });
-    }, [feats, lines, prefs.lines, !!mapRef.current]);
+    }, [feats, lines, prefs.lines, prefs.codeLines, !!mapRef.current]);
 
     // Labels — only close in, and only while there aren't too many to read.
     useEffect(() => {
@@ -7873,7 +7939,10 @@
           <MapLayersSheet project={project} projectId={projectId} prefs={prefs} setPrefs={setPrefs} local={local}
             displayId={displayId} visibleCount={visibleIds().size} locked={locked} onSaved={reload}
             onExport={openExport} onOpenIn={openIn} onClose={() => setSheet(null)}
-            extraToggles={<MapToggleTile label="Lines & lots" on={prefs.lines} onChange={v => setPrefs({ lines: v })} />} />
+            extraToggles={<>
+              <MapToggleTile label="Lines & lots" on={prefs.lines} onChange={v => setPrefs({ lines: v })} />
+              <MapToggleTile label="Code lines" on={prefs.codeLines} onChange={v => setPrefs({ codeLines: v })} />
+            </>} />
         )}
         {sheet === 'export' && (
           <ExportPointsModal projectId={projectId} initialIds={visibleIds()} initialFormat={exportFmt} linework={exportLines} onClose={() => setSheet(null)} />
@@ -7898,7 +7967,18 @@
             onRename={name => editFigure(openLine.fig.id, f => ({ ...f, name }))}
             onLayer={layer => editFigure(openLine.fig.id, f => ({ ...f, layer }))}
             onReverse={() => editFigure(openLine.fig.id, f => ({ ...f, pts: f.pts.slice().reverse() }))}
-            onDelete={() => { saveFigures(list => list.filter(f => !(f && f.id === openLine.fig.id))); setSheet(null); setLineKey(null); toast.success(`${openLine.name} deleted`); }} />
+            onDelete={() => { saveFigures(list => list.filter(f => !(f && f.id === openLine.fig.id))); setSheet(null); setLineKey(null); toast.success(`${openLine.name} deleted`); }}
+            onConvert={() => {
+              const c = openLine.code;
+              const fig = {
+                id: 'fig_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+                name: c.name, kind: c.closed ? 'polygon' : 'line', layer: c.layer,
+                pts: c.pts.map(p => ({ id: p.id, num: p.number })), createdAt: new Date().toISOString(),
+              };
+              saveFigures(list => [...list, fig]);
+              setLineKey('fig:' + fig.id);
+              toast.success(`${c.name} is now a figure`);
+            }} />
         )}
         {sheet === 'pin' && pinAt && (
           <MapPinSheet project={project} where={pinAt} local={local} crsId={crsId} onSave={savePin}

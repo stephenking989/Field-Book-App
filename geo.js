@@ -889,6 +889,68 @@ ${wpts}${trks ? '\n' + trks : ''}
     })).filter(l => l.coords.length >= 2);
   }
 
+  // ─── Code-driven linework (field-to-finish) ────────────────────────────────
+  // project.lineCodes = [{ code, layer, closed }] — edited in Settings.
+  // In a description the FIRST word is the code (acted on only if it's in the
+  // table); a standalone B / E / CLO after it controls the line:
+  //   B   begin a new string here          E  end the string after this point
+  //   CLO close back to the first point and end
+  // Anything else is description ("FN COR", "EP gravel"). Points join in
+  // Points-page row order, across Points pages in page order; each code keeps
+  // its own string, so codes can interleave. Lines are computed, never stored.
+  const DEFAULT_LINE_CODES = [
+    { code: 'FN',   layer: 'fence',    closed: false },
+    { code: 'BLDG', layer: 'building', closed: true },
+    { code: 'EP',   layer: 'road',     closed: false },
+    { code: 'CL',   layer: 'road',     closed: false },
+    { code: 'DTCH', layer: 'water',    closed: false },
+    { code: 'TB',   layer: 'water',    closed: false },
+    { code: 'PL',   layer: 'lot',      closed: false },
+  ];
+  const LINE_CONTROLS = ['B', 'E', 'CLO'];
+  function lineCodeTable(project) {
+    const t = Array.isArray(project && project.lineCodes) ? project.lineCodes : DEFAULT_LINE_CODES;
+    return t.filter(x => x && String(x.code || '').trim())
+      .map(x => ({ code: String(x.code).trim().toUpperCase(), layer: figureLayer(x.layer).id, closed: !!x.closed }));
+  }
+  // points: index entries in collection order (only ones with N/E are used).
+  // Returns [{ code, layer, closed, name, pts: [entry…] }] — strings of two or
+  // more points; a closed string needs three.
+  function parseCodeLines(points, table) {
+    const byCode = {};
+    (table || []).forEach(t => { if (!byCode[t.code]) byCode[t.code] = t; });
+    const open = {}, done = [];
+    const end = code => {
+      const s = open[code];
+      delete open[code];
+      if (s && s.pts.length >= 2) done.push(s);
+    };
+    (points || []).forEach(p => {
+      if (p.N === null || p.N === undefined || p.E === null || p.E === undefined) return;
+      const toks = String(p.desc || '').trim().split(/\s+/).filter(Boolean).map(w => w.toUpperCase());
+      const t = toks.length ? byCode[toks[0]] : null;
+      if (!t) return;
+      const ctl = toks.slice(1).filter(w => LINE_CONTROLS.indexOf(w) !== -1);
+      if (ctl.indexOf('B') !== -1) end(t.code);
+      if (!open[t.code]) open[t.code] = { code: t.code, layer: t.layer, closed: t.closed, pts: [], first: p };
+      open[t.code].pts.push(p);
+      if (ctl.indexOf('CLO') !== -1) { open[t.code].closed = true; end(t.code); }
+      else if (ctl.indexOf('E') !== -1) end(t.code);
+    });
+    Object.keys(open).forEach(end);
+    // Number them per code in the order they start.
+    const order = new Map((points || []).map((p, i) => [p, i]));
+    done.sort((a, b) => order.get(a.first) - order.get(b.first));
+    const count = {};
+    return done.map(s => {
+      count[s.code] = (count[s.code] || 0) + 1;
+      return { code: s.code, layer: s.layer, closed: s.closed && s.pts.length >= 3, name: `${s.code} ${count[s.code]}`, pts: s.pts };
+    });
+  }
+  function codeLines(project) {
+    return parseCodeLines(rowPoints(project), lineCodeTable(project));
+  }
+
   // Grid-line spacing for the map's grid ticks: the smallest of 10/50/100/
   // 500/1000 m that leaves at least `minPx` screen pixels between lines, or
   // null when even 1000 m lines would be too dense.
@@ -1033,6 +1095,19 @@ ${wpts}${trks ? '\n' + trks : ''}
     eq('symbol: ordinary', pointSymbol({ desc: 'GND', source: 'instrument' }, DEFAULT_SYMBOL_CODES), 'topo');
     eq('symbol: Local map pin', pointSymbol({ desc: 'gate', source: 'instrument' }, DEFAULT_SYMBOL_CODES, { mapPin: { ts: 'x' } }), 'map-pin');
     eq('map-pin quality', qualityText({ phone: true, source: 'map-pin', acc: null }), 'placed on map (approx.)');
+
+    // Code-driven linework: "name:pt-pt-pt" per string, * when closed.
+    const T = DEFAULT_LINE_CODES.map(x => ({ ...x }));
+    const run = descs => parseCodeLines(descs.map((d, i) => ({ id: 'r' + (i + 1), number: String(i + 1), N: i, E: i, desc: d })), T)
+      .map(l => `${l.name}:${l.pts.map(p => p.number).join('-')}${l.closed ? '*' : ''}`).join(' ');
+    eq('codes: B begins a new string', run(['FN', 'FN', 'FN B', 'FN']), 'FN 1:1-2 FN 2:3-4');
+    eq('codes: E ends after the point', run(['FN', 'FN E', 'FN', 'FN']), 'FN 1:1-2 FN 2:3-4');
+    eq('codes: CLO closes and ends', run(['FN', 'FN', 'FN CLO', 'FN']), 'FN 1:1-2-3*');
+    eq('codes: interleaved strings', run(['FN', 'EP', 'FN', 'EP', 'FN', 'EP E']), 'FN 1:1-3-5 EP 1:2-4-6');
+    eq('codes: unknown code ignored', run(['XYZ B', 'IP FD', 'XYZ', 'GND']), '');
+    eq('codes: no B starts at first use', run(['GND', 'EP', 'IP FD', 'EP gravel']), 'EP 1:2-4');
+    eq('codes: description words are not controls', run(['FN COR', 'FN Bush', 'fn e']), 'FN 1:1-2-3');
+    eq('codes: a closed code needs three points', run(['BLDG', 'BLDG', 'BLDG E', 'BLDG', 'BLDG', 'BLDG']), 'BLDG 1:1-2-3* BLDG 2:4-5-6*');
     return out;
   }
 
@@ -1062,6 +1137,7 @@ ${wpts}${trks ? '\n' + trks : ''}
     shoelaceArea, pathLength, fmtArea, GRID_STEPS, gridStep,
     FIGURE_LAYERS, figureLayer, getFigures, vertexLookup, resolveFigure, nextFigureName, figureLabelPoint,
     remapFigureRows, figureLinework, lineworkCoords,
+    DEFAULT_LINE_CODES, LINE_CONTROLS, lineCodeTable, parseCodeLines, codeLines,
     GPS_GRID_DECIMALS, GPS_ELEV_DECIMALS,
     geoSelfTest, mapSelfTest, mapChecks,
   };
