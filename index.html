@@ -42,6 +42,7 @@
   <script src="./gnss.js"></script>
   <!-- Sketch print areas: paper ratio, frame and print scale, labels (window.fbPrint) -->
   <script src="./print.js"></script>
+  <script src="./schedule.js"></script>
 
   <style>
     *, *::before, *::after { box-sizing: border-box; }
@@ -463,6 +464,29 @@
     /* ── Notes page body ────────────────────────────────────────────
        Tailwind's reset takes the size off headings and the markers and
        indent off lists, so the note's own formatting is styled here. */
+    /* Schedule (Gantt) — colours from brand tokens only (see ScheduleView) */
+    .sch-row { display: flex; border-bottom: 1px solid var(--fb-border); cursor: pointer; }
+    .sch-row.sch-selected .sch-left { background: var(--fb-accent-pale); }
+    .sch-head { position: sticky; top: 0; z-index: 3; display: flex; background: var(--fb-page-alt); border-bottom: 1px solid var(--fb-border); }
+    .sch-left { position: sticky; left: 0; z-index: 2; flex: none; display: flex; align-items: center; min-width: 0; padding: 0 8px; background: var(--fb-page); border-right: 1px solid var(--fb-border); overflow: hidden; }
+    .sch-head .sch-left { z-index: 4; background: var(--fb-page-alt); }
+    .sch-tl { position: relative; flex: none; }
+    .sch-tk { position: absolute; border-left: 1px solid var(--fb-border); font-family: var(--fb-font-mono); font-size: 10px; line-height: 1.2; color: var(--fb-ink-muted); padding: 2px 3px; white-space: nowrap; overflow: hidden; box-sizing: border-box; }
+    .sch-tk.sch-month { font-weight: 700; color: var(--fb-ink); font-size: 11px; }
+    .sch-today { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--fb-accent); }
+    .sch-wbs { font-family: var(--fb-font-mono); font-size: 11px; color: var(--fb-ink-muted); white-space: nowrap; }
+    .sch-warn { color: var(--fb-error); font-weight: 700; }
+    .sch-name { font-size: 14px; color: var(--fb-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sch-bar { position: absolute; border-radius: 3px; background: var(--fb-page-alt); border: 1px solid var(--fb-ink-faint); box-sizing: border-box; overflow: hidden; }
+    .sch-bar.sch-active { background: var(--fb-info); border-color: transparent; }
+    .sch-bar.sch-done { background: var(--fb-cover); border-color: transparent; }
+    .sch-bar.sch-late { background: var(--fb-error); border-color: transparent; }
+    .sch-bar .sch-prog { position: absolute; left: 0; top: 0; bottom: 0; background: var(--fb-ink); opacity: 0.25; }
+    .sch-sum { position: absolute; height: 6px; background: var(--fb-ink-muted); border-radius: 1px; }
+    .sch-ms { position: absolute; width: 14px; height: 14px; transform: rotate(45deg); background: var(--fb-accent); }
+    .sch-ms.sch-done { background: var(--fb-cover); }
+    .sch-ms.sch-late { background: var(--fb-error); }
+    .sch-divider { position: absolute; top: 0; bottom: 0; right: -6px; width: 12px; cursor: col-resize; touch-action: none; z-index: 5; }
     .fb-notes h2 { font-size: 1.5em;  font-weight: 700; line-height: 1.3;  margin: 0.3em 0 0.05em; }
     .fb-notes h3 { font-size: 1.25em; font-weight: 700; line-height: 1.35; margin: 0.25em 0 0.05em; }
     .fb-notes ul { list-style: disc outside;    padding-left: 1.4em; }
@@ -672,7 +696,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.187';
+  const APP_VERSION = '1.192';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1096,6 +1120,13 @@
   function _getProjectRaw(id) {
     return _projectCache[id] ?? null;
   }
+  // A locked project is read-only. A blocked write is dropped and fb:locked is
+  // fired so the open project view can tell the user why nothing changed.
+  function _writeBlocked(proj) {
+    if (!proj || !proj.lock) return false;
+    try { window.dispatchEvent(new Event('fb:locked')); } catch {}
+    return true;
+  }
   function _saveProjectRaw(proj) {
     _projectCache[proj.id] = proj;
     if (_backend === 'idb') { _deleted.delete(proj.id); _dirty.add(proj.id); _scheduleFlush(); }
@@ -1266,6 +1297,34 @@
         _saveIndex([entry, ...idx.filter(e => e.id !== id)]);
       }
     },
+    // Locking makes a project read-only (proj.lock = { by, at }). Locking is
+    // done only after the .fieldbook file has been saved, so the file carries
+    // the lock. Reopening needs a name and is logged in the transfer history.
+    lockProject(id, by, at) {
+      const proj = _getProjectRaw(id);
+      if (!proj) return;
+      _saveProjectRaw({ ...proj, lock: { by, at }, archived: true, archivedAt: at });
+    },
+    reopenProject(id, by) {
+      const proj = _getProjectRaw(id);
+      if (!proj) return;
+      const now = new Date().toISOString();
+      const record = {
+        seq: (proj.exportChain || []).length + 1,
+        action: 'reopen',
+        timestamp: now,
+        by: by || '',
+        location: '',
+        device: deviceHint(),
+        appVersion: 'fieldbook-v' + APP_VERSION,
+      };
+      const next = { ...proj, exportChain: [...(proj.exportChain || []), record] };
+      delete next.lock; delete next.archived; delete next.archivedAt;
+      _saveProjectRaw(next);
+      const idx = _getIndex();
+      const entry = idx.find(e => e.id === id);
+      if (entry) _saveIndex([entry, ...idx.filter(e => e.id !== id)]);
+    },
     createProject(data) {
       const proj = {
         id: Date.now().toString(),
@@ -1280,9 +1339,12 @@
     getProject(id) {
       return _getProjectRaw(id);
     },
-    updateProject(id, updates) {
+    // force: true is for lock bookkeeping and transfer records only, which
+    // must still be written to a locked project.
+    updateProject(id, updates, opts) {
       const proj = _getProjectRaw(id);
       if (!proj) return;
+      if (!(opts && opts.force) && _writeBlocked(proj)) return;
       _saveProjectRaw({ ...proj, ...updates });
     },
     deleteProject(id) {
@@ -1300,6 +1362,7 @@
       newProj.exportChain = [];
       delete newProj.archived;
       delete newProj.archivedAt;
+      delete newProj.lock;
       const pageIds = {};
       newProj.pages = newProj.pages.map(pg => ({
         ...pg,
@@ -1315,7 +1378,7 @@
     // of appending — used to add a page inside a specific day folder.
     addPage(projectId, pageData, atIndex) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return null;
+      if (!proj || _writeBlocked(proj)) return null;
       const page = {
         id: Date.now().toString(),
         pageNumber: proj.pages.length + 1,
@@ -1351,7 +1414,7 @@
     },
     updatePage(projectId, pageId, updates) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return;
+      if (!proj || _writeBlocked(proj)) return;
       const gi = proj.pages.findIndex(g => g.id === pageId);
       if (gi === -1) return;
       proj.pages[gi] = { ...proj.pages[gi], ...updates };
@@ -1363,14 +1426,14 @@
     },
     deletePage(projectId, pageId) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return;
+      if (!proj || _writeBlocked(proj)) return;
       proj.pages = proj.pages.filter(g => g.id !== pageId);
       proj.pages.forEach((g, i) => { g.pageNumber = i + 1; });
       _saveProjectRaw(proj);
     },
     duplicatePage(projectId, pageId) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return null;
+      if (!proj || _writeBlocked(proj)) return null;
       const src = proj.pages.find(g => g.id === pageId);
       if (!src) return null;
       let n = Date.now();
@@ -1396,7 +1459,7 @@
     },
     reorderPages(projectId, fromIdx, toIdx) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return;
+      if (!proj || _writeBlocked(proj)) return;
       const pages = [...proj.pages];
       const [moved] = pages.splice(fromIdx, 1);
       pages.splice(toIdx, 0, moved);
@@ -1408,7 +1471,7 @@
     // dir: -1 = up, 1 = down.
     moveGroup(projectId, titlePageId, dir) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return;
+      if (!proj || _writeBlocked(proj)) return;
       const groups = groupPages(proj.pages);
       const gi = groups.findIndex(g => g.title && g.title.id === titlePageId);
       const ni = gi + dir;
@@ -1423,7 +1486,7 @@
     // pages above the first title page).
     movePageToGroup(projectId, pageId, titlePageId) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return;
+      if (!proj || _writeBlocked(proj)) return;
       const moved = proj.pages.find(g => g.id === pageId);
       if (!moved || moved.type === 'title') return;
       const pages = proj.pages.filter(g => g.id !== pageId);
@@ -1442,7 +1505,7 @@
     // excludeMap: { [pageId]: bool } — pages left out of PDF exports by default.
     setPdfExclude(projectId, excludeMap) {
       const proj = _getProjectRaw(projectId);
-      if (!proj) return;
+      if (!proj || _writeBlocked(proj)) return;
       proj.pages.forEach(pg => {
         if (!(pg.id in excludeMap)) return;
         if (excludeMap[pg.id]) pg.pdfExclude = true;
@@ -1492,6 +1555,7 @@
     if (pageMatch) return { view: 'page', projectId: pageMatch[1], pageId: pageMatch[2] };
     const projMatch = path.match(/^\/project\/([^/]+)$/);
     if (projMatch) return { view: 'project', projectId: projMatch[1] };
+    if (path === '/timeline') return { view: 'timeline' };
     return { view: 'home' };
   }
 
@@ -1776,6 +1840,15 @@
       </svg>
     ),
     // Sky plot: horizon ring, north tick and an obstruction wedge — the Obstructions page type.
+    // Gantt: three task bars on a time axis (schedule / tracker page)
+    Gantt: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+        <line x1="3" y1="4" x2="3" y2="20" opacity="0.35"/>
+        <rect x="6" y="5" width="10" height="4" rx="1"/>
+        <rect x="9" y="11" width="11" height="4" rx="1"/>
+        <rect x="5" y="17" width="7" height="4" rx="1"/>
+      </svg>
+    ),
     SkyPlot: ({ size = 16 } = {}) => (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="12" r="9"/>
@@ -2117,7 +2190,7 @@
               <button onClick={onImportProject} style={btnStyle}>
                 <span className="text-fb-heading flex-shrink-0"><Ico.Folder size={22} /></span>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: FBC.ink }}>Import Project</div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: FBC.ink }}>Open Project</div>
                   <div style={{ fontSize: 12, color: FBC.inkMuted, marginTop: 1 }}>Add a project from a .fieldbook file</div>
                 </div>
               </button>
@@ -2309,11 +2382,12 @@
 
   // Build and trigger a .fieldbook file download for a project.
   // Appends an export record to the chain and persists it locally too.
-  async function exportProjectToFile(project, by, location) {
+  // action: 'export' (default) or 'lock' when saving a file to lock the project.
+  async function exportProjectToFile(project, by, location, action) {
     const chain = project.exportChain || [];
     const record = {
       seq:       chain.length + 1,
-      action:    'export',
+      action:    action || 'export',
       timestamp: new Date().toISOString(),
       by:        by || 'Unknown',
       location:  location || '',
@@ -2322,8 +2396,8 @@
     };
     const updatedChain = [...chain, record];
 
-    // Persist the updated chain on this device
-    DB.updateProject(project.id, { exportChain: updatedChain });
+    // Persist the updated chain on this device (allowed on a locked project)
+    DB.updateProject(project.id, { exportChain: updatedChain }, { force: true });
 
     // Inline photo dataUrls so the exported file is portable across devices.
     const projectWithPhotos = await inlinePhotosForExport({ ...project, exportChain: updatedChain });
@@ -2550,6 +2624,17 @@
   // EXPORT MODAL  — collects exporter name + location, triggers download
   // ─────────────────────────────────────────────────────────────────────────────
 
+  // Labels for project transfer history records (.fieldbook files)
+  function transferLabel(rec) {
+    switch (rec.action) {
+      case 'export': return '↑ Saved';
+      case 'import': return '↓ Opened';
+      case 'lock':   return 'Locked';
+      case 'reopen': return 'Reopened';
+      default:       return rec.action;
+    }
+  }
+
   function ExportModal({ project, onClose, onDone }) {
     const [by,       setBy]       = useState('');
     const [location, setLocation] = useState('');
@@ -2565,7 +2650,7 @@
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
         <div ref={trapRef} className="modal-sheet">
           <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-5" />
-          <h2 className="text-xl font-bold text-fb-text mb-1">Export Project</h2>
+          <h2 className="text-xl font-bold text-fb-text mb-1">Save Project File</h2>
           <p className="text-sm text-fb-muted mb-5">
             Creates a <code className="font-data text-fb-mid">.fieldbook</code> file to share or open on another device.
           </p>
@@ -2614,7 +2699,7 @@
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
         <div ref={trapRef} className="modal-sheet">
           <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-5" />
-          <h2 className="text-xl font-bold text-fb-text mb-4">Import Project</h2>
+          <h2 className="text-xl font-bold text-fb-text mb-4">Open Project</h2>
 
           {/* Project preview card */}
           <div className="rounded-xl px-4 py-3 mb-4" style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
@@ -2637,8 +2722,8 @@
               <div className="divide-y" style={{ borderColor: FBC.border }}>
                 {[...chain].reverse().map((rec, i) => (
                   <div key={i} className="px-3 py-2 text-xs" style={{ background: FBC.page }}>
-                    <span className="font-semibold" style={{ color: rec.action === 'export' ? FBC.accent : '#1d4ed8' }}>
-                      {rec.action === 'export' ? '↑ Export' : '↓ Import'} #{rec.seq}
+                    <span className="font-semibold" style={{ color: ['export','lock'].includes(rec.action) ? FBC.accent : '#1d4ed8' }}>
+                      {transferLabel(rec)} #{rec.seq}
                     </span>
                     <span className="text-fb-muted ml-2">{rec.by || 'Unknown'}</span>
                     <span className="text-fb-muted ml-2">
@@ -2665,7 +2750,7 @@
             <button onClick={doImport}
               className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80"
               style={{ background: FBC.accent }}>
-              ↓ Import Project
+              ↓ Open Project
             </button>
           </div>
         </div>
@@ -3191,7 +3276,8 @@
     { id: 'gps',     label: 'GPS (all phone)', Icon: Ico.Pin,    test: p => p.phone },
   ];
 
-  function ExportPointsModal({ projectId, onClose }) {
+  // pageId (optional): open from a Points page with only that page's points ticked.
+  function ExportPointsModal({ projectId, pageId, onClose }) {
     const project = DB.getProject(projectId);
     const crs     = fbGeo.projectCrs(project);
     const toast   = useToast();
@@ -3199,7 +3285,10 @@
     useFocusTrap(trapRef, true, onClose);
 
     const [points] = useState(() => fbGeo.getProjectPoints(project));
-    const [sel, setSel]       = useState(() => new Set(points.map(p => p.id)));
+    const [sel, setSel]       = useState(() => {
+      const mine = pageId ? points.filter(p => p.pageId === pageId) : [];
+      return new Set((mine.length ? mine : points).map(p => p.id));
+    });
     const [range, setRange]   = useState('');
     const [format, setFormat] = useState(() => {
       try { const f = localStorage.getItem('fb_points_export_format'); return POINT_EXPORT_FORMATS.some(x => x.id === f) ? f : 'csv'; }
@@ -3400,9 +3489,10 @@
     const [tab,        setTab]        = useState('transfer');
     const [showExport, setShowExport] = useState(false);
     const [showExportPts, setShowExportPts] = useState(false);
+    const [lockMode,      setLockMode]      = useState(null); // null | 'lock' | 'reopen'
     const toast    = useToast();
     const trapRef  = useRef(null);
-    useFocusTrap(trapRef, !showExportPts, onClose);
+    useFocusTrap(trapRef, !showExportPts && !lockMode, onClose);
 
     const chain = project.exportChain || [];
 
@@ -3439,7 +3529,7 @@
               <button onClick={() => setShowExport(true)}
                 className="w-full py-3 rounded-xl font-semibold text-sm text-white active:opacity-80 flex items-center justify-center gap-2 mb-1"
                 style={{ background: FBC.accent }}>
-                <span style={{ fontSize: 16 }}>↑</span> Export Project File
+                <span style={{ fontSize: 16 }}>↑</span> Save Project File
               </button>
               <p className="text-xs text-fb-muted text-center mb-4">
                 Downloads a <code className="font-data">.fieldbook</code> file — share or import on any device
@@ -3467,8 +3557,8 @@
                         style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
                         <div className="flex items-center gap-2 mb-0.5">
                           <span className="text-xs font-bold px-1.5 py-0.5 rounded-md text-white"
-                            style={{ background: rec.action === 'export' ? FBC.accent : '#1d4ed8', fontSize: 9 }}>
-                            {rec.action === 'export' ? '↑ Export' : '↓ Import'} #{rec.seq}
+                            style={{ background: ['export','lock'].includes(rec.action) ? FBC.accent : '#1d4ed8', fontSize: 9 }}>
+                            {transferLabel(rec)} #{rec.seq}
                           </span>
                           <span className="text-xs font-semibold text-fb-text">{rec.by || 'Unknown'}</span>
                         </div>
@@ -3489,22 +3579,56 @@
           {tab === 'settings' && (
             <>
               <ProjectGeoSettings project={project} projectId={projectId} onReload={onReload} />
-              <button
-                onClick={() => {
-                  const archiving = !project.archived;
-                  DB.setProjectArchived(projectId, archiving);
-                  onClose();
-                  if (archiving) { toast.success('Project archived'); navigate('#/'); }
-                  else { onReload(); toast.success('Project restored'); }
-                }}
-                className="w-full py-3 rounded-xl font-semibold text-sm text-fb-text active:opacity-80 mb-1"
-                style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
-                {project.archived ? 'Restore Project to Active' : 'Archive Project'}
-              </button>
-              {!project.archived && <p className="text-xs text-fb-muted text-center">Nothing is deleted.</p>}
+              {project.lock ? (
+                <>
+                  <p className="text-xs text-fb-muted text-center mb-2">
+                    Locked by {project.lock.by} on {new Date(project.lock.at).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' })} · read only
+                  </p>
+                  <button onClick={() => setLockMode('reopen')}
+                    className="w-full py-3 rounded-xl font-semibold text-sm text-white active:opacity-80 mb-1"
+                    style={{ background: FBC.cover }}>
+                    Reopen Project…
+                  </button>
+                </>
+              ) : project.archived ? (
+                <button
+                  onClick={() => { DB.setProjectArchived(projectId, false); onReload(); toast.success('Project restored'); }}
+                  className="w-full py-3 rounded-xl font-semibold text-sm text-fb-text active:opacity-80 mb-1"
+                  style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
+                  Restore Project to Active
+                </button>
+              ) : (
+                <>
+                  <button onClick={() => setLockMode('lock')}
+                    className="w-full py-3 rounded-xl font-semibold text-sm text-fb-text active:opacity-80 mb-1"
+                    style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}` }}>
+                    Lock Project…
+                  </button>
+                  <p className="text-xs text-fb-muted text-center">Saves a .fieldbook file, then closes the project or keeps it viewable.</p>
+                </>
+              )}
             </>
           )}
         </div>
+
+        {lockMode && (
+          <LockProjectSheet
+            project={DB.getProject(projectId) || project}
+            mode={lockMode}
+            onClose={() => setLockMode(null)}
+            onDone={kind => {
+              setLockMode(null);
+              if (kind === 'closed') {
+                onClose();
+                navigate('#/');
+                toast.success('Project saved and closed. Import the file to open it again.');
+              } else {
+                onReload();
+                toast.success(kind === 'archived' ? 'Project locked and kept viewable' : 'Project reopened for editing');
+              }
+            }}
+          />
+        )}
 
         {showExport && (
           <ExportModal
@@ -3578,6 +3702,7 @@
     }
 
     function handleRename(p) {
+      if (p.lock) { toast.error('This project is locked. Reopen it to make changes.'); return; }
       const name = window.prompt('Rename project:', p.name);
       if (name && name.trim() && name.trim() !== p.name) {
         DB.updateProject(p.id, { name: name.trim() });
@@ -3592,13 +3717,25 @@
       toast.success(`"${p.name}" duplicated`);
     }
 
+    // Archive now goes through the lock flow (save file, then close or keep
+    // viewable). A locked project is reopened with a name. Legacy archived
+    // projects that were never locked are restored as before.
+    const [lockTarget, setLockTarget] = useState(null); // { project, mode }
     function handleArchive(p) {
-      const archiving = !p.archived;
-      DB.setProjectArchived(p.id, archiving);
+      if (p.lock) { setLockTarget({ project: p, mode: 'reopen' }); return; }
+      if (!p.archived) { setLockTarget({ project: p, mode: 'lock' }); return; }
+      DB.setProjectArchived(p.id, false);
       setProjects(DB.getProjects());
-      toast.success(archiving
-        ? `"${p.name}" archived — find it under Archived at the bottom`
-        : `"${p.name}" restored`);
+      toast.success(`"${p.name}" restored`);
+    }
+    function handleLockDone(kind) {
+      const p = lockTarget?.project;
+      setLockTarget(null);
+      setProjects(DB.getProjects());
+      if (!p) return;
+      if (kind === 'closed') toast.success(`"${p.name}" saved and closed`);
+      else if (kind === 'archived') toast.success(`"${p.name}" locked, under Archived`);
+      else toast.success(`"${p.name}" reopened for editing`);
     }
 
     function handleMove(p, dir) {
@@ -3645,6 +3782,9 @@
                   <Ico.Download />
                 </button>
               )}
+              <button onClick={() => navigate('#/timeline')} className="p-2 rounded-xl active:opacity-70 transition-colors" title="Survey timeline">
+                <Ico.Gantt />
+              </button>
               <button onClick={() => importInputRef.current && importInputRef.current.click()} className="p-2 rounded-xl active:bg-white/10 transition-colors" title="Import project (.fieldbook)">
                 <Ico.Upload />
               </button>
@@ -3670,7 +3810,7 @@
                     <button onClick={() => importInputRef.current && importInputRef.current.click()}
                       className="text-xs font-semibold px-3 py-2 rounded-lg active:opacity-70"
                       style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}`, color: FBC.heading }}>
-                      ↓ Import Project
+                      ↓ Open Project
                     </button>
                   </div>
                   {active.length === 0 && (
@@ -3731,7 +3871,20 @@
             onRename={p => { setActionTarget(null); handleRename(p); }}
             onDuplicate={p => { setActionTarget(null); handleDuplicate(p); }}
             onArchive={p => { setActionTarget(null); handleArchive(p); }}
-            onDelete={p => { setActionTarget(null); setDelTarget(p.id); }}
+            onDelete={p => {
+              setActionTarget(null);
+              if (p.lock) { toast.error('Locked projects cannot be deleted. Save the file, then close it.'); return; }
+              setDelTarget(p.id);
+            }}
+          />
+        )}
+
+        {lockTarget && (
+          <LockProjectSheet
+            project={lockTarget.project}
+            mode={lockTarget.mode}
+            onClose={() => setLockTarget(null)}
+            onDone={handleLockDone}
           />
         )}
 
@@ -3798,7 +3951,9 @@
                 )}
                 <span className="text-xs text-fb-muted">{pageCount} page{pageCount !== 1 ? 's' : ''}</span>
                 <span className="text-xs text-fb-muted ml-auto font-data">
-                  {project.archived && project.archivedAt
+                  {project.lock
+                    ? `Locked by ${project.lock.by} ${new Date(project.lock.at).toLocaleDateString('en-CA')}`
+                    : project.archived && project.archivedAt
                     ? `Archived ${new Date(project.archivedAt).toLocaleDateString('en-CA')}`
                     : new Date(project.createdAt).toLocaleDateString('en-CA')}
                 </span>
@@ -3811,11 +3966,127 @@
           <ContextMenu x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)} items={[
             { icon: <Ico.Rename />,          label: 'Rename',    action: () => onRename(project)    },
             { icon: <Ico.Duplicate />,        label: 'Duplicate', action: () => onDuplicate(project) },
-            { icon: <Ico.File />,             label: project.archived ? 'Restore to Active' : 'Archive', action: () => onArchive(project) },
+            { icon: <Ico.File />,             label: project.lock ? 'Reopen…' : project.archived ? 'Restore to Active' : 'Lock & Archive', action: () => onArchive(project) },
             { icon: <Ico.DeleteProject />,    label: 'Delete',    action: () => onDelete(), danger: true },
           ]} />
         )}
       </>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // LOCK / REOPEN SHEET
+  // mode 'lock':   name → save a .fieldbook → Keep viewable (locked + archived)
+  //                or Close (removed from this device; open it again by importing the file)
+  // mode 'reopen': name → Reopen for editing. Name and time go in the transfer history.
+  // ─────────────────────────────────────────────────────────────────────────────
+  function LockProjectSheet({ project, mode, onClose, onDone }) {
+    const [by,       setBy]       = useState('');
+    const [step,     setStep]     = useState('name'); // 'name' | 'saved'
+    const [lockAt,   setLockAt]   = useState(null);
+    const [armClose, setArmClose] = useState(false);
+    const [busy,     setBusy]     = useState(false);
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const name = by.trim();
+
+    async function saveFile() {
+      if (!name || busy) return;
+      setBusy(true);
+      const at = new Date().toISOString();
+      await exportProjectToFile({ ...DB.getProject(project.id), lock: { by: name, at } }, name, '', 'lock');
+      setLockAt(at);
+      setBusy(false);
+      setStep('saved');
+    }
+    function keepViewable() {
+      DB.lockProject(project.id, name, lockAt);
+      onDone('archived');
+    }
+    function closeProject() {
+      if (!armClose) { setArmClose(true); return; }
+      DB.deleteProject(project.id);
+      onDone('closed');
+    }
+    function reopen() {
+      if (!name) return;
+      DB.reopenProject(project.id, name);
+      onDone('reopened');
+    }
+
+    const cancel = (
+      <button onClick={onClose}
+        className="flex-1 py-3 rounded-xl border border-fb-border text-fb-muted font-semibold text-sm active:bg-fb-page-alt">
+        Cancel
+      </button>
+    );
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-5" />
+
+          {mode === 'reopen' && (
+            <>
+              <h2 className="text-xl font-bold text-fb-text mb-1">Reopen Project</h2>
+              <p className="text-sm text-fb-muted mb-5">
+                Locked by {project.lock?.by || 'someone'} on {project.lock?.at ? new Date(project.lock.at).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' }) : 'an earlier date'}. Reopening lets you edit again.
+              </p>
+              <div className="mb-6"><Field label="Your Name" value={by} onChange={setBy} placeholder="Your name" autoFocus /></div>
+              <div className="flex gap-2">
+                {cancel}
+                <button onClick={reopen} disabled={!name}
+                  className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80 disabled:opacity-40"
+                  style={{ background: FBC.accent }}>
+                  Reopen
+                </button>
+              </div>
+            </>
+          )}
+
+          {mode === 'lock' && step === 'name' && (
+            <>
+              <h2 className="text-xl font-bold text-fb-text mb-1">Lock Project</h2>
+              <p className="text-sm text-fb-muted mb-5">
+                Saves a <code className="font-data text-fb-mid">.fieldbook</code> file first. Then you choose to close the project or keep it viewable.
+              </p>
+              <div className="mb-6"><Field label="Your Name" value={by} onChange={setBy} placeholder="Your name" autoFocus /></div>
+              <div className="flex gap-2">
+                {cancel}
+                <button onClick={saveFile} disabled={!name || busy}
+                  className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80 disabled:opacity-40"
+                  style={{ background: FBC.accent }}>
+                  Save File &amp; Continue
+                </button>
+              </div>
+            </>
+          )}
+
+          {mode === 'lock' && step === 'saved' && (
+            <>
+              <h2 className="text-xl font-bold text-fb-text mb-1">File Saved</h2>
+              <p className="text-sm text-fb-muted mb-5">
+                Check your Downloads for the <code className="font-data text-fb-mid">.fieldbook</code> file before you choose. Closing removes the project from this device. Import the file to open it again.
+              </p>
+              <div className="flex flex-col gap-2">
+                <button onClick={keepViewable}
+                  className="w-full py-3 rounded-xl border border-fb-border text-fb-text font-semibold text-sm active:bg-fb-page-alt">
+                  Keep Viewable (Archive)
+                </button>
+                <button onClick={closeProject}
+                  className="w-full py-3 rounded-xl font-semibold text-sm text-white active:opacity-80"
+                  style={{ background: armClose ? FBC.error : FBC.cover }}>
+                  {armClose ? 'Tap Again to Close Project' : 'Close Project'}
+                </button>
+                <button onClick={onClose}
+                  className="w-full py-3 text-fb-muted font-semibold text-sm">
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     );
   }
 
@@ -3836,7 +4107,7 @@
               <Ico.Duplicate /> Duplicate
             </button>
             <button onClick={() => onArchive(project)} className={rowCls + ' flex items-center gap-3'} style={{ background: '#f4f4f4' }}>
-              {project.archived ? <><Ico.ChevUp /> Restore to Active</> : <><Ico.Book /> Archive Project</>}
+              {project.lock ? <><Ico.ChevUp /> Reopen…</> : project.archived ? <><Ico.ChevUp /> Restore to Active</> : <><Ico.Book /> Lock &amp; Archive</>}
             </button>
             <button onClick={() => onDelete(project)}
               className="w-full flex items-center gap-3 text-left px-4 py-3 rounded-xl font-medium transition-colors active:bg-red-100"
@@ -3873,7 +4144,7 @@
           <button onClick={onImport}
             className="mt-3 px-6 py-3 rounded-2xl font-semibold text-sm active:opacity-70"
             style={{ background: FBC.pageAlt, border: `1px solid ${FBC.border}`, color: FBC.heading }}>
-            ↓ Import Project (.fieldbook)
+            ↓ Open Project (.fieldbook)
           </button>
         )}
       </div>
@@ -5817,6 +6088,7 @@
     notes:  { label: 'Notes',  ...FB_BRAND.PAGE_TYPES.notes,  Icon: () => <Ico.Pencil /> },
     gnss:   { label: 'GNSS Obs', ...FB_BRAND.PAGE_TYPES.gnss, Icon: () => <Ico.Antenna /> },
     obstructions: { label: 'Obstructions', ...FB_BRAND.PAGE_TYPES.obstructions, Icon: () => <Ico.SkyPlot /> },
+    tracker: { label: 'Tracker', ...FB_BRAND.PAGE_TYPES.tracker, Icon: () => <Ico.Gantt /> },
   };
 
   function ProjectView({ projectId }) {
@@ -5836,8 +6108,23 @@
     const [copyFromOpen,     setCopyFromOpen]     = useState(false);
     const [importPageModal,  setImportPageModal]  = useState(null); // { fileData }
     const [pageChainTarget,  setPageChainTarget]  = useState(null); // page object
+    const [lockMode,         setLockMode]         = useState(null); // null | 'lock' | 'reopen'
     const pageImportInputRef = useRef(null);
     const toast = useToast();
+
+    // Writes to a locked project are dropped in the DB layer; say so here,
+    // at most once every few seconds (autosave can fire repeatedly).
+    useEffect(() => {
+      let last = 0;
+      const onLocked = () => {
+        const t = Date.now();
+        if (t - last < 2500) return;
+        last = t;
+        toast.error('This project is locked. Reopen it to make changes.');
+      };
+      window.addEventListener('fb:locked', onLocked);
+      return () => window.removeEventListener('fb:locked', onLocked);
+    }, []);
 
     // getProject returns the in-memory cached object, and DB mutations (reorder,
     // duplicate, etc.) mutate that same object in place. Passing the identical
@@ -6040,7 +6327,21 @@
           }
         />
 
-        {project.archived && (
+        {project.lock && (
+          <div className="flex items-center justify-between gap-3 px-4 py-2"
+            style={{ background: FBC.pageAlt, borderBottom: `1px solid ${FBC.border}` }}>
+            <p className="text-xs font-bold uppercase tracking-widest text-fb-muted">
+              Locked by {project.lock.by} · read only
+            </p>
+            <button onClick={() => setLockMode('reopen')}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white active:opacity-80"
+              style={{ background: FBC.cover }}>
+              Reopen
+            </button>
+          </div>
+        )}
+
+        {project.archived && !project.lock && (
           <div className="flex items-center justify-between gap-3 px-4 py-2"
             style={{ background: FBC.pageAlt, borderBottom: `1px solid ${FBC.border}` }}>
             <p className="text-xs font-bold uppercase tracking-widest text-fb-muted">Archived project</p>
@@ -6248,6 +6549,19 @@
           }} />
 
         {showExportPts && <ExportPointsModal projectId={projectId} onClose={() => setShowExportPts(false)} />}
+
+        {lockMode && (
+          <LockProjectSheet
+            project={DB.getProject(projectId) || project}
+            mode={lockMode}
+            onClose={() => setLockMode(null)}
+            onDone={kind => {
+              setLockMode(null);
+              reload();
+              toast.success(kind === 'archived' ? 'Project locked and kept viewable' : 'Project reopened for editing');
+            }}
+          />
+        )}
 
         {showGps && (
           <GpsCaptureSheet projectId={projectId}
@@ -7014,6 +7328,7 @@
       { id: 'points', Icon: Ico.Pin,    label: 'Points Page', desc: 'PNEZD point list' },
       { id: 'gnss',   Icon: () => <Ico.Antenna size={20} />, label: 'GNSS Obs Page', desc: 'Static session log' },
       { id: 'obstructions', Icon: () => <Ico.SkyPlot size={20} />, label: 'Obstructions Page', desc: 'Obstruction table and sky plot' },
+      { id: 'tracker', Icon: () => <Ico.Gantt size={20} />, label: 'Tracker Page', desc: 'Survey days and critical-path tasks' },
     ];
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -7065,6 +7380,7 @@
     const [page, setPage]       = useState(null);
     const [exporting, setExporting] = useState(false);
     const [showExportMenu, setShowExportMenu] = useState(false);
+    const [showExportPts, setShowExportPts]   = useState(false);   // Points pages: CSV / KML / GPX sheet
     const exportFnsRef = useRef({ exportCSV: null, exportPDF: null });
     const registerExports = useCallback(fns => { exportFnsRef.current = fns; }, []);
     const toast = useToast();
@@ -7124,15 +7440,15 @@
         <div style={{ position: 'relative' }}>
           <button
             onClick={() => {
-              if (page.type === 'data') { setShowExportMenu(v => !v); }
+              if (page.type === 'data' || page.type === 'points') { setShowExportMenu(v => !v); }
               else { handleExportPDF(); }
             }}
             disabled={exporting}
             className="p-1.5 rounded-lg active:bg-white/10 transition-colors disabled:opacity-50"
-            title={page.type === 'data' ? 'Export options' : 'Export page as PDF'}>
+            title={page.type === 'data' || page.type === 'points' ? 'Export options' : 'Export page as PDF'}>
             {exporting ? <span style={{ fontSize: 14 }}>⏳</span> : <Ico.Download />}
           </button>
-          {showExportMenu && page.type === 'data' && (
+          {showExportMenu && (page.type === 'data' || page.type === 'points') && (
             <div
               style={{
                 position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 300,
@@ -7154,8 +7470,16 @@
                   color: '#1a3a2a', fontWeight: 600 }}>
                 <Ico.Download /> Export CSV
               </button>
+              {page.type === 'points' && (
+                <button data-export-points
+                  onClick={() => { setShowExportMenu(false); setShowExportPts(true); }}
+                  className="flex items-center gap-2 w-full px-3.5 py-2.5 rounded-lg text-left text-[13px] font-semibold text-fb-heading whitespace-nowrap active:bg-fb-page-alt">
+                  <Ico.Download /> Export KML / GPX…
+                </button>
+              )}
             </div>
           )}
+          {showExportPts && <ExportPointsModal projectId={projectId} pageId={page.id} onClose={() => setShowExportPts(false)} />}
         </div>
         <button onClick={handleDelete} className="p-1.5 rounded-lg active:bg-white/10 transition-colors text-red-300">
           <Ico.Trash />
@@ -7193,7 +7517,7 @@
             projectId={projectId}
             project={project}
             onReload={reload}
-            onRegisterExports={page.type === 'data' || page.type === 'photo' ? registerExports : undefined}
+            onRegisterExports={page.type === 'data' || page.type === 'points' || page.type === 'photo' ? registerExports : undefined}
             onBack={page.type === 'sketch' ? () => navigate(sketchOwner
               ? `#/project/${projectId}/page/${sketchOwner.id}` : `#/project/${projectId}`) : undefined}
             prevPageId={page.type === 'sketch' ? prevPage?.id : undefined}
@@ -8737,6 +9061,774 @@
     toast({ message: 'PDF exported.', type: 'success' });
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SCHEDULE (Gantt) — the task list and timeline used by the tracker page.
+  // Logic (WBS, working days, roll-up, align) is fbSchedule in schedule.js.
+  // Phone in portrait: one timeline. Each row is a 48 px touch target; tapping
+  // it opens the task sheet, where every edit is made. Landscape or tablet:
+  // the task table sits on the left with a draggable divider. Bars are not
+  // dragged: dates are typed in the sheet, so a stray touch cannot move a task.
+  // ─────────────────────────────────────────────────────────────────────────────
+  const SCH_ROW = 48;
+  const SCH_HEAD = 46;
+
+  function useWideLayout() {
+    const q = '(min-width: 760px) and (orientation: landscape)';
+    const mq = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(q) : null;
+    const [wide, setWide] = useState(() => !!(mq && mq.matches));
+    useEffect(() => {
+      if (!mq) return;
+      const f = () => setWide(mq.matches);
+      if (mq.addEventListener) mq.addEventListener('change', f); else mq.addListener(f);
+      return () => { if (mq.removeEventListener) mq.removeEventListener('change', f); else mq.removeListener(f); };
+    }, []);
+    return wide;
+  }
+
+  // Index of the last row in the block that starts at row i (its children)
+  function schBlockEnd(R, i) {
+    let j = i;
+    while (j + 1 < R.length && R[j + 1].lvl > R[i].lvl) j++;
+    return j;
+  }
+  function schSiblingBefore(R, i) {
+    for (let k = i - 1; k >= 0; k--) {
+      if (R[k].lvl < R[i].lvl) return null;
+      if (R[k].lvl === R[i].lvl) return k;
+    }
+    return null;
+  }
+  function schSiblingAfter(R, i) {
+    const j = schBlockEnd(R, i) + 1;
+    return j < R.length && R[j].lvl === R[i].lvl ? j : null;
+  }
+  function schNewId() {
+    return 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+
+  // The schedule. `tasks` are the tracker's own tasks (saved on the page).
+  // `autoTasks` are read-only rows that come first (the project's survey days,
+  // from fbSchedule.surveyTasks). Every index below runs over `all` = auto + own,
+  // and `off` is how many auto rows there are; own rows are all[off..].
+  function ScheduleView({ tasks, autoTasks, onChange, readOnly }) {
+    const wide = useWideLayout();
+    const toast = useToast();
+    const today = todayLocalISO();
+    const list = Array.isArray(tasks) ? tasks : [];
+    const auto = Array.isArray(autoTasks) ? autoTasks : [];
+    const off = auto.length;
+    const all = [...auto, ...list];
+    const R = fbSchedule.rows(all, today);
+    const RB = Object.fromEntries(R.map(r => [r.id, r]));
+    const conflictSet = new Set(fbSchedule.conflicts(all));
+    // WBS numbers the user can type as predecessors: own rows only
+    const wbsToId = {};
+    R.forEach((r, i) => { if (i >= off) wbsToId[r.wbs] = r.id; });
+    const idToWbs = Object.fromEntries(R.map(r => [r.id, r.wbs]));
+
+    const [selId, setSelId] = useState(null);
+    const [sheetOpen, setSheetOpen] = useState(false);
+    const [zoom, setZoom] = useState('week');
+    const [collapsed, setCollapsed] = useState(() => new Set());
+    const [split, setSplit] = useState(340);
+    const tlRef = useRef(null);
+
+    const sel = selId ? R.findIndex(r => r.id === selId) : -1;
+    const selRow = sel >= 0 ? R[sel] : null;
+    const selOwn = sel >= off;   // only own rows can be edited
+
+    const visible = R.filter(r => {
+      let p = r.parentId;
+      while (p) { if (collapsed.has(p)) return false; p = RB[p] ? RB[p].parentId : null; }
+      return true;
+    });
+
+    // ── timeline geometry (day numbers; rs is a Monday) ──
+    const pxd = zoom === 'month' ? 5 : 14;
+    const todayN = fbSchedule.isoToDay(today);
+    const minS = R.length ? Math.min(todayN, ...R.map(r => r.s)) : todayN;
+    const maxF = R.length ? Math.max(todayN, ...R.map(r => r.f)) : todayN;
+    let rs = minS - 7;
+    while (new Date(rs * 864e5).getUTCDay() !== 1) rs--;
+    const re = maxF + 14;
+    const W = (re - rs + 1) * pxd;
+    const X = n => (n - rs) * pxd;
+    const leftW = wide ? split : 132;
+
+    const monthTicks = [];
+    for (let n = rs; n <= re;) {
+      const d = new Date(n * 864e5);
+      const nm = Math.min(re + 1, Math.round(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) / 864e5));
+      monthTicks.push({ n, w: (nm - n) * pxd, label: d.toLocaleString('en-CA', { month: 'short', year: 'numeric', timeZone: 'UTC' }) });
+      n = nm;
+    }
+
+    function toggle(id) {
+      setCollapsed(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+    }
+    function openRow(id) {
+      const i = R.findIndex(r => r.id === id);
+      if (i < off) { setSelId(id); return; }   // survey rows: select only, no sheet
+      setSelId(id);
+      setSheetOpen(true);
+    }
+    function scrollToday() {
+      if (tlRef.current) tlRef.current.scrollLeft = Math.max(0, X(todayN) - 80);
+    }
+
+    // Every change goes through here. `nextAll` is the full list; the auto rows
+    // at the front are never saved, only the own rows after them.
+    function edit(nextAll, msg) {
+      if (readOnly || !nextAll) return;
+      onChange(nextAll.slice(off));
+      if (msg) toast.success(msg);
+    }
+    function opAdd(ms) {
+      const inOwn = selRow && selOwn;
+      const at = inOwn ? schBlockEnd(R, sel) + 1 : all.length;
+      const lvl = inOwn ? (selRow.isSum ? selRow.lvl + 1 : selRow.lvl) : 1;
+      const base = inOwn ? selRow.f + 1 : todayN;
+      const start = fbSchedule.dayToIso(fbSchedule.nextWork(base));
+      const task = { id: schNewId(), name: ms ? 'New milestone' : 'New task', lvl, start, days: ms ? 0 : 1, ms: !!ms, pct: 0, who: [], preds: [], notes: '' };
+      const next = [...all.slice(0, at), task, ...all.slice(at)];
+      setSelId(task.id);
+      setSheetOpen(true);
+      edit(next);
+    }
+    function opIndent(d) {
+      if (!selRow || !selOwn) return;
+      if (d > 0 && !(sel - 1 >= off && R[sel - 1].lvl >= selRow.lvl)) return;
+      if (d < 0 && selRow.lvl <= 1) return;
+      const end = schBlockEnd(R, sel);
+      edit(all.map((t, i) => (i >= sel && i <= end) ? { ...t, lvl: t.lvl + d } : t));
+    }
+    function opMove(dir) {
+      if (!selRow || !selOwn) return;
+      const other = dir < 0 ? schSiblingBefore(R, sel) : schSiblingAfter(R, sel);
+      if (other == null || other < off) return;
+      const a = dir < 0 ? other : sel, b = dir < 0 ? sel : other;
+      const a1 = schBlockEnd(R, a), b1 = schBlockEnd(R, b);
+      edit([...all.slice(0, a), ...all.slice(b, b1 + 1), ...all.slice(a, a1 + 1), ...all.slice(b1 + 1)]);
+    }
+    function opDelete() {
+      if (!selRow || !selOwn) return;
+      const end = schBlockEnd(R, sel);
+      const gone = new Set(R.slice(sel, end + 1).map(r => r.id));
+      const next = all
+        .filter((t, i) => !(i >= sel && i <= end))
+        .map(t => (t.preds || []).some(p => gone.has(p)) ? { ...t, preds: t.preds.filter(p => !gone.has(p)) } : t);
+      setSheetOpen(false);
+      setSelId(null);
+      edit(next, gone.size > 1 ? `Deleted ${gone.size} rows` : 'Deleted');
+    }
+    function opAlign() {
+      const before = fbSchedule.conflicts(all).length;
+      if (!before) { toast.success('Nothing to move. Every task follows its predecessors.'); return; }
+      onChange(fbSchedule.alignAll(list));
+      toast.success(`Moved ${before} task${before === 1 ? '' : 's'} to follow their predecessors`);
+    }
+    // Save fields from the sheet
+    function applyFields(id, patch) {
+      edit(all.map(t => t.id === id ? { ...t, ...patch } : t));
+    }
+
+    // Divider between the task table and the timeline (landscape / tablet only)
+    const drag = useRef(null);
+    function dragStart(e) {
+      drag.current = { x: e.clientX, w: split };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+    function dragMove(e) {
+      if (!drag.current) return;
+      setSplit(Math.max(220, Math.min(560, drag.current.w + e.clientX - drag.current.x)));
+    }
+    function dragEnd() { drag.current = null; }
+
+    return (
+      <div className="bg-fb-page">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-fb-border">
+          {!readOnly && (
+            <>
+              <button onClick={() => opAdd(false)} className="px-3 py-2 rounded-lg text-sm font-semibold text-white active:opacity-80" style={{ background: FBC.accent }}>+ Task</button>
+              <button onClick={() => opAdd(true)} className="px-3 py-2 rounded-lg text-sm font-semibold text-fb-ink border border-fb-border bg-fb-page-alt active:opacity-80">+ Milestone</button>
+              <button onClick={opAlign} className="px-3 py-2 rounded-lg text-sm font-semibold text-fb-ink border border-fb-border bg-fb-page-alt active:opacity-80">Align all</button>
+            </>
+          )}
+          <span className="flex-1" />
+          <div className="inline-flex rounded-lg border border-fb-border overflow-hidden">
+            {['week', 'month'].map(z => (
+              <button key={z} onClick={() => setZoom(z)} aria-pressed={zoom === z}
+                className={'px-3 py-2 text-sm capitalize ' + (zoom === z ? 'text-white font-semibold' : 'text-fb-ink bg-fb-page-alt')}
+                style={zoom === z ? { background: FBC.cover } : undefined}>{z}</button>
+            ))}
+          </div>
+          <button onClick={scrollToday} className="px-3 py-2 rounded-lg text-sm text-fb-ink border border-fb-border bg-fb-page-alt active:opacity-80">Today</button>
+          {conflictSet.size > 0 && (
+            <p className="w-full text-xs text-fb-error">{conflictSet.size} task{conflictSet.size === 1 ? '' : 's'} start before a predecessor finishes. Use Align all.</p>
+          )}
+          {auto.length > 0 && (
+            <p className="w-full text-xs text-fb-ink-muted">Survey days come from this project's title pages. Change them on the title page.</p>
+          )}
+        </div>
+
+        {all.length === 0 ? (
+          <div className="px-4 py-10 text-center text-fb-ink-muted text-sm">
+            <p className="font-semibold text-fb-ink mb-1">No tasks yet</p>
+            {readOnly ? 'This schedule is empty.' : 'Tap + Task to add the first one. Indent tasks in the sheet to group them under a summary row.'}
+          </div>
+        ) : (
+          <div ref={tlRef} style={{ overflowX: 'auto', overflowY: 'visible', position: 'relative' }}>
+            <div style={{ width: leftW + W, position: 'relative' }}>
+              {/* header */}
+              <div className="sch-head" style={{ height: SCH_HEAD }}>
+                <div className="sch-left" style={{ width: leftW, height: SCH_HEAD }}>
+                  <span className="text-[11px] font-bold uppercase tracking-widest text-fb-ink-muted">{wide ? 'WBS · Task' : 'Task'}</span>
+                  {wide && <div className="sch-divider" onPointerDown={dragStart} onPointerMove={dragMove} onPointerUp={dragEnd} onPointerCancel={dragEnd} aria-label="Resize task table" role="separator" />}
+                </div>
+                <div className="sch-tl" style={{ width: W, height: SCH_HEAD }}>
+                  {monthTicks.map((m, i) => (
+                    <div key={i} className="sch-tk sch-month" style={{ left: X(m.n), width: m.w, top: 0, height: 22 }}>{m.w > 60 ? m.label : ''}</div>
+                  ))}
+                  {zoom === 'week' && Array.from({ length: Math.ceil((re - rs + 1) / 7) }, (_, k) => rs + k * 7).map(n => (
+                    <div key={n} className="sch-tk" style={{ left: X(n), width: 7 * pxd, top: 22, height: 24 }}>{new Date(n * 864e5).getUTCDate()}</div>
+                  ))}
+                  <div className="sch-today" style={{ left: X(todayN) + pxd / 2 }} />
+                </div>
+              </div>
+
+              {/* rows */}
+              {visible.map(r => {
+                const t = all[r.idx];
+                const isSel = r.id === selId;
+                const isAuto = r.idx < off;
+                const name = t.name || 'Untitled task';
+                const bar = r.isSum ? (
+                  <div className="sch-sum" style={{ left: X(r.s), width: Math.max(pxd, (r.f - r.s + 1) * pxd), top: 20 }} />
+                ) : r.ms ? (
+                  <div className={'sch-ms sch-' + r.st} style={{ left: X(r.s) + pxd / 2 - 7, top: 17 }} />
+                ) : (
+                  <div className={'sch-bar sch-' + r.st} style={{ left: X(r.s), width: Math.max(pxd, (r.f - r.s + 1) * pxd), top: 13, height: 22 }}>
+                    <div className="sch-prog" style={{ width: r.pct + '%' }} />
+                  </div>
+                );
+                return (
+                  <div key={r.id} className={'sch-row' + (isSel ? ' sch-selected' : '') + (isAuto ? ' sch-auto' : '')} style={{ height: SCH_ROW, width: leftW + W }} onClick={() => openRow(r.id)}>
+                    <div className="sch-left" style={{ width: leftW, height: SCH_ROW }}>
+                      {wide ? (
+                        <div className="flex items-center w-full min-w-0 gap-2" style={{ paddingLeft: (r.lvl - 1) * 12 }}>
+                          <span className="sch-wbs w-10 flex-none">{r.wbs}</span>
+                          <span className={'sch-name flex-1 min-w-0' + (r.isSum ? ' font-bold' : '')}>{name}</span>
+                          <span className="sch-wbs w-14 flex-none text-right">{r.isSum ? '' : fbSchedule.dayToIso(r.s).slice(5)}</span>
+                          <span className="sch-wbs w-12 flex-none text-right">{r.pct}%</span>
+                        </div>
+                      ) : (
+                        <div className="min-w-0 w-full" style={{ paddingLeft: (r.lvl - 1) * 10 }}>
+                          <div className="sch-wbs">{r.wbs}{conflictSet.has(r.id) ? <span className="sch-warn"> !</span> : null}</div>
+                          <div className={'sch-name' + (r.isSum ? ' font-bold' : '')}>{name}</div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="sch-tl" style={{ width: W, height: SCH_ROW }}>{bar}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {sheetOpen && selRow && selOwn && (
+          <ScheduleTaskSheet
+            key={selRow.id}
+            task={all[sel]}
+            row={selRow}
+            wbsToId={wbsToId}
+            idToWbs={idToWbs}
+            readOnly={readOnly}
+            canIndent={sel - 1 >= off && R[sel - 1].lvl >= selRow.lvl}
+            canOutdent={selRow.lvl > 1}
+            canUp={sel - 1 >= off && schSiblingBefore(R, sel) != null}
+            canDown={schSiblingAfter(R, sel) != null}
+            onApply={patch => applyFields(selRow.id, patch)}
+            onOp={op => {
+              if (op === 'indent') opIndent(1);
+              else if (op === 'outdent') opIndent(-1);
+              else if (op === 'up') opMove(-1);
+              else if (op === 'down') opMove(1);
+              else if (op === 'delete') opDelete();
+            }}
+            onClose={() => setSheetOpen(false)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  function ScheduleTaskSheet({ task, row, wbsToId, idToWbs, readOnly, canIndent, canOutdent, canUp, canDown, onApply, onOp, onClose }) {
+    const [name,   setName]   = useState(task.name || '');
+    const [start,  setStart]  = useState(task.start || '');
+    const [days,   setDays]   = useState(String(task.days ?? 1));
+    const [ms,     setMs]     = useState(!!task.ms);
+    const [pct,    setPct]    = useState(String(task.pct ?? 0));
+    const [preds,  setPreds]  = useState((task.preds || []).map(id => idToWbs[id]).filter(Boolean).join(', '));
+    const [err,    setErr]    = useState('');
+    const [armDel, setArmDel] = useState(false);
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const isSum = row.isSum;
+    const ro = !!readOnly;
+
+    function done() {
+      const patch = { name: name.trim() || 'Untitled task' };
+      if (!isSum) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) { setErr('Enter a start date.'); return; }
+        patch.start = start;
+        patch.ms = ms;
+        patch.days = ms ? 0 : Math.max(1, Math.round(+days || 1));
+        patch.pct = Math.max(0, Math.min(100, Math.round(+pct || 0)));
+      }
+      const codes = preds.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+      const bad = codes.filter(c => !wbsToId[c] || wbsToId[c] === task.id);
+      if (bad.length) { setErr('No other task with WBS ' + bad.join(', ')); return; }
+      patch.preds = [...new Set(codes.map(c => wbsToId[c]))];
+      onApply(patch);
+      onClose();
+    }
+
+    const field = 'w-full px-3 py-2 rounded-lg border border-fb-border bg-fb-page text-fb-ink text-base';
+    const lbl = 'flex flex-col gap-1 text-xs font-semibold uppercase tracking-widest text-fb-ink-muted';
+    const opBtn = 'flex-1 py-2 rounded-lg border border-fb-border text-sm font-semibold text-fb-ink bg-fb-page-alt active:opacity-80 disabled:opacity-40';
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <p className="text-xs font-data text-fb-ink-muted mb-1">WBS {row.wbs}{isSum ? ' · summary' : row.ms ? ' · milestone' : ''}</p>
+          <div className="space-y-3 mb-4">
+            <label className={lbl}>Task name
+              <input className={field} value={name} onChange={e => setName(e.target.value)} disabled={ro} maxLength={120} />
+            </label>
+            {isSum ? (
+              <p className="text-sm text-fb-ink-muted">Dates and % roll up from the tasks under this summary row.</p>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className={lbl}>Start
+                    <input type="date" className={field} value={start} onChange={e => setStart(e.target.value)} disabled={ro} />
+                  </label>
+                  <label className={lbl}>Working days
+                    <input type="number" inputMode="numeric" min="1" className={field} value={days} onChange={e => setDays(e.target.value)} disabled={ro || ms} />
+                  </label>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-fb-ink">
+                  <input type="checkbox" checked={ms} onChange={e => setMs(e.target.checked)} disabled={ro} /> Milestone (one day, no duration)
+                </label>
+                <label className={lbl}>% complete
+                  <input type="number" inputMode="numeric" min="0" max="100" className={field} value={pct} onChange={e => setPct(e.target.value)} disabled={ro} />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {[0, 25, 50, 75, 100].map(p => (
+                    <button key={p} disabled={ro} onClick={() => setPct(String(p))}
+                      className="px-3 py-2 rounded-lg border border-fb-border text-sm text-fb-ink bg-fb-page-alt active:opacity-80 disabled:opacity-40">{p === 100 ? 'Done' : p + '%'}</button>
+                  ))}
+                </div>
+              </>
+            )}
+            <label className={lbl}>Predecessors (WBS, comma separated)
+              <input className={field} value={preds} onChange={e => setPreds(e.target.value)} placeholder="e.g. 1.1, 1.3" disabled={ro} />
+            </label>
+            {err && <p className="text-sm text-fb-error">{err}</p>}
+          </div>
+
+          {!ro && (
+            <>
+              <div className="flex gap-2 mb-2">
+                <button className={opBtn} disabled={!canOutdent} onClick={() => { onOp('outdent'); onClose(); }}>← Outdent</button>
+                <button className={opBtn} disabled={!canIndent} onClick={() => { onOp('indent'); onClose(); }}>Indent →</button>
+              </div>
+              <div className="flex gap-2 mb-4">
+                <button className={opBtn} disabled={!canUp} onClick={() => { onOp('up'); onClose(); }}>↑ Move up</button>
+                <button className={opBtn} disabled={!canDown} onClick={() => { onOp('down'); onClose(); }}>↓ Move down</button>
+              </div>
+            </>
+          )}
+
+          <div className="flex gap-2">
+            {!ro && (
+              <button onClick={() => { if (!armDel) { setArmDel(true); return; } onOp('delete'); }}
+                className="flex-1 py-3 rounded-xl border font-semibold text-sm active:opacity-80"
+                style={armDel ? { background: FBC.error, borderColor: FBC.error, color: '#fff' } : { borderColor: FBC.error, color: FBC.error }}>
+                {armDel ? 'Tap again to delete' : 'Delete'}
+              </button>
+            )}
+            <button onClick={onClose} className="flex-1 py-3 rounded-xl border border-fb-border text-fb-ink-muted font-semibold text-sm active:opacity-80">
+              {ro ? 'Close' : 'Cancel'}
+            </button>
+            {!ro && (
+              <button onClick={done} className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80" style={{ background: FBC.accent }}>
+                Done
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Tracker page (type 'tracker'): the project's survey days (read from its title
+  // pages, never saved) and the tasks the user adds. Data is page.schedule =
+  // { tasks: [...] } (see schedule.js for the task shape).
+  function TrackerPage(props) {
+    return <TrackerPageBody key={props.page.id} {...props} />;
+  }
+
+  function TrackerPageBody({ page, projectId, onReload }) {
+    const { data, title, dirty, update, setTitle, flush } = useGnDraft({
+      page, projectId, onReload, slot: 'schedule',
+      initial: () => ({ tasks: Array.isArray(page.schedule?.tasks) ? page.schedule.tasks : [] }),
+    });
+    const proj = DB.getProject(projectId);
+    const survey = fbSchedule.surveyTasks(proj?.pages || [], todayLocalISO());
+    return (
+      <div className="bg-fb-page min-h-full" onBlur={() => { if (flush()) onReload(); }}>
+        <GnPageStrip kind="Tracker" page={page} title={title} setTitle={setTitle} dirty={dirty} />
+        <ScheduleView tasks={data.tasks} autoTasks={survey} onChange={tasks => update({ tasks })} />
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SURVEY TIMELINE (#/timeline) — every project's survey days on one timeline.
+  // Rows come from fbSchedule.portfolio / portfolioFor (schedule.js) and are read
+  // from the device each time the page opens, so it shows whatever is live or
+  // archived here. Survey days after today (title pages made ahead) show as
+  // planned. A project group shows only its member projects.
+  // Export is a landscape PDF of the same rows.
+  // ─────────────────────────────────────────────────────────────────────────────
+  const TL_PX = 14;   // screen pixels per day
+
+  // Project groups live on this device only (localStorage). Shape:
+  // [{ id, name, projectIds: [...] }]. Ids of deleted projects are ignored.
+  function loadGroups() {
+    try {
+      const g = JSON.parse(localStorage.getItem('fb_project_groups') || '[]');
+      return Array.isArray(g) ? g : [];
+    } catch { return []; }
+  }
+  function saveGroups(groups) {
+    try { localStorage.setItem('fb_project_groups', JSON.stringify(groups)); } catch {}
+  }
+
+  // Day range for the timeline: whole weeks, from the Monday before the first
+  // survey day to a few days after the last one (or today).
+  function timelineRange(data) {
+    const todayN = fbSchedule.isoToDay(todayLocalISO());
+    const lo = Math.min(data.minDay ?? todayN, todayN) - 3;
+    const hi = Math.max(data.maxDay ?? todayN, todayN) + 3;
+    let rs = lo;
+    while (new Date(rs * 864e5).getUTCDay() !== 1) rs--;
+    return { rs, re: hi, todayN };
+  }
+
+  function timelineBlockClass(status, day, todayN) {
+    if (day > todayN) return 'sch-planned';
+    return status === 'live' ? 'sch-active' : 'sch-done';
+  }
+
+  // Sheet to make, rename, fill and delete project groups.
+  function GroupsSheet({ groups, projects, onSave, onClose }) {
+    const [draft, setDraft] = useState(() => groups.map(g => ({ ...g, projectIds: [...g.projectIds] })));
+    const [newName, setNewName] = useState('');
+    const [armId, setArmId] = useState(null);
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+
+    function addGroup() {
+      const name = newName.trim();
+      if (!name) return;
+      setDraft(d => [...d, { id: 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name, projectIds: [] }]);
+      setNewName('');
+    }
+    function setGroup(id, patch) {
+      setDraft(d => d.map(g => g.id === id ? { ...g, ...patch } : g));
+    }
+    function toggleMember(id, pid) {
+      setDraft(d => d.map(g => {
+        if (g.id !== id) return g;
+        const has = g.projectIds.includes(pid);
+        return { ...g, projectIds: has ? g.projectIds.filter(x => x !== pid) : [...g.projectIds, pid] };
+      }));
+    }
+    function removeGroup(id) {
+      if (armId !== id) { setArmId(id); return; }
+      setDraft(d => d.filter(g => g.id !== id));
+      setArmId(null);
+    }
+    function done() {
+      const clean = draft
+        .map(g => ({ ...g, name: g.name.trim() || 'Untitled group' }));
+      onSave(clean);
+      onClose();
+    }
+
+    const field = 'w-full px-3 py-2 rounded-lg border border-fb-border bg-fb-page text-fb-ink text-base';
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-fb-text mb-1">Project Groups</h2>
+          <p className="text-sm text-fb-ink-muted mb-4">Tie overlapping projects together. A group shows its projects on one timeline.</p>
+
+          <div className="flex gap-2 mb-5">
+            <input className={field} value={newName} onChange={e => setNewName(e.target.value)} placeholder="New group name" maxLength={60}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addGroup(); } }} />
+            <button onClick={addGroup} disabled={!newName.trim()}
+              className="px-4 py-2 rounded-lg font-semibold text-sm text-white active:opacity-80 disabled:opacity-40 flex-none"
+              style={{ background: FBC.accent }}>Add</button>
+          </div>
+
+          {draft.length === 0 && <p className="text-sm text-fb-ink-muted mb-4">No groups yet.</p>}
+
+          <div className="space-y-5 mb-5">
+            {draft.map(g => (
+              <div key={g.id} className="border border-fb-border rounded-xl p-3">
+                <input className={field + ' mb-3 font-semibold'} value={g.name} maxLength={60}
+                  onChange={e => setGroup(g.id, { name: e.target.value })} aria-label="Group name" />
+                {projects.length === 0 ? (
+                  <p className="text-sm text-fb-ink-muted mb-2">No projects on this device yet.</p>
+                ) : (
+                  <div className="space-y-1 mb-3">
+                    {projects.map(p => (
+                      <label key={p.id} className="flex items-center gap-2 text-sm text-fb-ink py-1">
+                        <input type="checkbox" checked={g.projectIds.includes(p.id)} onChange={() => toggleMember(g.id, p.id)} />
+                        <span className="truncate">{p.name || 'Untitled project'}</span>
+                        {p.jobNumber ? <span className="text-xs font-data text-fb-ink-muted">#{p.jobNumber}</span> : null}
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <button onClick={() => removeGroup(g.id)}
+                  className="text-sm font-semibold py-2 px-3 rounded-lg border active:opacity-80"
+                  style={armId === g.id ? { background: FBC.error, borderColor: FBC.error, color: '#fff' } : { borderColor: FBC.error, color: FBC.error }}>
+                  {armId === g.id ? 'Tap again to delete group' : 'Delete group'}
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex gap-2">
+            <button onClick={onClose} className="flex-1 py-3 rounded-xl border border-fb-border text-fb-ink-muted font-semibold text-sm active:opacity-80">Cancel</button>
+            <button onClick={done} className="flex-1 py-3 rounded-xl font-semibold text-sm text-white active:opacity-80" style={{ background: FBC.accent }}>Save</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function TimelinePage() {
+    const [groups, setGroups] = useState(() => loadGroups());
+    const [activeGroup, setActiveGroup] = useState('');
+    const [showGroups, setShowGroups] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const toast = useToast();
+
+    const projects = DB.getProjects();
+    const group = groups.find(g => g.id === activeGroup) || null;
+    const data = group ? fbSchedule.portfolioFor(projects, group.projectIds) : fbSchedule.portfolio(projects);
+    const R = timelineRange(data);
+    const pxd = TL_PX;
+    const W = (R.re - R.rs + 1) * pxd;
+    const X = n => (n - R.rs) * pxd;
+    const leftW = 150;
+
+    const monthTicks = [];
+    for (let n = R.rs; n <= R.re;) {
+      const d = new Date(n * 864e5);
+      const nm = Math.min(R.re + 1, Math.round(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) / 864e5));
+      monthTicks.push({ n, w: (nm - n) * pxd, label: d.toLocaleString('en-CA', { month: 'short', year: 'numeric', timeZone: 'UTC' }) });
+      n = nm;
+    }
+    const weekStarts = [];
+    for (let n = R.rs; n <= R.re; n += 7) weekStarts.push(n);
+
+    const navBack = () => navigate('#/');
+    const title = group ? group.name : 'Survey Timeline';
+
+    function saveGroupList(next) {
+      setGroups(next);
+      saveGroups(next);
+      if (!next.some(g => g.id === activeGroup)) setActiveGroup('');
+    }
+
+    return (
+      <div className="flex flex-col h-full bg-fb-page">
+        <NavBar title={title} onBack={navBack} actions={
+          <button onClick={() => exportTimelinePDF(data, title, toast, setBusy)} disabled={busy || !data.rows.length}
+            className="p-2 rounded-xl active:opacity-70 transition-colors disabled:opacity-40" title="Export timeline PDF">
+            <Ico.Download />
+          </button>
+        } />
+
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-fb-border">
+          <button onClick={() => setActiveGroup('')} aria-pressed={!group}
+            className={'px-3 py-2 rounded-lg text-sm border ' + (!group ? 'text-white font-semibold border-transparent' : 'text-fb-ink border-fb-border bg-fb-page-alt')}
+            style={!group ? { background: FBC.cover } : undefined}>All projects</button>
+          {groups.map(g => (
+            <button key={g.id} onClick={() => setActiveGroup(g.id)} aria-pressed={group?.id === g.id}
+              className={'px-3 py-2 rounded-lg text-sm border ' + (group?.id === g.id ? 'text-white font-semibold border-transparent' : 'text-fb-ink border-fb-border bg-fb-page-alt')}
+              style={group?.id === g.id ? { background: FBC.cover } : undefined}>{g.name}</button>
+          ))}
+          <button onClick={() => setShowGroups(true)} className="px-3 py-2 rounded-lg text-sm font-semibold text-fb-ink border border-fb-border bg-fb-page-alt active:opacity-80">
+            {groups.length ? 'Edit groups' : 'Make a group'}
+          </button>
+        </div>
+
+        {data.rows.length === 0 ? (
+          <div className="px-4 py-10 text-center text-fb-ink-muted text-sm">
+            <p className="font-semibold text-fb-ink mb-1">{group ? 'Nothing in this group yet' : 'No survey dates yet'}</p>
+            {group ? 'Open Edit groups and tick the projects to add. Their survey dates will show here.'
+              : "Add a survey date on a project's title page and it will appear here."}
+          </div>
+        ) : (
+          <div className="flex-1 overflow-auto">
+            <div style={{ width: leftW + W, position: 'relative' }}>
+              <div className="sch-head" style={{ height: 46 }}>
+                <div className="sch-left" style={{ width: leftW, height: 46 }}>
+                  <span className="text-[11px] font-bold uppercase tracking-widest text-fb-ink-muted">Project</span>
+                </div>
+                <div className="sch-tl" style={{ width: W, height: 46 }}>
+                  {monthTicks.map((m, i) => (
+                    <div key={i} className="sch-tk sch-month" style={{ left: X(m.n), width: m.w, top: 0, height: 22 }}>{m.w > 60 ? m.label : ''}</div>
+                  ))}
+                  {weekStarts.map(n => (
+                    <div key={n} className="sch-tk" style={{ left: X(n), width: 7 * pxd, top: 22, height: 24 }}>{new Date(n * 864e5).getUTCDate()}</div>
+                  ))}
+                  <div className="sch-today" style={{ left: X(R.todayN) + pxd / 2 }} />
+                </div>
+              </div>
+
+              {data.rows.map(r => (
+                <div key={r.projectId} className="sch-row" style={{ height: 46, width: leftW + W }}
+                  onClick={() => navigate('#/project/' + r.projectId)}>
+                  <div className="sch-left" style={{ width: leftW, height: 46 }}>
+                    <div className="min-w-0 w-full">
+                      <div className="sch-name">{r.name || 'Untitled project'}</div>
+                      <div className="sch-wbs">{r.jobNumber ? '#' + r.jobNumber : ''}{r.status !== 'live' ? (r.jobNumber ? ' · ' : '') + r.status : ''}</div>
+                    </div>
+                  </div>
+                  <div className="sch-tl" style={{ width: W, height: 46 }}>
+                    <div className="sch-sum" style={{ left: X(r.s) + pxd / 2, width: (r.f - r.s) * pxd, top: 36 }} />
+                    {r.days.map(d => (
+                      <div key={d.day} className={'sch-bar ' + timelineBlockClass(r.status, d.day, R.todayN)}
+                        title={`${d.iso}${d.count > 1 ? ' · ' + d.count + ' title pages' : ''}`}
+                        style={{ left: X(d.day) + 2, width: pxd - 4, top: 9, height: 22 }} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {showGroups && (
+          <GroupsSheet groups={groups} projects={projects} onSave={saveGroupList} onClose={() => setShowGroups(false)} />
+        )}
+      </div>
+    );
+  }
+
+  // Landscape A4 PDF of the timeline: project names on the left, one row per
+  // project, a block per survey day, the span as a thin rule, today as a line.
+  // Black, white and grey only (see DESIGN.md → PDF Export rules).
+  async function exportTimelinePDF(data, title, toast, setBusy) {
+    if (!window.jspdf?.jsPDF) { toast.error('PDF library not loaded'); return; }
+    if (!data.rows.length) { toast.error('No survey dates to export yet'); return; }
+    setBusy(true);
+    try {
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+      const PW = 297, PH = 210, m = 12, labelW = 62;
+      const x0 = m + labelW, x1 = PW - m;
+      const R = timelineRange(data);
+      const total = R.re - R.rs + 1;
+      const mm = (x1 - x0) / total;
+      const X = n => x0 + (n - R.rs) * mm;
+      const topRows = 40, rowH = 9;
+      const perPage = Math.floor((PH - topRows - 14) / rowH);
+      const pages = Math.max(1, Math.ceil(data.rows.length / perPage));
+      const dtN = n => new Date(n * 864e5).toLocaleString('en-CA', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+      const todayIso = todayLocalISO();
+      const dateLine = `${dtN(data.minDay)} to ${dtN(Math.max(data.maxDay, R.todayN))}`;
+      const heading = _pdfPlain(title || 'Survey Timeline');
+
+      for (let pg = 0; pg < pages; pg++) {
+        if (pg > 0) pdf.addPage('a4', 'landscape');
+        pdf.setTextColor(30, 30, 30);
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(15);
+        pdf.text(heading, m, 16);
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(90, 90, 90);
+        pdf.text(`${dateLine}   ·   generated ${todayIso}   ·   ${data.rows.length} project${data.rows.length === 1 ? '' : 's'}`, m, 22);
+
+        // month and week scale
+        pdf.setDrawColor(160, 160, 160); pdf.setLineWidth(0.2);
+        pdf.line(x0, topRows - 6, x1, topRows - 6);
+        for (let n = R.rs; n <= R.re; n += 7) {
+          const x = X(n);
+          pdf.setFontSize(7); pdf.setTextColor(90, 90, 90);
+          pdf.text(dtN(n), x + 0.8, topRows - 9);
+          pdf.setDrawColor(215, 215, 215);
+          pdf.line(x, topRows - 6, x, PH - 12);
+        }
+        // today
+        const tx = X(R.todayN) + mm / 2;
+        pdf.setDrawColor(30, 30, 30); pdf.setLineWidth(0.3);
+        pdf.line(tx, topRows - 6, tx, PH - 12);
+
+        const slice = data.rows.slice(pg * perPage, (pg + 1) * perPage);
+        slice.forEach((r, k) => {
+          const y = topRows + k * rowH;
+          pdf.setTextColor(30, 30, 30); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9);
+          const full = _pdfPlain(r.name || 'Untitled project');
+          let name = full;
+          while (pdf.getTextWidth(name) > labelW - 3 && name.length > 1) {
+            name = name.slice(0, -1);
+            if (pdf.getTextWidth(name + '..') <= labelW - 3) { name += '..'; break; }
+          }
+          pdf.text(name, m, y + 4.2);
+          if (r.jobNumber || r.status !== 'live') {
+            pdf.setFontSize(7); pdf.setTextColor(110, 110, 110);
+            pdf.text(_pdfPlain([r.jobNumber ? '#' + r.jobNumber : '', r.status !== 'live' ? r.status : ''].filter(Boolean).join('  ')), m, y + 7.6);
+          }
+          // span rule
+          pdf.setDrawColor(110, 110, 110); pdf.setLineWidth(0.25);
+          pdf.line(X(r.s) + mm / 2, y + 4.5, X(r.f) + mm / 2, y + 4.5);
+          // survey day blocks
+          r.days.forEach(d => {
+            const x = X(d.day) + 0.5, w = mm - 1, h = 4;
+            if (d.iso > todayIso) {
+              pdf.setFillColor(255, 255, 255); pdf.setDrawColor(30, 30, 30); pdf.setLineWidth(0.25);
+              pdf.rect(x, y + 2.5, w, h, 'FD');
+            } else {
+              const grey = r.status === 'live' ? 40 : 150;
+              pdf.setFillColor(grey, grey, grey); pdf.setDrawColor(grey, grey, grey);
+              pdf.rect(x, y + 2.5, w, h, 'F');
+            }
+          });
+        });
+
+        pdf.setFontSize(8); pdf.setTextColor(90, 90, 90); pdf.setFont('helvetica', 'normal');
+        pdf.text(`Page ${pg + 1} of ${pages}`, PW - m, PH - 6, { align: 'right' });
+      }
+      const safe = (title || 'Survey Timeline').replace(/[^a-z0-9 _\-]/gi, '_');
+      pdf.save(`${safe} ${todayIso}.pdf`);
+    } catch (err) {
+      console.error('[exportTimelinePDF]', err);
+      toast.error('Could not make the PDF');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function getPageComponent(type) {
     if (type === 'sketch') return window.SketchPage;  // defined by sketch.js
     if (type === 'title')  return TitlePage;
@@ -8745,6 +9837,7 @@
     if (type === 'points') return DataPage;           // DataPage with locked PNEZD columns
     if (type === 'gnss')   return GnssPage;
     if (type === 'obstructions') return ObstructionPage;
+    if (type === 'tracker')  return TrackerPage;
     return DataPage;
   }
 
@@ -9188,6 +10281,793 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // POINTS PAGE TOOLS — inverse between two points, description code chips
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Grid inverse from point A to point B (PNEZD rows). Returns null when either
+  // point lacks a northing/easting. Azimuth is grid, clockwise from grid north.
+  function pointInverse(a, b) {
+    const num = v => { const n = parseFloat(String(v ?? '').replace(/,/g, '')); return isFinite(n) ? n : null; };
+    const n1 = num(a.cells?.col_north), e1 = num(a.cells?.col_east);
+    const n2 = num(b.cells?.col_north), e2 = num(b.cells?.col_east);
+    if (n1 === null || e1 === null || n2 === null || e2 === null) return null;
+    const dN = n2 - n1, dE = e2 - e1;
+    const hd = Math.hypot(dN, dE);
+    let az = Math.atan2(dE, dN) * 180 / Math.PI;
+    if (az < 0) az += 360;
+    const z1 = num(a.cells?.col_elev), z2 = num(b.cells?.col_elev);
+    const dZ = z1 !== null && z2 !== null ? z2 - z1 : null;
+    return { dN, dE, hd, az, dZ, sd: dZ !== null ? Math.hypot(hd, dZ) : null };
+  }
+
+  // Quadrant bearing, e.g. N 45°12'30" E. A zero-length line has no bearing.
+  function quadrantBearing(az, hd) {
+    if (!(hd > 0)) return '—';
+    if (az <= 90)  return `N ${formatDMS(az)} E`;
+    if (az <= 180) return `S ${formatDMS(180 - az)} E`;
+    if (az <= 270) return `S ${formatDMS(az - 180)} W`;
+    return `N ${formatDMS(360 - az)} W`;
+  }
+
+  function inverseText(fromPt, toPt, inv) {
+    const f = v => v.toFixed(3);
+    const lines = [
+      `Inverse ${fromPt} → ${toPt}`,
+      `Bearing ${quadrantBearing(inv.az, inv.hd)}  (Az ${inv.hd > 0 ? formatDMS(inv.az) : '—'})`,
+      `HD ${f(inv.hd)} m`,
+      `ΔN ${f(inv.dN)}  ΔE ${f(inv.dE)}`,
+    ];
+    if (inv.dZ !== null) lines.push(`ΔElev ${f(inv.dZ)}  SD ${f(inv.sd)}`);
+    return lines.join('\n');
+  }
+
+  // Sheet: pick two point numbers on this page and read the inverse.
+  function InverseSheet({ rows, initialFrom, initialTo, onClose }) {
+    const [from, setFrom] = useState(initialFrom || '');
+    const [to, setTo]     = useState(initialTo || '');
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const toast = useToast();
+    const find = pt => rows.find(r => String(r.cells?.col_ptnum ?? '').trim().toLowerCase() === pt.trim().toLowerCase());
+    const a = from.trim() ? find(from) : null;
+    const b = to.trim() ? find(to) : null;
+    const inv = a && b ? pointInverse(a, b) : null;
+    const problem = !from.trim() || !to.trim() ? null
+      : !a ? `No point ${from.trim()} on this page`
+      : !b ? `No point ${to.trim()} on this page`
+      : !inv ? 'Both points need a northing and easting'
+      : null;
+    const f = v => v.toFixed(3);
+    const inputCls = 'w-full px-3 py-3 rounded-xl text-base font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint';
+
+    async function copy() {
+      if (!inv) return;
+      const text = inverseText(from.trim(), to.trim(), inv);
+      try { await navigator.clipboard.writeText(text); toast.success('Inverse copied'); }
+      catch { toast.error('Copy failed'); }
+    }
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Inverse</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted font-data">Grid</span>
+          </div>
+          <div className="flex gap-2 mb-3">
+            <div className="flex-1">
+              <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5">From Pt #</p>
+              <input className={inputCls} value={from} onChange={e => setFrom(e.target.value)} inputMode="numeric" autoFocus={!initialFrom} />
+            </div>
+            <div className="flex-1">
+              <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5">To Pt #</p>
+              <input className={inputCls} value={to} onChange={e => setTo(e.target.value)} inputMode="numeric" autoFocus={!!initialFrom && !initialTo} />
+            </div>
+          </div>
+          {problem && <p className="text-sm text-fb-warn mb-3">{problem}</p>}
+          {inv && (
+            <div className="rounded-xl px-4 py-3 text-center bg-fb-field border border-fb-border mb-3" data-inverse-result>
+              <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1">Bearing</p>
+              <p className="font-data text-fb-ink text-[26px] leading-tight">{quadrantBearing(inv.az, inv.hd)}</p>
+              <p className="text-xs text-fb-ink-muted mt-1 font-data">Az {inv.hd > 0 ? formatDMS(inv.az) : '—'}</p>
+              <p className="font-data text-fb-ink text-[22px] leading-tight mt-2">{f(inv.hd)} m</p>
+              <p className="text-xs text-fb-ink-muted mt-1 font-data">ΔN {f(inv.dN)} · ΔE {f(inv.dE)}</p>
+              {inv.dZ !== null && <p className="text-xs text-fb-ink-muted font-data">ΔElev {f(inv.dZ)} · SD {f(inv.sd)}</p>}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={onClose}>Close</button>
+            <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint" disabled={!inv} onClick={copy}>Copy result</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Bearing text → grid azimuth in decimal degrees, or null. Takes an azimuth
+  // in any DMS form parseDMSInput reads (123 45 30, 123.4530, 123°45'30"), or a
+  // quadrant bearing: N 45 12 30 E, S45.1230W.
+  function parseBearing(raw) {
+    const s = String(raw ?? '').trim();
+    if (!s) return null;
+    const q = s.match(/^([NS])\s*(.+?)\s*([EW])$/i);
+    if (q) {
+      const a = parseDMSInput(q[2]);
+      if (a === null || a < 0 || a > 90) return null;
+      const ns = q[1].toUpperCase(), ew = q[3].toUpperCase();
+      const az = ns === 'N' ? (ew === 'E' ? a : 360 - a) : (ew === 'E' ? 180 - a : 180 + a);
+      return az % 360;
+    }
+    const az = parseDMSInput(s);
+    return az === null || az < 0 || az >= 360 ? null : az;
+  }
+
+  // New point from a known point, a grid azimuth and a horizontal distance.
+  function forwardPoint(n, e, az, hd) {
+    const r = az * Math.PI / 180;
+    return { n: n + hd * Math.cos(r), e: e + hd * Math.sin(r) };
+  }
+
+  // Slope shot → HD and VD. Zenith in decimal degrees (0 = straight up,
+  // 90 = level). The new elevation is from + HI + VD − HR.
+  function slopeReduce(sd, zen) {
+    const r = zen * Math.PI / 180;
+    return { hd: sd * Math.sin(r), vd: sd * Math.cos(r) };
+  }
+
+  const ptKey = v => String(v ?? '').trim().toLowerCase();
+  const findPt = (rows, num) => num.trim() ? rows.find(r => ptKey(r.cells?.col_ptnum) === ptKey(num)) : null;
+  const ptNE = r => {
+    const num = v => { const x = parseFloat(String(v ?? '').replace(/,/g, '')); return isFinite(x) ? x : null; };
+    const n = num(r?.cells?.col_north), e = num(r?.cells?.col_east);
+    return n === null || e === null ? null : { n, e };
+  };
+  const sheetLabel = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
+  const sheetInput = 'w-full px-3 py-3 rounded-xl text-base font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint';
+
+  // Sheet: forward a new point (bearing + distance) from a point on this page.
+  function ForwardPointSheet({ rows, projectId, initialFrom, suggestNum, onAdd, onClose }) {
+    const [from, setFrom] = useState(initialFrom || '');
+    const [brg, setBrg]   = useState('');
+    const [dist, setDist] = useState('');
+    const [num, setNum]   = useState(suggestNum || '');
+    const [desc, setDesc] = useState('');
+    const [slope, setSlope] = useState(false);   // false: HD entry · true: SD + zenith + HI/HR
+    const [zen, setZen]   = useState('');
+    const [hi, setHi]     = useState('');
+    const [hr, setHr]     = useState('');
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+
+    const numOf = v => { const x = parseFloat(String(v ?? '').replace(/,/g, '')); return isFinite(x) ? x : null; };
+    const a  = findPt(rows, from);
+    const ne = ptNE(a);
+    const az = parseBearing(brg);
+    const d  = numOf(dist);
+    const z  = slope && zen.trim() ? parseDMSInput(zen) : null;
+    const zOk = z !== null && z > 0 && z < 180;
+    const red = slope && zOk && d > 0 ? slopeReduce(d, z) : null;
+    const hd = slope ? (red ? red.hd : null) : d;
+    const fromZ = numOf(a?.cells?.col_elev);
+    const hiV = hi.trim() ? numOf(hi) : 0, hrV = hr.trim() ? numOf(hr) : 0;
+    const elev = red && fromZ !== null && hiV !== null && hrV !== null ? fromZ + hiV + red.vd - hrV : null;
+    const taken = num.trim() && isPtNumTaken(projectId, num.trim());
+    const res = ne && az !== null && hd > 0 ? forwardPoint(ne.n, ne.e, az, hd) : null;
+    const problem = from.trim() && !a ? `No point ${from.trim()} on this page`
+      : a && !ne ? `Point ${from.trim()} needs a northing and easting`
+      : brg.trim() && az === null ? 'Can\'t read that bearing'
+      : dist.trim() && !(d > 0) ? 'Distance must be more than 0'
+      : slope && zen.trim() && !zOk ? 'Zenith must be between 0° and 180°'
+      : slope && (hiV === null || hrV === null) ? 'Can\'t read HI or HR'
+      : taken ? `Point ${num.trim()} is already used`
+      : null;
+    const canAdd = res && num.trim() && !taken && !problem;
+
+    function add() {
+      if (!canAdd) return;
+      onAdd({ number: num.trim(), n: res.n.toFixed(3), e: res.e.toFixed(3), z: elev !== null ? elev.toFixed(3) : '', desc: desc.trim() });
+    }
+    const chip = on => `flex-1 h-9 rounded-lg text-sm font-semibold border ${on
+      ? 'bg-fb-cover border-fb-cover text-white'
+      : 'bg-fb-page-alt border-fb-border text-fb-heading'}`;
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" data-forward-sheet>
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Forward point</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted font-data">Grid</span>
+          </div>
+          <div className="flex gap-2 mb-3">
+            <div className="w-24">
+              <p className={sheetLabel}>From Pt #</p>
+              <input className={sheetInput} value={from} onChange={e => setFrom(e.target.value)} inputMode="numeric" autoFocus={!initialFrom} data-fwd-from />
+            </div>
+            <div className="flex-1">
+              <p className={sheetLabel}>Bearing or azimuth</p>
+              <input className={sheetInput} value={brg} onChange={e => setBrg(e.target.value)} placeholder="N 45 12 30 E" autoFocus={!!initialFrom} data-fwd-brg />
+            </div>
+          </div>
+          <div className="flex gap-2 mb-3">
+            <button className={chip(!slope)} onClick={() => setSlope(false)} data-fwd-mode-hd>HD</button>
+            <button className={chip(slope)} onClick={() => setSlope(true)} data-fwd-mode-slope>Slope shot</button>
+          </div>
+          <div className="flex gap-2 mb-3">
+            <div className="flex-1">
+              <p className={sheetLabel}>{slope ? 'SD (m)' : 'HD (m)'}</p>
+              <input className={sheetInput} value={dist} onChange={e => setDist(e.target.value)} inputMode="decimal" data-fwd-dist />
+            </div>
+            {slope && (
+              <div className="flex-1">
+                <p className={sheetLabel}>Zenith</p>
+                <input className={sheetInput} value={zen} onChange={e => setZen(e.target.value)} placeholder="90 00 00" data-fwd-zen />
+              </div>
+            )}
+            <div className="w-24">
+              <p className={sheetLabel}>New Pt #</p>
+              <input className={sheetInput} value={num} onChange={e => setNum(e.target.value)} inputMode="numeric" data-fwd-num />
+            </div>
+          </div>
+          {slope && (
+            <div className="flex gap-2 mb-3">
+              <div className="flex-1">
+                <p className={sheetLabel}>HI (m)</p>
+                <input className={sheetInput} value={hi} onChange={e => setHi(e.target.value)} inputMode="decimal" placeholder="0.000" data-fwd-hi />
+              </div>
+              <div className="flex-1">
+                <p className={sheetLabel}>HR (m)</p>
+                <input className={sheetInput} value={hr} onChange={e => setHr(e.target.value)} inputMode="decimal" placeholder="0.000" data-fwd-hr />
+              </div>
+            </div>
+          )}
+          <p className={sheetLabel}>Description</p>
+          <input className={`${sheetInput} mb-3`} value={desc} onChange={e => setDesc(e.target.value)} data-fwd-desc />
+          {problem && <p className="text-sm text-fb-warn mb-3">{problem}</p>}
+          {res && (
+            <div className="rounded-xl px-4 py-3 text-center bg-fb-field border border-fb-border mb-3" data-forward-result>
+              <p className="text-xs text-fb-ink-muted font-data mb-1">{quadrantBearing(az, hd)} · Az {formatDMS(az)}</p>
+              <p className="font-data text-fb-ink text-[22px] leading-tight">N {res.n.toFixed(3)}</p>
+              <p className="font-data text-fb-ink text-[22px] leading-tight">E {res.e.toFixed(3)}</p>
+              {red && <p className="font-data text-fb-ink text-[22px] leading-tight">{elev !== null ? `Z ${elev.toFixed(3)}` : 'Z —'}</p>}
+              {red && <p className="text-xs text-fb-ink-muted font-data mt-1">HD {red.hd.toFixed(3)} · VD {red.vd.toFixed(3)}</p>}
+              {red && fromZ === null && <p className="text-xs text-fb-warn mt-1">Point {from.trim()} has no elevation</p>}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={onClose}>Close</button>
+            <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint" disabled={!canAdd} onClick={add}>
+              {num.trim() ? `Add point ${num.trim()}` : 'Add point'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Angle calculator — the Survey Calculator's angle page, in a sheet ──
+  // Everything works in decimal degrees; results are rounded to whole seconds.
+  const angNorm = dd => { const s = Math.round(dd * 3600); return (((s % 1296000) + 1296000) % 1296000) / 3600; };
+
+  // Compact D.MMSS (1–4 decimal digits, padded: 45.3 → 45°30'00"), else any form parseDMSInput reads.
+  function parseAngleDMS(raw) {
+    const s = String(raw ?? '').trim();
+    if (!s) return null;
+    const c = s.match(/^(-?)(\d+)\.(\d{1,4})$/);
+    if (c) {
+      const fr = (c[3] + '0000').slice(0, 4), m = +fr.slice(0, 2), sec = +fr.slice(2);
+      if (m > 59 || sec > 59) return null;
+      return (c[1] ? -1 : 1) * (+c[2] + m / 60 + sec / 3600);
+    }
+    return parseDMSInput(s);
+  }
+  function parseAngleBrg(raw) {
+    const s = String(raw ?? '').trim().toUpperCase();
+    const one = { N: 0, E: 90, S: 180, W: 270 }[s];
+    if (one !== undefined) return one;
+    const q = s.match(/^([NS])\s*(.+?)\s*([EW])$/);
+    if (!q) return null;
+    const a = parseAngleDMS(q[2]);
+    if (a === null || a < 0 || a > 90) return null;
+    return q[1] === 'N' ? (q[3] === 'E' ? a : 360 - a) : (q[3] === 'E' ? 180 - a : 180 + a);
+  }
+  // DMS with a chosen number of decimals on the seconds.
+  function dmsStr(dd, dp = 0) {
+    const neg = dd < 0, v = Math.abs(dd);
+    let d = Math.floor(v), m = Math.floor((v - d) * 60);
+    let s = +(((v - d) * 60 - m) * 60).toFixed(dp);
+    if (s >= 60) { s = 0; m++; } if (m >= 60) { m = 0; d++; }
+    const ss = s.toFixed(dp).padStart(dp ? dp + 3 : 2, '0');
+    return `${neg ? '-' : ''}${d}°${String(m).padStart(2, '0')}'${ss}"`;
+  }
+  function compactStr(dd) {
+    const neg = dd < 0, v = Math.abs(dd);
+    let d = Math.floor(v), m = Math.floor((v - d) * 60), s = Math.round(((v - d) * 60 - m) * 60);
+    if (s >= 60) { s = 0; m++; } if (m >= 60) { m = 0; d++; }
+    return `${neg ? '-' : ''}${d}.${String(m).padStart(2, '0')}${String(s).padStart(2, '0')}`;
+  }
+  function brgParts(az) {
+    const a = ((az % 360) + 360) % 360, E = 1e-8;
+    if (Math.abs(a) < E || Math.abs(a - 360) < E) return { card: 'N' };
+    if (Math.abs(a - 90) < E) return { card: 'E' };
+    if (Math.abs(a - 180) < E) return { card: 'S' };
+    if (Math.abs(a - 270) < E) return { card: 'W' };
+    if (a < 90) return { p: 'N', q: 'E', sub: a };
+    if (a < 180) return { p: 'S', q: 'E', sub: 180 - a };
+    if (a < 270) return { p: 'S', q: 'W', sub: a - 180 };
+    return { p: 'N', q: 'W', sub: 360 - a };
+  }
+  const brgStr = (az, dp = 0) => { const b = brgParts(az); return b.card || `${b.p} ${dmsStr(b.sub, dp)} ${b.q}`; };
+  const brgCompact = az => { const b = brgParts(az); return b.card || `${b.p}${compactStr(b.sub)}${b.q}`; };
+
+  const ANG_CALC_FMTS = {
+    dms: { label: 'DMS', ph: '45.3423', parse: parseAngleDMS, show: dmsStr, short: compactStr },
+    dd:  { label: 'DD',  ph: '45.573056', parse: r => { const x = parseFloat(r); return isFinite(x) ? x : null; }, show: dd => dd.toFixed(6) + '°', short: dd => dd.toFixed(6) },
+    brg: { label: 'BRG', ph: 'N45.4530E', parse: parseAngleBrg, show: brgStr, short: brgCompact },
+  };
+  const ANG_CONV_FMTS = [
+    { id: 'dd',      label: 'DD',     name: 'DD',          ph: '45.758333', parse: r => { const x = parseFloat(r); return isFinite(x) ? x : null; } },
+    { id: 'dms',     label: 'DMS',    name: 'DMS',         ph: '45 45 30',  parse: r => /^-?\d+\.\d+$/.test(r.trim()) ? null : parseDMSInput(r) },
+    { id: 'compact', label: 'D.MMSS', name: 'Compact DMS', ph: '45.4530',   parse: parseAngleDMS },
+    { id: 'rad',     label: 'RAD',    name: 'Radians',     ph: '0.798584',  parse: r => { const x = parseFloat(r); return isFinite(x) ? x * 180 / Math.PI : null; } },
+    { id: 'grad',    label: 'GRAD',   name: 'Grads',       ph: '50.8426',   parse: r => { const x = parseFloat(r); return isFinite(x) ? x * 0.9 : null; } },
+    { id: 'bearing', label: 'BRG',    name: 'Bearing',     ph: 'N45.4530E', parse: parseAngleBrg },
+  ];
+  // Seconds decimals to show: as many as were typed (DMS / bearing), else what the value needs.
+  function angleDP(dd, raw, fmt) {
+    if (fmt === 'compact') return 0;
+    if (fmt === 'dms' || fmt === 'bearing') {
+      let t = raw.trim();
+      if (fmt === 'bearing') {
+        t = t.replace(/^[NS]\s*/i, '').replace(/\s*[EW]$/i, '');
+        if (!/[\s°'"′″dms]/i.test(t)) return 0;   // compact N45.4530E: whole seconds
+      }
+      const m = t.match(/(\d+(?:\.(\d+))?)\s*["″sS]?$/);
+      return m && m[2] ? Math.min(m[2].length, 6) : 0;
+    }
+    const v = Math.abs(dd), d = Math.floor(v), mt = (v - d) * 60, s = Math.round((mt - Math.floor(mt)) * 60 * 1e9) / 1e9;
+    for (let dp = 0; dp <= 6; dp++) if (Math.abs(+s.toFixed(dp) - s) < 5e-8) return dp;
+    return 6;
+  }
+  function loadAngleLog() { try { const v = JSON.parse(localStorage.getItem('fb_angle_log') || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } }
+  function saveAngleLog(log) { try { localStorage.setItem('fb_angle_log', JSON.stringify(log.slice(-50))); } catch {} }
+
+  function AngleSheet({ onClose }) {
+    const [tab, setTab]   = useState('calc');
+    const [fmt, setFmt]   = useState('dms');
+    const [a, setA]       = useState('');
+    const [b, setB]       = useState('');
+    const [op, setOp]     = useState('add');
+    const [log, setLog]   = useState(loadAngleLog);
+    const [cvFmt, setCvFmt] = useState('dd');
+    const [cvIn, setCvIn] = useState('');
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const toast = useToast();
+    const F = ANG_CALC_FMTS[fmt];
+
+    const pa = a.trim() ? F.parse(a) : 0, pb = b.trim() ? F.parse(b) : 0;
+    const bad = pa === null || pb === null;
+    const [flip, setFlip] = useState(false);
+    useEffect(() => { setFlip(false); }, [a, b, op, fmt]);
+    const raw = !bad && (a.trim() || b.trim()) ? angNorm(op === 'add' ? pa + pb : pa - pb) : null;
+    const result = raw !== null && flip ? angNorm(raw + 180) : raw;
+    const flipVal = (v, set) => { const x = v.trim() ? F.parse(v) : null; if (x !== null) set(F.short(angNorm(x + 180))); };
+
+    async function copyText(text, msg) {
+      try { await navigator.clipboard.writeText(text); toast.success(msg); }
+      catch { toast.error('Copy failed'); }
+    }
+    function logStep() {
+      if (result === null) return;
+      const next = [...log, { n: (log.length ? log[log.length - 1].n : 0) + 1, a: a.trim() || '0', op: op === 'add' ? '+' : '−', b: b.trim() || '0', res: F.show(result), dd: result.toFixed(6) }];
+      setLog(next); saveAngleLog(next);
+    }
+    const logLine = e => `${e.n}. ${e.a} ${e.op} ${e.b} = ${e.res}`;
+
+    const cv = ANG_CONV_FMTS.find(x => x.id === cvFmt);
+    const cvDD = cvIn.trim() ? cv.parse(cvIn) : null;
+    const cvDP = cvDD !== null ? angleDP(cvDD, cvIn, cvFmt) : 0;
+    const cvRows = cvDD === null ? [] : [
+      { id: 'dd', name: 'DD', v: cvDD.toFixed(6) + '°' },
+      { id: 'dms', name: 'DMS', v: dmsStr(cvDD, cvDP) },
+      { id: 'compact', name: 'Compact DMS', v: compactStr(cvDD) },
+      { id: 'rad', name: 'Radians', v: (cvDD * Math.PI / 180).toFixed(6) + ' rad' },
+      { id: 'grad', name: 'Grads', v: (cvDD * 400 / 360).toFixed(4) + ' grad' },
+      { id: 'bearing', name: 'Bearing', v: brgStr(cvDD, cvDP) },
+    ];
+    const cvWide = cvDD !== null && Math.abs(cvDD) > 360;
+
+    const seg = on => `flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${on ? 'bg-fb-page text-fb-heading shadow-sm' : 'text-fb-ink-faint'}`;
+    const chip = on => `flex-1 h-9 rounded-lg text-sm font-semibold border ${on ? 'bg-fb-cover border-fb-cover text-white' : 'bg-fb-page-alt border-fb-border text-fb-heading'}`;
+    const act = 'h-9 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep disabled:text-fb-ink-faint';
+    const angInput = (val, set, key) => (
+      <div className="flex gap-2 items-center">
+        <input className={sheetInput} value={val} onChange={e => set(e.target.value)} placeholder={F.ph}
+          inputMode={fmt === 'brg' ? 'text' : 'decimal'} autoCapitalize="characters" data-angle-input={key} />
+        <button className={act} onClick={() => flipVal(val, set)} disabled={!val.trim()} data-angle-flip={key}>Flip 180°</button>
+        <button className={act} onClick={() => set('')} disabled={!val.trim()}>Clear</button>
+      </div>
+    );
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" data-angle-sheet>
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Angles</h2>
+          </div>
+          <div className="flex gap-1 p-1 rounded-xl bg-fb-page-alt mb-4">
+            <button className={seg(tab === 'calc')} onClick={() => setTab('calc')} data-angle-tab="calc">Calculator</button>
+            <button className={seg(tab === 'conv')} onClick={() => setTab('conv')} data-angle-tab="conv">Converter</button>
+          </div>
+
+          {tab === 'calc' ? (<>
+            <div className="flex gap-2 mb-3">
+              {Object.keys(ANG_CALC_FMTS).map(k => (
+                <button key={k} className={chip(fmt === k)} data-angle-fmt={k}
+                  onClick={() => { setFmt(k); setA(''); setB(''); }}>{ANG_CALC_FMTS[k].label}</button>
+              ))}
+            </div>
+            <p className={sheetLabel}>Angle A</p>
+            {angInput(a, setA, 'a')}
+            <div className="flex gap-2 my-3">
+              <button className={chip(op === 'add')} onClick={() => setOp('add')} data-angle-op="add">+</button>
+              <button className={chip(false)} onClick={() => { setA(b); setB(a); }} data-angle-swap>Swap A/B</button>
+              <button className={chip(op === 'sub')} onClick={() => setOp('sub')} data-angle-op="sub">−</button>
+            </div>
+            <p className={sheetLabel}>Angle B</p>
+            {angInput(b, setB, 'b')}
+            {bad && <p className="text-sm text-fb-warn mt-3">Can't read that angle</p>}
+            <div className="rounded-xl px-4 py-3 text-center bg-fb-field border border-fb-border mt-3 mb-2" data-angle-result>
+              <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1">Result</p>
+              <p className="font-data text-fb-ink text-[26px] leading-tight">{result !== null ? F.show(result) : '—'}</p>
+              <p className="text-xs text-fb-ink-muted mt-1 font-data">{result !== null ? `${result.toFixed(6)}° decimal` : 'Enter A and B'}</p>
+            </div>
+            <div className="flex flex-wrap gap-2 mb-3">
+              <button className={act} disabled={result === null} onClick={() => setFlip(f => !f)} data-angle-flip-res>Flip result 180°</button>
+              <button className={act} disabled={result === null} onClick={() => setA(F.short(result))} data-angle-to-a>Result to A</button>
+              <button className={act} disabled={result === null} onClick={() => setB(F.short(result))}>Result to B</button>
+              <button className={act} disabled={result === null} onClick={logStep} data-angle-log>Log step</button>
+              <button className={act} onClick={() => { setA(''); setB(''); setOp('add'); }}>Clear</button>
+            </div>
+            <p className={sheetLabel}>History</p>
+            {log.length ? (
+              <div className="rounded-xl bg-fb-page-alt border border-fb-border mb-2 max-h-40 overflow-y-auto" data-angle-history>
+                {log.map((e, i) => (
+                  <div key={i} className="flex items-center gap-2 px-3 py-2 border-b border-fb-border last:border-b-0">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-fb-ink-muted font-data truncate">{e.n}. {e.a} {e.op} {e.b}</p>
+                      <p className="text-sm text-fb-ink font-data">= {e.res}</p>
+                    </div>
+                    <button className={act} onClick={() => copyText(e.res, 'Step copied')}>Copy</button>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-sm text-fb-ink-muted py-4 text-center rounded-xl bg-fb-page-alt mb-2">No steps logged yet.</p>}
+            <div className="flex gap-2 mb-3">
+              <button className={act} disabled={!log.length} onClick={() => { setLog([]); saveAngleLog([]); }}>Clear history</button>
+              <button className={act} disabled={!log.length} onClick={() => copyText(['Angle calculations', ...log.map(logLine)].join('\n'), 'History copied')}>Copy all</button>
+            </div>
+            <div className="flex gap-2">
+              <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={onClose}>Close</button>
+              <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint"
+                disabled={result === null} onClick={() => copyText(F.show(result), 'Result copied')} data-angle-copy>Copy result</button>
+            </div>
+          </>) : (<>
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              {ANG_CONV_FMTS.map(x => (
+                <button key={x.id} className={chip(cvFmt === x.id)} onClick={() => setCvFmt(x.id)} data-angle-cvfmt={x.id}>{x.label}</button>
+              ))}
+            </div>
+            <p className={sheetLabel}>{cv.name}</p>
+            <input className={`${sheetInput} mb-3`} value={cvIn} onChange={e => setCvIn(e.target.value)} placeholder={cv.ph}
+              inputMode={cvFmt === 'bearing' ? 'text' : 'decimal'} autoCapitalize="characters" data-angle-cvin />
+            {cvIn.trim() && cvDD === null && <p className="text-sm text-fb-warn mb-3">Can't read that as {cv.name}</p>}
+            {cvWide && <p className="text-sm text-fb-warn mb-3">Over 360° — bearing shown for {angNorm(cvDD).toFixed(4)}°</p>}
+            {cvRows.length > 0 && (
+              <div className="rounded-xl bg-fb-field border border-fb-border mb-3" data-angle-cvrows>
+                {cvRows.map(r => (
+                  <div key={r.id} className="flex items-center gap-2 px-3 py-2 border-b border-fb-border last:border-b-0">
+                    <span className={`w-24 text-[10px] font-bold uppercase tracking-widest ${r.id === cvFmt ? 'text-fb-accent' : 'text-fb-ink-muted'}`}>{r.name}</span>
+                    <span className="flex-1 text-sm text-fb-ink font-data text-right" data-angle-cv={r.id}>{r.v}</span>
+                    <button className={act} onClick={() => copyText(r.v, `${r.name} copied`)}>Copy</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={onClose}>Close</button>
+              <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint"
+                disabled={!cvRows.length}
+                onClick={() => copyText(['Angle conversions', `Input: ${cvIn.trim()} (${cv.name})`, '', ...cvRows.map(r => `${r.name}: ${r.v}`)].join('\n'), 'Conversions copied')}
+                data-angle-cvcopy>Copy all</button>
+            </div>
+          </>)}
+        </div>
+      </div>
+    );
+  }
+
+  // Stakeout from an occupied point: angle turned clockwise from the backsight
+  // to the target, and the horizontal distance to set out.
+  function stakeout(oc, bs, tg) {
+    const azBs = pointInverse(oc, bs), azTg = pointInverse(oc, tg);
+    if (!azBs || !azTg || !(azBs.hd > 0) || !(azTg.hd > 0)) return null;
+    const right = ((azTg.az - azBs.az) % 360 + 360) % 360;
+    return { right, left: right === 0 ? 0 : 360 - right, hd: azTg.hd, az: azTg.az, bsAz: azBs.az, bsHd: azBs.hd, dZ: azTg.dZ };
+  }
+
+  function StakeoutSheet({ rows, initialOc, onClose }) {
+    const [oc, setOc] = useState(initialOc || '');
+    const [bs, setBs] = useState('');
+    const [tg, setTg] = useState('');
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const toast = useToast();
+    const pts = [oc, bs, tg].map(v => findPt(rows, v));
+    const names = [oc, bs, tg].map(v => v.trim());
+    const missing = names.findIndex((v, i) => v && !pts[i]);
+    const noNE = names.findIndex((v, i) => pts[i] && !ptNE(pts[i]));
+    const same = names[0] && (ptKey(names[0]) === ptKey(names[1]) || ptKey(names[0]) === ptKey(names[2]));
+    const so = pts.every(Boolean) && noNE < 0 && !same ? stakeout(pts[0], pts[1], pts[2]) : null;
+    const problem = missing >= 0 ? `No point ${names[missing]} on this page`
+      : noNE >= 0 ? `Point ${names[noNE]} needs a northing and easting`
+      : same ? 'Backsight and target must differ from the occupied point'
+      : null;
+    const f = v => v.toFixed(3);
+
+    async function copy() {
+      if (!so) return;
+      const lines = [
+        `Stakeout ${names[2]} from ${names[0]}, BS ${names[1]}`,
+        `Turn right ${formatDMS(so.right)}  (left ${formatDMS(so.left)})`,
+        `HD ${f(so.hd)} m  Az ${formatDMS(so.az)}`,
+        `BS Az ${formatDMS(so.bsAz)}  HD ${f(so.bsHd)}`,
+      ];
+      if (so.dZ !== null) lines.push(`ΔElev ${f(so.dZ)}`);
+      try { await navigator.clipboard.writeText(lines.join('\n')); toast.success('Stakeout copied'); }
+      catch { toast.error('Copy failed'); }
+    }
+
+    const field = (label, val, set, key, focus) => (
+      <div className="flex-1">
+        <p className={sheetLabel}>{label}</p>
+        <input className={sheetInput} value={val} onChange={e => set(e.target.value)} inputMode="numeric" autoFocus={focus} data-so={key} />
+      </div>
+    );
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" data-stakeout-sheet>
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Stakeout</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted font-data">Grid</span>
+          </div>
+          <div className="flex gap-2 mb-3">
+            {field('Occupied', oc, setOc, 'oc', !initialOc)}
+            {field('Backsight', bs, setBs, 'bs', !!initialOc)}
+            {field('Target', tg, setTg, 'tg', false)}
+          </div>
+          {problem && <p className="text-sm text-fb-warn mb-3">{problem}</p>}
+          {so && (
+            <div className="rounded-xl px-4 py-3 text-center bg-fb-field border border-fb-border mb-3" data-stakeout-result>
+              <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1">Turn right from BS</p>
+              <p className="font-data text-fb-ink text-[26px] leading-tight">{formatDMS(so.right)}</p>
+              <p className="text-xs text-fb-ink-muted mt-1 font-data">Left {formatDMS(so.left)}</p>
+              <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mt-3 mb-1">HD to target</p>
+              <p className="font-data text-fb-ink text-[22px] leading-tight">{f(so.hd)} m</p>
+              <p className="text-xs text-fb-ink-muted mt-1 font-data">Az {formatDMS(so.az)} · BS Az {formatDMS(so.bsAz)}</p>
+              {so.dZ !== null && <p className="text-xs text-fb-ink-muted font-data">ΔElev {f(so.dZ)}</p>}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={onClose}>Close</button>
+            <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint" disabled={!so} onClick={copy}>Copy result</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Intersection of two lines (bearings) and/or circles (distances) from two
+  // known points. Each `a`/`b` is { n, e, az } or { n, e, d }. Bearings are
+  // rays: a solution has to lie ahead of the point along its bearing.
+  function intersect(a, b) {
+    const EPS = 1e-9;
+    const dir = az => { const r = az * Math.PI / 180; return { n: Math.cos(r), e: Math.sin(r) }; };
+    if (a.az != null && b.az != null) {
+      const u = dir(a.az), v = dir(b.az);
+      const den = u.e * v.n - u.n * v.e;
+      if (Math.abs(den) < EPS) return [];
+      const dn = b.n - a.n, de = b.e - a.e;
+      const t = (de * v.n - dn * v.e) / den;
+      const s = (de * u.n - dn * u.e) / den;
+      if (t <= EPS || s <= EPS) return [];
+      return [{ n: a.n + t * u.n, e: a.e + t * u.e }];
+    }
+    if (a.d != null && b.d != null) {
+      const dn = b.n - a.n, de = b.e - a.e, D = Math.hypot(dn, de);
+      if (D < EPS || D > a.d + b.d + 1e-6 || D < Math.abs(a.d - b.d) - 1e-6) return [];
+      const x = (a.d * a.d - b.d * b.d + D * D) / (2 * D);
+      const h = Math.sqrt(Math.max(0, a.d * a.d - x * x));
+      const mn = a.n + x * dn / D, me = a.e + x * de / D;
+      if (h < 1e-6) return [{ n: mn, e: me }];
+      return [{ n: mn - h * de / D, e: me + h * dn / D }, { n: mn + h * de / D, e: me - h * dn / D }];
+    }
+    const ln = a.az != null ? a : b, ci = a.az != null ? b : a;
+    const u = dir(ln.az), fn = ln.n - ci.n, fe = ln.e - ci.e;
+    const p = fn * u.n + fe * u.e, q = fn * fn + fe * fe - ci.d * ci.d;
+    const disc = p * p - q;
+    if (disc < -1e-6) return [];
+    const r = Math.sqrt(Math.max(0, disc));
+    const ts = r < 1e-6 ? [-p] : [-p - r, -p + r];
+    return ts.filter(t => t > EPS).map(t => ({ n: ln.n + t * u.n, e: ln.e + t * u.e }));
+  }
+
+  const ISECT_MODES = [['bb', 'Brg–Brg'], ['dd', 'Dist–Dist'], ['bd', 'Brg–Dist'], ['db', 'Dist–Brg']];
+
+  // Sheet: intersection from two points on this page; adds the chosen solution.
+  function IntersectionSheet({ rows, projectId, initialA, initialB, suggestNum, onAdd, onClose }) {
+    const [mode, setMode] = useState('bb');
+    const [pa, setPa] = useState(initialA || '');
+    const [pb, setPb] = useState(initialB || '');
+    const [va, setVa] = useState('');
+    const [vb, setVb] = useState('');
+    const [pick, setPick] = useState(0);
+    const [num, setNum]   = useState(suggestNum || '');
+    const [desc, setDesc] = useState('');
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+
+    const kinds = [mode[0], mode[1]];
+    const read = (k, v) => {
+      if (!String(v).trim()) return undefined;
+      if (k === 'b') return parseBearing(v);
+      const d = parseFloat(String(v).replace(/,/g, ''));
+      return d > 0 ? d : null;
+    };
+    const names = [pa.trim(), pb.trim()];
+    const pts = names.map(v => findPt(rows, v));
+    const nes = pts.map(ptNE);
+    const vals = [read(kinds[0], va), read(kinds[1], vb)];
+    const ready = nes.every(Boolean) && vals.every(v => v != null) && ptKey(names[0]) !== ptKey(names[1]);
+    const sols = ready
+      ? intersect(...[0, 1].map(i => ({ ...nes[i], [kinds[i] === 'b' ? 'az' : 'd']: vals[i] })))
+      : [];
+    const sel = sols[Math.min(pick, sols.length - 1)];
+    const taken = num.trim() && isPtNumTaken(projectId, num.trim());
+    const missing = names.findIndex((v, i) => v && !pts[i]);
+    const noNE = names.findIndex((v, i) => pts[i] && !nes[i]);
+    const badVal = vals.findIndex(v => v === null);
+    const problem = missing >= 0 ? `No point ${names[missing]} on this page`
+      : noNE >= 0 ? `Point ${names[noNE]} needs a northing and easting`
+      : names[0] && ptKey(names[0]) === ptKey(names[1]) ? 'Use two different points'
+      : badVal >= 0 ? (kinds[badVal] === 'b' ? 'Can\'t read that bearing' : 'Distance must be more than 0')
+      : ready && !sols.length ? 'No intersection with these values'
+      : taken ? `Point ${num.trim()} is already used`
+      : null;
+    const canAdd = sel && num.trim() && !taken;
+
+    function add() {
+      if (!canAdd) return;
+      onAdd({ number: num.trim(), n: sel.n.toFixed(3), e: sel.e.toFixed(3), desc: desc.trim() });
+    }
+
+    const valLabel = k => k === 'b' ? 'Bearing or azimuth' : 'HD (m)';
+    const row = (label, p, setP, v, setV, k, key, focus) => (
+      <div className="flex gap-2 mb-3">
+        <div className="w-24">
+          <p className={sheetLabel}>{label}</p>
+          <input className={sheetInput} value={p} onChange={e => setP(e.target.value)} inputMode="numeric" autoFocus={focus} data-isect={`p${key}`} />
+        </div>
+        <div className="flex-1">
+          <p className={sheetLabel}>{valLabel(k)}</p>
+          <input className={sheetInput} value={v} onChange={e => setV(e.target.value)}
+            inputMode={k === 'b' ? 'text' : 'decimal'} placeholder={k === 'b' ? 'N 45 12 30 E' : ''} data-isect={`v${key}`} />
+        </div>
+      </div>
+    );
+
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" data-intersection-sheet>
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Intersection</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted font-data">Grid</span>
+          </div>
+          <div className="mb-3">
+            <GnSegmented options={ISECT_MODES} value={mode} label="Intersection type"
+              onChange={m => { setMode(m); setVa(''); setVb(''); setPick(0); }} />
+          </div>
+          {row('Point A', pa, setPa, va, setVa, kinds[0], 'a', !initialA)}
+          {row('Point B', pb, setPb, vb, setVb, kinds[1], 'b', false)}
+          {problem && <p className="text-sm text-fb-warn mb-3">{problem}</p>}
+          {sols.length > 0 && (
+            <div className={`grid gap-2 mb-3 ${sols.length > 1 ? 'grid-cols-2' : ''}`} data-intersection-result>
+              {sols.map((s, i) => (
+                <button key={i} type="button" onClick={() => setPick(i)} aria-pressed={sel === s}
+                  className={`rounded-xl px-3 py-3 text-center border ${sel === s ? 'bg-fb-field border-fb-accent' : 'bg-fb-field border-fb-border opacity-60'}`}>
+                  {sols.length > 1 && <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1">Solution {i + 1}</p>}
+                  <p className="font-data text-fb-ink text-lg leading-tight">N {s.n.toFixed(3)}</p>
+                  <p className="font-data text-fb-ink text-lg leading-tight">E {s.e.toFixed(3)}</p>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2 mb-3">
+            <div className="w-24">
+              <p className={sheetLabel}>New Pt #</p>
+              <input className={sheetInput} value={num} onChange={e => setNum(e.target.value)} inputMode="numeric" data-isect="num" />
+            </div>
+            <div className="flex-1">
+              <p className={sheetLabel}>Description</p>
+              <input className={sheetInput} value={desc} onChange={e => setDesc(e.target.value)} data-isect="desc" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={onClose}>Close</button>
+            <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint" disabled={!canAdd} onClick={add}>
+              {num.trim() ? `Add point ${num.trim()}` : 'Add point'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Description codes. The editable list is a device preference (fb_desc_codes);
+  // recent codes come from the first word of this page's descriptions.
+  const DEFAULT_DESC_CODES = ['IB', 'IP', 'CP', 'BM', 'PP', 'FH', 'CL', 'EP', 'TOB', 'BOB'];
+  function loadDescCodes() {
+    try {
+      const v = JSON.parse(localStorage.getItem('fb_desc_codes'));
+      if (Array.isArray(v)) return v.filter(c => typeof c === 'string' && c.trim());
+    } catch {}
+    return DEFAULT_DESC_CODES;
+  }
+  function saveDescCodes(codes) {
+    try { localStorage.setItem('fb_desc_codes', JSON.stringify(codes)); } catch {}
+  }
+  function recentDescCodes(rows, max = 6) {
+    const out = [];
+    for (let i = rows.length - 1; i >= 0 && out.length < max; i--) {
+      const w = String(rows[i].cells?.col_desc ?? '').trim().split(/\s+/)[0];
+      if (w && !out.includes(w.toUpperCase())) out.push(w.toUpperCase());
+    }
+    return out;
+  }
+  function parseDescCodes(text) {
+    const seen = new Set();
+    return text.split(/[\s,;]+/).map(c => c.trim().toUpperCase()).filter(c => c && !seen.has(c) && seen.add(c));
+  }
+
+  function DescCodesSheet({ codes, onSave, onClose }) {
+    const [text, setText] = useState(codes.join(' '));
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet">
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-fb-ink mb-4">Description codes</h2>
+          <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5">Codes</p>
+          <textarea rows={4} value={text} onChange={e => setText(e.target.value)} autoCapitalize="characters" spellCheck={false}
+            className="w-full px-3 py-3 rounded-xl text-base font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint mb-4"
+            placeholder="IB IP CP BM" />
+          <div className="flex gap-2">
+            <button className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep" onClick={() => setText(DEFAULT_DESC_CODES.join(' '))}>Reset</button>
+            <button className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80" onClick={() => onSave(parseDescCodes(text))}>Save codes</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // DATA PAGE
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -9206,6 +11086,13 @@
     const [insertSub, setInsertSub]     = useState(null); // 'rows' | 'cols' — the list open inside Insert ▾
     const [csvImportModal, setCsvImportModal] = useState(null); // null | { parsed, useHeader }
     const [gpsOpen, setGpsOpen]         = useState(false);  // GPS capture sheet (points pages)
+    const [inverseOpen, setInverseOpen] = useState(null);   // { from, to } while the Inverse sheet is open
+    const [forwardOpen, setForwardOpen] = useState(null);   // { from } while the Forward point sheet is open
+    const [stakeoutOpen, setStakeoutOpen] = useState(null); // { oc } while the Stakeout sheet is open
+    const [isectOpen, setIsectOpen]     = useState(null);   // { a, b } while the Intersection sheet is open
+    const [angleOpen, setAngleOpen]     = useState(false);  // Angle calculator sheet
+    const [descCodes, setDescCodes]     = useState(loadDescCodes);
+    const [codesOpen, setCodesOpen]     = useState(false);
     const [srcFilter, setSrcFilter]     = useState('all');  // points pages: 'all' | a fbGeo.SOURCES key
     const [menuPos, setMenuPos]         = useState({ top: 0, left: 0 }); // fixed-position for open dropdown
     // DMS keyboard — global setting persisted in localStorage, OFF by default
@@ -10793,6 +12680,33 @@
                     </button>
                   )}
                   <div className="dp-drop-sep" />
+                  <div className="dp-drop-section">Check</div>
+                  <button onClick={() => {
+                    setOpenTbMenu(null);
+                    const b = getSelectionBounds();
+                    const pt = i => String(rows[i]?.cells?.col_ptnum ?? '').trim();
+                    setInverseOpen(b ? { from: pt(b.minR), to: b.maxR !== b.minR ? pt(b.maxR) : '' } : { from: '', to: '' });
+                  }}>Inverse…</button>
+                  <div className="dp-drop-sep" />
+                  <div className="dp-drop-section">Compute</div>
+                  <button data-menu-forward onClick={() => {
+                    setOpenTbMenu(null);
+                    const b = getSelectionBounds();
+                    setForwardOpen({ from: b ? String(rows[b.minR]?.cells?.col_ptnum ?? '').trim() : '' });
+                  }}>Forward point…</button>
+                  <button data-menu-stakeout onClick={() => {
+                    setOpenTbMenu(null);
+                    const b = getSelectionBounds();
+                    setStakeoutOpen({ oc: b ? String(rows[b.minR]?.cells?.col_ptnum ?? '').trim() : '' });
+                  }}>Stakeout…</button>
+                  <button data-menu-intersection onClick={() => {
+                    setOpenTbMenu(null);
+                    const b = getSelectionBounds();
+                    const pt = i => String(rows[i]?.cells?.col_ptnum ?? '').trim();
+                    setIsectOpen(b ? { a: pt(b.minR), b: b.maxR !== b.minR ? pt(b.maxR) : '' } : { a: '', b: '' });
+                  }}>Intersection…</button>
+                  <button data-menu-angles onClick={() => { setOpenTbMenu(null); setAngleOpen(true); }}>Angles…</button>
+                  <div className="dp-drop-sep" />
                   <div className="dp-drop-section">Show points</div>
                   <button onClick={() => { setSrcFilter('all'); setOpenTbMenu(null); }}>
                     <span style={{ width: 14 }}>{srcFilter === 'all' ? '✓' : ''}</span> All ({rows.length})
@@ -10898,6 +12812,27 @@
             style={{ background: isFormulaEditing ? 'rgba(45,106,79,0.05)' : 'transparent' }}
           />
         </div>
+        {/* ── Description code chips (points pages, Description cell active) ── */}
+        {page.type === 'points' && activeCell && columns[activeCell.colIdx]?.id === 'col_desc' && rows[activeCell.rowIdx] && (() => {
+          const recent = recentDescCodes(rows);
+          const chips = [...recent, ...descCodes.filter(c => !recent.includes(c))];
+          // Cell being typed in: the code replaces the text and Enter saves it as usual.
+          // Cell only selected: one tap saves the code.
+          const apply = code => {
+            if (editingCell) { setEditValue(code); setFormulaBarVal(code); return; }
+            updateCell(rows[activeCell.rowIdx].id, 'col_desc', code);
+            setFormulaBarVal(code);
+          };
+          const chipCls = 'h-9 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 flex-shrink-0 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep';
+          return (
+            <div className="flex gap-1.5 px-2 py-1.5 overflow-x-auto" data-desc-chips>
+              {chips.map(c => (
+                <button key={c} className={chipCls + ' font-data'} onPointerDown={e => e.preventDefault()} onClick={() => apply(c)}>{c}</button>
+              ))}
+              <button className={chipCls} onPointerDown={e => e.preventDefault()} onClick={() => setCodesOpen(true)}><Ico.Pencil /> Codes</button>
+            </div>
+          );
+        })()}
         {/* ── Ref chips — colour-coded cell references in current formula ── */}
         {formulaRefs.length > 0 && (
           <div className="dp-ref-chips">
@@ -11388,6 +13323,42 @@
               </div>
             </div>
           </div>
+        )}
+
+        {inverseOpen && (
+          <InverseSheet rows={rows} initialFrom={inverseOpen.from} initialTo={inverseOpen.to} onClose={() => setInverseOpen(null)} />
+        )}
+        {stakeoutOpen && (
+          <StakeoutSheet rows={rows} initialOc={stakeoutOpen.oc} onClose={() => setStakeoutOpen(null)} />
+        )}
+        {isectOpen && (
+          <IntersectionSheet rows={rows} projectId={projectId} initialA={isectOpen.a} initialB={isectOpen.b}
+            suggestNum={nextPointNum(rows)} onClose={() => setIsectOpen(null)}
+            onAdd={pt => {
+              const cells = {};
+              columns.forEach(c => { cells[c.id] = ''; });
+              Object.assign(cells, { col_ptnum: pt.number, col_north: pt.n, col_east: pt.e, col_desc: pt.desc });
+              persistRows([...rows, { id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7), cells }]);
+              setIsectOpen(null);
+              toast.success(`Point ${pt.number} added`);
+            }} />
+        )}
+        {forwardOpen && (
+          <ForwardPointSheet rows={rows} projectId={projectId} initialFrom={forwardOpen.from}
+            suggestNum={nextPointNum(rows)} onClose={() => setForwardOpen(null)}
+            onAdd={pt => {
+              const cells = {};
+              columns.forEach(c => { cells[c.id] = ''; });
+              Object.assign(cells, { col_ptnum: pt.number, col_north: pt.n, col_east: pt.e, col_elev: pt.z || '', col_desc: pt.desc });
+              persistRows([...rows, { id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7), cells }]);
+              setForwardOpen(null);
+              toast.success(`Point ${pt.number} added`);
+            }} />
+        )}
+        {angleOpen && <AngleSheet onClose={() => setAngleOpen(false)} />}
+        {codesOpen && (
+          <DescCodesSheet codes={descCodes} onClose={() => setCodesOpen(false)}
+            onSave={codes => { saveDescCodes(codes); setDescCodes(codes); setCodesOpen(false); toast.success('Codes saved'); }} />
         )}
 
         {/* ── GPS capture (points pages) — the row lands on THIS page ── */}
@@ -13333,6 +15304,7 @@
           {route.view === 'home'    && <HomePage installPrompt={installPrompt} onInstalled={() => setInstallPrompt(null)} />}
           {route.view === 'project' && <ProjectView projectId={route.projectId} />}
           {route.view === 'page'    && <PageView    projectId={route.projectId} pageId={route.pageId} />}
+          {route.view === 'timeline' && <TimelinePage />}
         </div>
         {/* App-level: PWA file-open import modal */}
         {pendingFileImport && (

@@ -15,13 +15,18 @@
       "purpose": "any maskable"
     }
   ],
-  "categories": ["utilities", "productivity"],
+  "categories": [
+    "utilities",
+    "productivity"
+  ],
   "lang": "en-US",
   "file_handlers": [
     {
       "action": "./",
       "accept": {
-        "application/octet-stream": [".fieldbook"]
+        "application/octet-stream": [
+          ".fieldbook"
+        ]
       },
       "launch_type": "single-client"
     }
