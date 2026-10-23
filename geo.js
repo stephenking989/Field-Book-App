@@ -219,6 +219,7 @@
   //   'notes-pin'   Points-page row dropped from a Notes page
   //   'photo'       Points-page row created for a geotagged photo
   //   'voice'       Points-page row created for a geotagged voice note
+  //   'map-pin'     Points-page row placed by hand on the Map page (no height)
   // Every phone-sourced position is a real Points-page row, so it is numbered,
   // listed, exportable and placeable on a sketch like any other point.
   //
@@ -233,6 +234,7 @@
     'notes-pin':  { label: 'Notes pin',   tag: 'NOTE' },
     'photo':      { label: 'Photo',       tag: 'PHOTO' },
     'voice':      { label: 'Voice note',  tag: 'VOICE' },
+    'map-pin':    { label: 'Map pin',     tag: 'PIN' },
   };
 
   function num(v) {
@@ -528,14 +530,16 @@
   // How good a point's position is, in words.
   function qualityText(p) {
     if (!p.phone) return 'entered coordinates';
+    if (p.source === 'map-pin') return 'placed on map (approx.)';
     return p.from === 'exif' ? (fin(p.acc) ? `±${Math.round(p.acc)} m photo EXIF GPS` : 'photo EXIF GPS') : fmtAcc(p.acc);
   }
   function gridText(p) {
     if (p.N === null || p.E === null) return '';
     return `N ${p.text.n}  E ${p.text.e}${p.text.z ? '  Z ' + p.text.z : ''}`;
   }
-  // Lines describing a point for a map app's info balloon.
-  function describe(p, crs) {
+  // Lines describing a point for a map app's info balloon. `note` is the
+  // Points-page row's note (Map page), when it has one.
+  function describe(p, crs, note) {
     const out = [];
     const grid = gridText(p);
     if (grid) out.push(grid);
@@ -543,6 +547,7 @@
     out.push(`Source: ${SOURCES[p.source] ? SOURCES[p.source].label : p.source} · ${qualityText(p)}`);
     const when = fmtWhen(p.ts);
     if (when) out.push(when);
+    if (note && String(note).trim()) out.push(`Note: ${String(note).trim()}`);
     return out;
   }
 
@@ -559,12 +564,13 @@
   // KML (lat/lon), one folder per source category. Returns { text, count, skipped }.
   function toKML(points, project) {
     const crs = projectCrs(project);
+    const extras = rowExtras(project);
     const pts = points.filter(p => p.lat !== null && p.lon !== null);
     const folders = Object.keys(SOURCES).map(src => {
       const mine = pts.filter(p => p.source === src);
       if (!mine.length) return '';
       const marks = mine.map(p => {
-        const body = describe(p, crs).map(xmlEsc).join('<br/>').replace(/]]>/g, ']]&gt;');
+        const body = describe(p, crs, extras[p.id] && extras[p.id].note).map(xmlEsc).join('<br/>').replace(/]]>/g, ']]&gt;');
         const when = p.ts && !isNaN(new Date(p.ts)) ? `<TimeStamp><when>${new Date(p.ts).toISOString()}</when></TimeStamp>` : '';
         const alt = p.Z !== null ? ',' + p.Z.toFixed(1) : '';
         return `      <Placemark><name>${xmlEsc(pointName(p))}</name><description><![CDATA[${body}]]></description>${when}` +
@@ -588,12 +594,13 @@ ${folders}
   // category, which OsmAnd uses to group the waypoints.
   function toGPX(points, project) {
     const crs = projectCrs(project);
+    const extras = rowExtras(project);
     const pts = points.filter(p => p.lat !== null && p.lon !== null);
     const wpts = pts.map(p => {
       const ele  = p.Z !== null ? `<ele>${p.Z.toFixed(1)}</ele>` : '';
       const time = p.ts && !isNaN(new Date(p.ts)) ? `<time>${new Date(p.ts).toISOString()}</time>` : '';
       return `  <wpt lat="${p.lat.toFixed(8)}" lon="${p.lon.toFixed(8)}">${ele}${time}` +
-             `<name>${xmlEsc(pointName(p))}</name><desc>${xmlEsc(describe(p, crs).join(' | '))}</desc>` +
+             `<name>${xmlEsc(pointName(p))}</name><desc>${xmlEsc(describe(p, crs, extras[p.id] && extras[p.id].note).join(' | '))}</desc>` +
              `<type>${xmlEsc(SOURCES[p.source] ? SOURCES[p.source].label : p.source)}</type></wpt>`;
     }).join('\n');
     const text = `<?xml version="1.0" encoding="UTF-8"?>
@@ -607,6 +614,181 @@ ${wpts}
 </gpx>
 `;
     return { text, count: pts.length, skipped: points.length - pts.length };
+  }
+
+  // ─── Map page ──────────────────────────────────────────────────────────────
+  // What the Map page computes that isn't drawing: features, symbols, grid
+  // inverse and its formatting, areas. Pure, so test-map.js runs it in Node.
+  // The map only READS — nothing here writes a coordinate.
+
+  // GNSS Obs stations that have an approximate position (page.gnss.pos —
+  // lat/lon are numbers, h is text as typed). They aren't Points rows.
+  function gnssStations(project) {
+    const out = [];
+    (project && project.pages || []).forEach(pg => {
+      if (pg.type !== 'gnss' || !pg.gnss) return;
+      const pos = pg.gnss.pos || {};
+      if (!fin(pos.lat) || !fin(pos.lon)) return;
+      out.push({
+        id: 'gnss_' + pg.id, pageId: pg.id, pageTitle: pg.title || '',
+        name: String(pg.gnss.station || '').trim() || pg.title || 'GNSS station',
+        lat: pos.lat, lon: pos.lon, h: num(pos.h), source: 'gnss-station',
+      });
+    });
+    return out;
+  }
+
+  // Everything the map draws as a point. `points` is getProjectPoints exactly.
+  function getMapFeatures(project) {
+    return { points: getProjectPoints(project), stations: gnssStations(project) };
+  }
+
+  // Optional Points-row fields the map uses, by row id: the row's note, and
+  // mapPin — a pin dropped on a Local project, which has no geo.
+  function rowExtras(project) {
+    const out = {};
+    (project && project.pages || []).forEach(pg => {
+      if (pg.type !== 'points') return;
+      (pg.rows || []).forEach(r => {
+        if (r && (r.note || r.mapPin)) out[r.id] = { note: typeof r.note === 'string' ? r.note : '', mapPin: r.mapPin || null };
+      });
+    });
+    return out;
+  }
+
+  // Setup / control / boundary symbols are picked by the field code — the
+  // first word of the description — from per-project lists.
+  const DEFAULT_SYMBOL_CODES = {
+    setup:    ['STN', 'SETUP', 'SU', 'OCC', 'TS'],
+    control:  ['CP', 'CTRL', 'CNTL', 'BM', 'MON', 'NSCM', 'CM'],
+    boundary: ['IP', 'IB', 'IBFD', 'IR', 'PIN', 'RB', 'IRON', 'CORNER', 'COR', 'SIB', 'SM', 'SMFD'],
+  };
+  const SYMBOL_CODE_KINDS = ['setup', 'control', 'boundary'];
+  function parseCodeList(text) {
+    const seen = new Set();
+    return String(text || '').split(/[,;\s]+/).map(s => s.trim().toUpperCase()).filter(s => s && !seen.has(s) && seen.add(s));
+  }
+  function symbolCodes(project) {
+    const c = (project && project.mapSymbolCodes) || {};
+    const out = {};
+    SYMBOL_CODE_KINDS.forEach(k => {
+      out[k] = Array.isArray(c[k]) ? c[k].map(s => String(s).trim().toUpperCase()).filter(Boolean) : DEFAULT_SYMBOL_CODES[k].slice();
+    });
+    return out;
+  }
+  function pointCode(desc) {
+    const w = String(desc || '').trim().split(/\s+/)[0];
+    return w ? w.toUpperCase() : '';
+  }
+  // Which symbol a point gets: code symbol > source symbol > ordinary.
+  // Returns setup | control | boundary | map-pin | notes-pin | photo | voice | gps | topo.
+  const SOURCE_SYMBOL = { 'map-pin': 'map-pin', 'notes-pin': 'notes-pin', 'photo': 'photo', 'voice': 'voice', 'gps': 'gps' };
+  function pointSymbol(p, codes, extra) {
+    const code = pointCode(p.desc);
+    if (code) for (const k of SYMBOL_CODE_KINDS) if (codes[k] && codes[k].indexOf(code) !== -1) return k;
+    if (extra && extra.mapPin) return 'map-pin';
+    return SOURCE_SYMBOL[p.source] || 'topo';
+  }
+
+  // The photo records that belong to a Points row (its own, or linked to it).
+  function mediaForPoint(project, rowId, kind) {
+    const rows = rowPoints(project), out = [];
+    (project && project.pages || []).forEach(pg => {
+      if (pg.type !== 'photo') return;
+      ((kind === 'voice' ? pg.voiceNotes : pg.photos) || []).forEach(rec => {
+        const r = mediaRow(rec, rows);
+        if (r && r.id === rowId) out.push({ rec, pageId: pg.id });
+      });
+    });
+    return out;
+  }
+
+  // Stored grid N/E in one CRS shown in another — DISPLAY ONLY, never stored.
+  function convertGrid(n, e, fromId, toId) {
+    if (fromId === toId) return fin(n) && fin(e) ? { n, e } : null;
+    const ll = toLatLon(n, e, fromId);
+    return ll ? toGrid(ll.lat, ll.lon, toId) : null;
+  }
+
+  // Grid inverse between two { N, E, Z } in the same grid. Azimuth is from
+  // grid north, clockwise, 0 ≤ az < 360. dZ only when both heights exist.
+  function gridInverse(a, b) {
+    const dN = b.N - a.N, dE = b.E - a.E;
+    let az = Math.atan2(dE, dN) * 180 / Math.PI;
+    if (az < 0) az += 360;
+    if (az >= 360) az -= 360;
+    const dZ = (fin(a.Z) && fin(b.Z)) ? b.Z - a.Z : null;
+    return { dist: Math.hypot(dN, dE), az, dN, dE, dZ };
+  }
+
+  // Angles are rounded to whole seconds (or minutes) FIRST, as an integer
+  // count, so the carry (60″ → 1′, 60′ → 1°) and the quadrant come out of the
+  // same rounded value — 89.99999° is N 90°00′00″ E, never N 89°59′60″ E.
+  function angleUnits(deg, seconds) {
+    const unit = seconds ? 3600 : 60;
+    const full = 360 * unit;
+    let t = Math.round((((deg % 360) + 360) % 360) * unit);
+    if (t >= full) t -= full;
+    return { t, unit };
+  }
+  function unitsText(t, unit) {
+    const d = Math.floor(t / unit);
+    const rest = t - d * unit;
+    if (unit === 60) return `${d}°${pad2(rest)}′`;
+    const m = Math.floor(rest / 60);
+    return `${d}°${pad2(m)}′${pad2(rest - m * 60)}″`;
+  }
+  // Azimuth  ddd°mm′ss″ (360 → 0°00′00″). { seconds: false } → ddd°mm′.
+  function fmtAzimuth(az, opts) {
+    const { t, unit } = angleUnits(az, !(opts && opts.seconds === false));
+    return unitsText(t, unit);
+  }
+  // Quadrant bearing  N dd°mm′ss″ E. Cardinals: 0 → N 0° E, 90 → N 90° E,
+  // 180 → S 0° E, 270 → N 90° W.
+  function fmtQuadrant(az, opts) {
+    const { t, unit } = angleUnits(az, !(opts && opts.seconds === false));
+    const Q = 90 * unit;
+    if (t <= Q)     return `N ${unitsText(t, unit)} E`;
+    if (t <= 2 * Q) return `S ${unitsText(2 * Q - t, unit)} E`;
+    if (t < 3 * Q)  return `S ${unitsText(t - 2 * Q, unit)} W`;
+    return `N ${unitsText(4 * Q - t, unit)} W`;
+  }
+
+  // A number with thin-space thousands grouping: 4 985 312.4
+  function fmtThin(v, dec) {
+    if (!fin(v)) return '';
+    const s = Math.abs(v).toFixed(dec || 0).split('.');
+    s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return (v < 0 && Number(s.join('.')) !== 0 ? '−' : '') + s.join('.');
+  }
+
+  // Grid area (shoelace) and length of a run of { N, E } vertices.
+  function shoelaceArea(verts) {
+    let s = 0;
+    for (let i = 0; i < verts.length; i++) {
+      const a = verts[i], b = verts[(i + 1) % verts.length];
+      s += a.E * b.N - b.E * a.N;
+    }
+    return Math.abs(s) / 2;
+  }
+  function pathLength(verts, closed) {
+    let L = 0;
+    for (let i = 1; i < verts.length; i++) L += Math.hypot(verts[i].N - verts[i - 1].N, verts[i].E - verts[i - 1].E);
+    if (closed && verts.length > 2) L += Math.hypot(verts[0].N - verts[verts.length - 1].N, verts[0].E - verts[verts.length - 1].E);
+    return L;
+  }
+  function fmtArea(m2) {
+    return { m2: fmtThin(m2, 1) + ' m²', ha: (m2 / 10000).toFixed(4) + ' ha' };
+  }
+
+  // Grid-line spacing for the map's grid ticks: the smallest of 10/50/100/
+  // 500/1000 m that leaves at least `minPx` screen pixels between lines, or
+  // null when even 1000 m lines would be too dense.
+  const GRID_STEPS = [10, 50, 100, 500, 1000];
+  function gridStep(metresPerPixel, minPx) {
+    const px = minPx || 70;
+    for (const s of GRID_STEPS) if (s / metresPerPixel >= px) return s;
+    return null;
   }
 
   // ─── Self-test ─────────────────────────────────────────────────────────────
@@ -700,6 +882,61 @@ ${wpts}
     return { pass, rows };
   }
 
+  // Map-page arithmetic checks — fixed answers worked by hand. Shared by
+  // fbGeo.mapSelfTest() (browser console) and test-map.js (Node).
+  function mapChecks() {
+    const out = [];
+    const eq = (test, got, want) => out.push({ test, got: String(got), want: String(want), result: String(got) === String(want) ? 'PASS' : 'FAIL' });
+    const P = (N, E, Z) => ({ N, E, Z: Z === undefined ? null : Z });
+
+    const ne = gridInverse(P(1000, 1000), P(1100, 1100));
+    eq('inverse NE: distance', ne.dist.toFixed(3), '141.421');
+    eq('inverse NE: azimuth', fmtAzimuth(ne.az), '45°00′00″');
+    eq('inverse NE: quadrant', fmtQuadrant(ne.az), 'N 45°00′00″ E');
+    const sw = gridInverse(P(1000, 1000), P(900, 900));
+    eq('inverse SW: azimuth', fmtAzimuth(sw.az), '225°00′00″');
+    eq('inverse SW: quadrant', fmtQuadrant(sw.az), 'S 45°00′00″ W');
+    eq('due east', fmtQuadrant(gridInverse(P(0, 0), P(0, 10)).az), 'N 90°00′00″ E');
+    eq('due west', fmtQuadrant(gridInverse(P(0, 0), P(0, -10)).az), 'N 90°00′00″ W');
+    eq('due south', fmtQuadrant(gridInverse(P(0, 0), P(-10, 0)).az), 'S 0°00′00″ E');
+    eq('due north', fmtQuadrant(gridInverse(P(0, 0), P(10, 0)).az), 'N 0°00′00″ E');
+    eq('cardinal 0', fmtQuadrant(0), 'N 0°00′00″ E');
+    eq('cardinal 90', fmtQuadrant(90), 'N 90°00′00″ E');
+    eq('cardinal 180', fmtQuadrant(180), 'S 0°00′00″ E');
+    eq('cardinal 270', fmtQuadrant(270), 'N 90°00′00″ W');
+    eq('azimuth 360 → 0', fmtAzimuth(360), '0°00′00″');
+    eq('seconds carry 29.99999°', fmtAzimuth(29.99999), '30°00′00″');
+    eq('seconds carry into the quadrant', fmtQuadrant(89.99999), 'N 90°00′00″ E');
+    eq('minute carry', fmtAzimuth(10 + 59 / 60 + 59.6 / 3600), '11°00′00″');
+    eq('to the minute', fmtQuadrant(19.555, { seconds: false }), 'N 19°33′ E');
+    eq('dZ only with both heights', JSON.stringify([gridInverse(P(0, 0, 10), P(3, 4, 12.5)).dZ, gridInverse(P(0, 0, 10), P(3, 4)).dZ]), '[2.5,null]');
+
+    const sq = [P(0, 0), P(0, 100), P(100, 100), P(100, 0)];
+    const a1 = fmtArea(shoelaceArea(sq)), a2 = fmtArea(shoelaceArea(sq.slice().reverse()));
+    eq('square area m²', a1.m2, '10 000.0 m²');
+    eq('square area ha', a1.ha, '1.0000 ha');
+    eq('square area, other vertex order', a2.m2 + ' ' + a2.ha, a1.m2 + ' ' + a1.ha);
+    eq('square perimeter', pathLength(sq, true), 400);
+
+    eq('thin-space grouping', fmtThin(4985312.4, 1), '4 985 312.4');
+    eq('grid step at 0.5 m/px', gridStep(0.5), 50);
+    eq('symbol: code beats source', pointSymbol({ desc: 'ip fd', source: 'gps' }, DEFAULT_SYMBOL_CODES), 'boundary');
+    eq('symbol: source', pointSymbol({ desc: 'shed corner', source: 'photo' }, DEFAULT_SYMBOL_CODES), 'photo');
+    eq('symbol: ordinary', pointSymbol({ desc: 'GND', source: 'instrument' }, DEFAULT_SYMBOL_CODES), 'topo');
+    eq('symbol: Local map pin', pointSymbol({ desc: 'gate', source: 'instrument' }, DEFAULT_SYMBOL_CODES, { mapPin: { ts: 'x' } }), 'map-pin');
+    eq('map-pin quality', qualityText({ phone: true, source: 'map-pin', acc: null }), 'placed on map (approx.)');
+    return out;
+  }
+
+  // Run from the browser console:   fbGeo.mapSelfTest()
+  function mapSelfTest() {
+    const rows = mapChecks();
+    const pass = rows.every(r => r.result === 'PASS');
+    console.table(rows);
+    console.log(pass ? 'fbGeo map self-test: PASS' : 'fbGeo map self-test: FAIL');
+    return { pass, rows };
+  }
+
   window.fbGeo = {
     CRS_REGISTRY, DEFAULT_CRS, SOURCES, CONTROL_MONUMENTS,
     getCrs, projectCrsId, projectCrs, isGrid,
@@ -710,7 +947,12 @@ ${wpts}
     getProjectPoints, pointNumberCounts, usedPointNumbers, gpsPtStart, nextGpsPtNum,
     crsChangeSummary, applyCrsChange, datumMatchesCrs,
     parseRange, inRanges,
-    toPNEZD, toKML, toGPX, qualityText,
-    geoSelfTest,
+    toPNEZD, toKML, toGPX, qualityText, fmtWhen,
+    gnssStations, getMapFeatures, rowExtras,
+    DEFAULT_SYMBOL_CODES, SYMBOL_CODE_KINDS, parseCodeList, symbolCodes, pointCode, pointSymbol,
+    mediaForPoint, convertGrid, gridInverse, fmtAzimuth, fmtQuadrant, fmtThin,
+    shoelaceArea, pathLength, fmtArea, GRID_STEPS, gridStep,
+    GPS_GRID_DECIMALS, GPS_ELEV_DECIMALS,
+    geoSelfTest, mapSelfTest, mapChecks,
   };
 })();

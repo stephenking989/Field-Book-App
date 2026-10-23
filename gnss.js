@@ -839,7 +839,7 @@
   const api = {
     BUILTIN_ANTENNAS, DEFAULT_ANTENNA_ID, METHODS, DEFAULT_TOL,
     AERIAL_PROVIDER, AERIAL_PX, AERIAL_LAYER_ID, baseLayerId, groundResolution, aerialMeta, aerialSize, aerialFit, aerialMove, aerialTurn, turnBetween, aerialCentre,
-    IMAGE_SLOTS, pageImageRefs, SAT_HOST, SAT_ATTRIBUTION, SAT_ZOOM, tileXY, metresPerPixel, tilePlan, niceScale,
+    IMAGE_SLOTS, pageImageRefs, SAT_HOST, SAT_TILE_URL, SAT_ATTRIBUTION, SAT_ZOOM, tileXY, metresPerPixel, tilePlan, niceScale,
     diagramValues, buildAntennaSVG, plotNorth, skyWedges, inWedge, wedgeElev, buildSkyPlotSVG,
     num, fmt4, fmtDiff,
     julianDay, utcDateISO, utcTimeHMS, parseHMS, fmtHMS, sessionDuration,

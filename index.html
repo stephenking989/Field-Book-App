@@ -35,6 +35,10 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/paper.js/0.12.17/paper-core.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.22.0/proj4.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/lite.umd.js"></script>
+  <!-- Map page engine. crossorigin so the service worker caches a CORS copy
+       (an opaque one is padded to megabytes in the storage quota). -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" crossorigin="anonymous" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" crossorigin="anonymous"></script>
   <!-- Coordinate engine (CRS registry, grid/lat-lon, geoid, point index) -->
   <script src="./geoid-ns.js"></script>
   <script src="./geo.js"></script>
@@ -662,6 +666,99 @@
       min-height: 24px; align-items: center;
     }
 
+    /* ── Map page (DESIGN.md → Map page) ─────────────────────────── */
+    .fb-map-page { position: relative; }
+    .fb-map-top { padding-top: max(6px, env(safe-area-inset-top)); }
+    .fb-map-top-grid { display: none; }
+    .fb-map-top-row2 { display: flex; }
+    .fb-map-wrap { position: relative; z-index: 0; isolation: isolate; overflow: hidden; background: var(--fb-page); }
+    .fb-map-el { position: absolute; inset: 0; }
+    .fb-map-paper {
+      background-color: var(--fb-page);
+      background-image:
+        linear-gradient(rgb(var(--fb-grid-blue-rgb) / 0.45) 1px, transparent 1px),
+        linear-gradient(90deg, rgb(var(--fb-grid-blue-rgb) / 0.45) 1px, transparent 1px);
+      background-size: 25px 25px;
+    }
+    .fb-map-paper .leaflet-container { background: transparent; }
+    /* Floating map controls and cards — the one place outside sheets with a shadow. */
+    .fb-map-float {
+      background: var(--fb-field);
+      border: 1px solid var(--fb-border);
+      box-shadow: 0 3px 8px rgb(var(--fb-cover-deep-rgb) / 0.16);
+    }
+    .fb-map-card   { position: absolute; z-index: 800; left: 12px; right: 12px; top: 10px; max-width: 460px; }
+    .fb-map-left   { position: absolute; z-index: 800; left: 12px; top: 132px; }
+    .fb-map-right  { position: absolute; z-index: 800; right: 12px; top: 132px; }
+    .fb-map-scale  { position: absolute; z-index: 800; left: 12px; bottom: 42px; }
+    .fb-map-locate { position: absolute; z-index: 800; right: 12px; bottom: 50px; }
+    .fb-map-crosshair { position: absolute; z-index: 790; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--fb-error); pointer-events: none; }
+    .fb-map-bottom {
+      background: var(--fb-page);
+      border-top: 1px solid var(--fb-border);
+      border-radius: 18px 18px 0 0;
+      box-shadow: 0 -6px 18px rgb(var(--fb-cover-deep-rgb) / 0.14);
+      padding: 10px 16px max(14px, env(safe-area-inset-bottom));
+      margin-top: -18px; position: relative; z-index: 1;
+    }
+    .fb-map-dock {
+      position: absolute; z-index: 40; left: 0; right: 0; bottom: 0;
+      margin: 0 auto; max-width: 600px;
+      display: flex; flex-direction: column; overflow-y: auto;
+      background: var(--fb-page);
+      border-radius: 18px 18px 0 0;
+      box-shadow: 0 -6px 18px rgb(var(--fb-cover-deep-rgb) / 0.16);
+      padding: 10px 18px max(18px, env(safe-area-inset-bottom));
+      animation: sheetUp 0.22s ease-out;
+    }
+    .fb-map-note {
+      font-family: var(--fb-font-hand); font-size: 20px; line-height: 24px; color: var(--fb-ink);
+      background-image: repeating-linear-gradient(transparent 0 23px, rgb(var(--fb-rule-tan-rgb) / 0.45) 23px 24px);
+      background-position: 0 4px; resize: none; min-height: 56px;
+    }
+    .fb-map-sym, .fb-map-me, .fb-map-sel, .fb-map-label, .fb-map-tick { background: none; border: none; }
+    .fb-map-sym svg, .fb-map-me svg { display: block; overflow: visible; }
+    .fb-map-sel span {
+      display: block; width: 36px; height: 36px; border-radius: 50%;
+      border: 2px solid var(--fb-ink); background: rgb(var(--fb-field-rgb) / 0.55);
+    }
+    .fb-map-label span, .fb-map-tick span {
+      display: inline-block; white-space: nowrap; font-family: var(--fb-font-mono); font-size: 12px; color: var(--fb-ink);
+      text-shadow: 0 0 2px var(--fb-page), 0 0 2px var(--fb-page), 0 0 3px var(--fb-page), 0 0 4px var(--fb-page);
+    }
+    .fb-map-tick span { font-size: 10px; color: var(--fb-info); }
+    .fb-map-page .leaflet-container { font-family: var(--fb-font-ui); background: var(--fb-page); }
+    /* The bottom panel's rounded top overlaps the map by 18 px — keep the
+       attribution (always visible, OSM licence) clear of it. */
+    .fb-map-page .leaflet-bottom { bottom: 18px; }
+    .fb-map-page .leaflet-control-attribution { background: rgb(var(--fb-field-rgb) / 0.85); font-size: 10px; color: var(--fb-ink-muted); }
+    .fb-map-page .leaflet-control-attribution a { color: var(--fb-heading); }
+    .fb-map-scale .leaflet-control-scale { margin: 0 0 2px; float: none; }
+    .fb-map-scale .leaflet-control-scale-line {
+      border: 1.6px solid var(--fb-ink); border-top: none; background: transparent;
+      font-family: var(--fb-font-mono); font-size: 11px; color: var(--fb-ink); line-height: 1.3; padding: 0 4px;
+    }
+    /* Phone landscape: one-row top bar, the actions in a column on the
+       right so the map keeps the full height. */
+    @media (max-height: 500px) {
+      .notebook-inner > .fb-map-page { display: grid; grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: auto minmax(0, 1fr); }
+      .fb-map-top { grid-column: 1 / -1; }
+      .fb-map-wrap { grid-column: 1; grid-row: 2; }
+      .fb-map-bottom {
+        grid-column: 2; grid-row: 2; margin-top: 0; border-radius: 0; border-top: none;
+        border-left: 1px solid var(--fb-border); box-shadow: none; overflow-y: auto;
+        display: flex; flex-direction: column; justify-content: flex-end;
+      }
+      .fb-map-page .leaflet-bottom { bottom: 0; }
+      .fb-map-top-grid { display: flex; }
+      .fb-map-top-row2 { display: none; }
+      .fb-map-card { right: auto; width: min(340px, 62%); }
+      .fb-map-left, .fb-map-right { top: 10px; }
+      .fb-map-left { left: auto; right: 64px; }
+      .fb-map-scale, .fb-map-locate { bottom: 24px; }
+      .fb-map-dock { max-height: 88% !important; }
+    }
+
     /* ── Layout shell ─────────────────────────────────────────── */
     .notebook-binding-bar { display: none; }
     .notebook-frame {
@@ -696,7 +793,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.193';
+  const APP_VERSION = '1.194';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1555,6 +1652,8 @@
     if (pageMatch) return { view: 'page', projectId: pageMatch[1], pageId: pageMatch[2] };
     const projMatch = path.match(/^\/project\/([^/]+)$/);
     if (projMatch) return { view: 'project', projectId: projMatch[1] };
+    const mapMatch = path.match(/^\/project\/([^/]+)\/map$/);
+    if (mapMatch) return { view: 'map', projectId: mapMatch[1] };
     if (path === '/timeline') return { view: 'timeline' };
     return { view: 'home' };
   }
@@ -1891,6 +1990,83 @@
         <path d="M3.4 16.6h2.4l-1.4 1.6a1.3 1.3 0 1 1-1.2 1.9" strokeWidth="1.6"/>
       </svg>
     ),
+    // ── Map page ─────────────────────────────────────────────────────────────
+    Layers: ({ size = 20 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 3l9 5-9 5-9-5z"/>
+        <path d="M3 13l9 5 9-5"/>
+      </svg>
+    ),
+    Search: ({ size = 20 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="11" cy="11" r="6.5"/>
+        <line x1="16" y1="16" x2="20.5" y2="20.5"/>
+      </svg>
+    ),
+    Close: ({ size = 18 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="6" y1="6" x2="18" y2="18"/>
+        <line x1="18" y1="6" x2="6" y2="18"/>
+      </svg>
+    ),
+    ZoomIn: ({ size = 18 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    ),
+    ZoomOut: ({ size = 18 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    ),
+    // Centre on my position.
+    Locate: ({ size = 22 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+        <circle cx="12" cy="12" r="6"/>
+        <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/>
+        <line x1="12" y1="2" x2="12" y2="5"/>
+        <line x1="12" y1="19" x2="12" y2="22"/>
+        <line x1="2" y1="12" x2="5" y2="12"/>
+        <line x1="19" y1="12" x2="22" y2="12"/>
+      </svg>
+    ),
+    Navigate: ({ size = 18 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 3l7 18-7-4-7 4z"/>
+      </svg>
+    ),
+    // Zoom to all points: four corners closing in, north tick on top.
+    FitAll: ({ size = 20 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="4 9 4 4 9 4"/>
+        <polyline points="15 4 20 4 20 9"/>
+        <polyline points="20 15 20 20 15 20"/>
+        <polyline points="9 20 4 20 4 15"/>
+        <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+      </svg>
+    ),
+    // A figure: three vertices joined by a line.
+    Figure: ({ size = 18 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="4 18 10 6 20 12"/>
+        <circle cx="4" cy="18" r="1.8" fill="currentColor" stroke="none"/>
+        <circle cx="10" cy="6" r="1.8" fill="currentColor" stroke="none"/>
+        <circle cx="20" cy="12" r="1.8" fill="currentColor" stroke="none"/>
+      </svg>
+    ),
+    Edit: ({ size = 18 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 20h4L19 9l-4-4L4 16z"/>
+        <line x1="13" y1="7" x2="17" y2="11"/>
+      </svg>
+    ),
+    Copy: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="9" y="9" width="12" height="12" rx="2"/>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+      </svg>
+    ),
   };
 
   // Caution / error notice box (DESIGN.md → Notices).
@@ -1911,7 +2087,7 @@
     return <span className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider flex-shrink-0 bg-fb-page-deep text-fb-ink-muted">{tag}</span>;
   }
   // The same sources as icons, for places too narrow for a tag (Points-page row gutter, menus).
-  const SOURCE_ICO = { 'gps': Ico.Pin, 'notes-pin': Ico.Note, 'photo': Ico.Camera, 'voice': Ico.Mic };
+  const SOURCE_ICO = { 'gps': Ico.Pin, 'notes-pin': Ico.Note, 'photo': Ico.Camera, 'voice': Ico.Mic, 'map-pin': Ico.Pin };
 
   // ─────────────────────────────────────────────────────────────────────────────
   // TOAST SYSTEM
@@ -2794,11 +2970,44 @@
   function addGpsPointRow(projectId, point) {
     const project = DB.getProject(projectId);
     if (!project) return null;
-    if (!project.pages.some(p => p.type === 'points')) {
-      DB.addPage(projectId, { type: 'points', title: 'Points', columns: pnezdColumns(), rows: [] });
-    }
+    ensurePointsPage(projectId);
     const row = makeGpsRow(project, point);
     addPointRow(projectId, row);
+    return row;
+  }
+  function ensurePointsPage(projectId) {
+    const project = DB.getProject(projectId);
+    if (project && !project.pages.some(p => p.type === 'points')) {
+      DB.addPage(projectId, { type: 'points', title: 'Points', columns: pnezdColumns(), rows: [] });
+    }
+  }
+
+  // A pin dropped on the Map page. On a grid project it is a phone-style row
+  // whose geo says where it was placed — no height, no accuracy — so N/E follow
+  // a CRS change like any phone point. On a Local project there is no lat/lon:
+  // the crosshair's N/E go in the cells and `mapPin` marks it for the map only;
+  // to everything else it is an ordinary typed point. Returns the row.
+  function addMapPinRow(projectId, { number, desc, note, lat, lng, grid, local }) {
+    const project = DB.getProject(projectId);
+    if (!project) return null;
+    const ts = new Date().toISOString();
+    let row;
+    if (local) {
+      ensurePointsPage(projectId);
+      row = {
+        id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+        cells: { col_ptnum: String(number), col_north: fbGeo.fmtGrid(grid.n), col_east: fbGeo.fmtGrid(grid.e), col_elev: '', col_desc: desc || '' },
+        mapPin: { ts },
+      };
+      if (note) row.note = note;
+      addPointRow(projectId, row);
+      return row;
+    }
+    row = addGpsPointRow(projectId, {
+      number, desc,
+      geo: { source: 'map-pin', from: 'map', lat, lon: lng, h: null, N: null, H: null, acc: null, ts },
+    });
+    if (row && note) updatePointRowFields(projectId, row.id, { note });
     return row;
   }
 
@@ -3273,11 +3482,16 @@
     { id: 'photo',   label: 'Photo',           Icon: Ico.Camera, test: p => p.source === 'photo' || p.hasPhoto },
     { id: 'voice',   label: 'Voice',           Icon: Ico.Mic,    test: p => p.source === 'voice' || p.hasVoice },
     { id: 'pins',    label: 'Notes pins',      Icon: Ico.Note,   test: p => p.source === 'notes-pin' },
-    { id: 'gps',     label: 'GPS (all phone)', Icon: Ico.Pin,    test: p => p.phone },
+    { id: 'mappins', label: 'Map pins',        Icon: Ico.Pin,    test: p => p.source === 'map-pin' },
+    // A map pin is placed by hand, not measured by the phone.
+    { id: 'gps',     label: 'GPS (all phone)', Icon: Ico.Pin,    test: p => p.phone && p.source !== 'map-pin' },
   ];
 
   // pageId (optional): open from a Points page with only that page's points ticked.
-  function ExportPointsModal({ projectId, pageId, onClose }) {
+  // initialIds / initialFormat (optional): open from the Map page with the points
+  // in view ticked and the chosen format — the All chip is the way out.
+  // linework (optional): figures and code lines for KML / GPX (Map page).
+  function ExportPointsModal({ projectId, pageId, initialIds, initialFormat, linework, onClose }) {
     const project = DB.getProject(projectId);
     const crs     = fbGeo.projectCrs(project);
     const toast   = useToast();
@@ -3286,11 +3500,13 @@
 
     const [points] = useState(() => fbGeo.getProjectPoints(project));
     const [sel, setSel]       = useState(() => {
+      if (initialIds) return new Set(points.filter(p => initialIds.has(p.id)).map(p => p.id));
       const mine = pageId ? points.filter(p => p.pageId === pageId) : [];
       return new Set((mine.length ? mine : points).map(p => p.id));
     });
     const [range, setRange]   = useState('');
     const [format, setFormat] = useState(() => {
+      if (POINT_EXPORT_FORMATS.some(x => x.id === initialFormat)) return initialFormat;
       try { const f = localStorage.getItem('fb_points_export_format'); return POINT_EXPORT_FORMATS.some(x => x.id === f) ? f : 'csv'; }
       catch { return 'csv'; }
     });
@@ -3327,8 +3543,8 @@
     async function doExport(forceDownload) {
       if (blocked || busy) return;
       const out = format === 'csv' ? fbGeo.toPNEZD(chosen, { header })
-                : format === 'kml' ? fbGeo.toKML(chosen, project)
-                : fbGeo.toGPX(chosen, project);
+                : format === 'kml' ? fbGeo.toKML(chosen, project, linework ? { linework } : undefined)
+                : fbGeo.toGPX(chosen, project, linework ? { linework } : undefined);
       const left = out.skipped ? ` · ${out.skipped} left out (no ${format === 'csv' ? 'N/E' : 'map position'})` : '';
       setBusy(true);
       let how;
@@ -6091,6 +6307,1330 @@
     tracker: { label: 'Tracker', ...FB_BRAND.PAGE_TYPES.tracker, Icon: () => <Ico.Gantt /> },
   };
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // MAP PAGE — #/project/:id/map
+  //
+  // A live map of everything with a position: Points rows (any source), photo /
+  // voice records without a row yet, and GNSS Obs stations. Leaflet draws it;
+  // fbGeo does the arithmetic (getMapFeatures, gridInverse, fmtQuadrant…).
+  //
+  // The map only READS coordinates. Switching the display grid converts what
+  // is shown and is never written back. The writes it does make go through
+  // the same helpers as the rest of the app: addGpsPointRow (Store GPS point,
+  // map pins), updatePointRow (number / description) and updatePointRowFields
+  // (the row's note). Viewing prefs live in localStorage, so opening and
+  // panning the map never changes project data.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  const MAP_NS_VIEW      = { lat: 44.9, lng: -63.5, zoom: 7 };   // no points, no fix yet
+  const MAP_LABEL_ZOOM   = 18;     // point numbers appear at this zoom (grid projects)
+  const MAP_LOCAL_LABEL_ZOOM = 2;  // …and at this one on a Local (CRS.Simple, 1 unit = 1 m) map
+  const MAP_LABEL_MAX    = 300;    // …while no more than this many are in view
+  const MAP_PREF_DEFAULTS = { base: 'osm', labels: true, descs: false, lines: true, codeLines: true, grid: false, display: null };
+  const MAP_BASES = [
+    { id: 'osm',    label: 'OpenStreetMap', tag: 'Offline once viewed' },
+    { id: 'aerial', label: 'Aerial imagery', tag: 'Needs signal' },
+    { id: 'paper',  label: 'Plain grid paper', tag: 'No map' },
+  ];
+  const MAP_OSM_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  const MAP_OSM_ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
+
+  // localStorage, never trusted to be there (private windows, cleared data).
+  function mapLoad(key, fallback) {
+    try { const v = JSON.parse(localStorage.getItem(key)); return v === null || v === undefined ? fallback : v; }
+    catch { return fallback; }
+  }
+  function mapSave(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  }
+
+  function useMapPrefs(projectId) {
+    const key = 'fb_map_prefs_' + projectId;
+    const [prefs, setPrefs] = useState(() => ({ ...MAP_PREF_DEFAULTS, ...(mapLoad(key, {}) || {}) }));
+    const set = useCallback(patch => setPrefs(p => { const next = { ...p, ...patch }; mapSave(key, next); return next; }), [key]);
+    return [prefs, set];
+  }
+
+  // Live phone position while the map is on screen. Stops when the app is
+  // backgrounded and starts again when it comes back — GPS is the battery hog.
+  function useGpsWatch(enabled) {
+    const [fix, setFix] = useState(null);
+    const [err, setErr] = useState('');
+    useEffect(() => {
+      if (!enabled) return;
+      if (!navigator.geolocation) { setErr('No GPS on this device'); return; }
+      let id = null;
+      const start = () => {
+        if (id !== null || document.visibilityState === 'hidden') return;
+        id = navigator.geolocation.watchPosition(pos => {
+          const c = pos.coords;
+          setFix({
+            lat: c.latitude, lon: c.longitude, acc: c.accuracy,
+            alt: Number.isFinite(c.altitude) ? c.altitude : null,
+            heading: Number.isFinite(c.heading) ? c.heading : null,
+            ts: pos.timestamp,
+          });
+          setErr('');
+        }, e => {
+          setErr(e.code === 1 ? 'Location permission denied' : e.code === 3 ? 'Waiting for GPS…' : 'GPS unavailable');
+        }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+      };
+      const stop = () => { if (id !== null) { navigator.geolocation.clearWatch(id); id = null; } };
+      const onVis = () => (document.visibilityState === 'hidden' ? stop() : start());
+      start();
+      document.addEventListener('visibilitychange', onVis);
+      return () => { stop(); document.removeEventListener('visibilitychange', onVis); };
+    }, [enabled]);
+    return { fix, err };
+  }
+
+  // ── Symbols ────────────────────────────────────────────────────────────────
+  // Every symbol differs in SHAPE as well as colour. Ordinary and phone points
+  // are canvas circles (thousands of topo shots stay fast); the rest are small
+  // SVG divIcons. Colours come from brand.js.
+  const MAP_DIV_SYMBOLS = new Set(['setup', 'control', 'boundary', 'photo', 'notes-pin', 'map-pin', 'voice']);
+  function mapGlyph(kind) {
+    const w = '#fff';
+    if (kind === 'photo')     return `<path d="M7.5 10h2l1.2-1.8h2.6L14.5 10h2v6.5h-9z" fill="none" stroke="${w}" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="13" r="1.8" fill="none" stroke="${w}" stroke-width="1.5"/>`;
+    if (kind === 'notes-pin') return `<path d="M8.5 7.5h5l2 2v7h-7z" fill="none" stroke="${w}" stroke-width="1.6" stroke-linejoin="round"/><path d="M10 12h4M10 14.3h3" stroke="${w}" stroke-width="1.4" stroke-linecap="round"/>`;
+    if (kind === 'map-pin')   return `<circle cx="12" cy="12" r="3.6" fill="none" stroke="${w}" stroke-width="1.6"/><circle cx="12" cy="12" r="1.2" fill="${w}"/><path d="M12 6.5v2M12 15.5v2M6.5 12h2M15.5 12h2" stroke="${w}" stroke-width="1.5" stroke-linecap="round"/>`;
+    if (kind === 'voice')     return `<rect x="10.3" y="7" width="3.4" height="6.4" rx="1.7" fill="none" stroke="${w}" stroke-width="1.5"/><path d="M8.6 11.6a3.4 3.4 0 0 0 6.8 0M12 15v2" fill="none" stroke="${w}" stroke-width="1.5" stroke-linecap="round"/>`;
+    if (kind === 'gnss')      return `<path d="M8.8 10.4a3.2 3.2 0 0 1 6.4 0M7.5 10.4h9M12 10.4v2.8M12 13.2l-3 4M12 13.2l3 4" fill="none" stroke="${w}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+    return '';
+  }
+  function mapSymbolSvg(sym, hasPhoto) {
+    const PT = FB_BRAND.PAGE_TYPES, edge = FBC.field;
+    let body;
+    if (sym === 'setup')         body = `<circle cx="12" cy="12" r="8" fill="${edge}" stroke="${FBC.coverDeep}" stroke-width="2.6"/><circle cx="12" cy="12" r="3.2" fill="${FBC.coverDeep}"/>`;
+    else if (sym === 'control')  body = `<path d="M12 3.5 20.5 19H3.5z" fill="${FBC.coverDeep}" stroke="${edge}" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="13.6" r="1.8" fill="${edge}"/>`;
+    else if (sym === 'boundary') body = `<rect x="7" y="7" width="10" height="10" transform="rotate(45 12 12)" fill="${PT.points.color}" stroke="${edge}" stroke-width="1.8"/>`;
+    else if (sym === 'gnss')     body = `<circle cx="12" cy="12" r="9.5" fill="${PT.gnss.color}" stroke="${edge}" stroke-width="1.8"/>${mapGlyph('gnss')}`;
+    else if (sym === 'photo')    body = `<circle cx="12" cy="12" r="9.5" fill="${PT.photo.color}" stroke="${edge}" stroke-width="1.8"/>${mapGlyph('photo')}`;
+    else if (sym === 'voice')    body = `<circle cx="12" cy="12" r="9.5" fill="${FBC.heading}" stroke="${edge}" stroke-width="1.8"/>${mapGlyph('voice')}`;
+    else if (sym === 'notes-pin' || sym === 'map-pin') body = `<circle cx="12" cy="12" r="9.5" fill="${PT.notes.color}" stroke="${edge}" stroke-width="1.8"/>${mapGlyph(sym)}`;
+    else /* topo dot / gps ring drawn as a divIcon only when it needs a photo badge */
+      body = sym === 'gps'
+        ? `<circle cx="12" cy="12" r="4.6" fill="${edge}" stroke="${FBC.info}" stroke-width="2.2"/>`
+        : `<circle cx="12" cy="12" r="4" fill="${PT.points.color}" stroke="${edge}" stroke-width="1.4"/>`;
+    const badge = hasPhoto && sym !== 'photo'
+      ? `<circle cx="19.5" cy="4.5" r="4.3" fill="${PT.photo.color}" stroke="${edge}" stroke-width="1.2"/><circle cx="19.5" cy="4.6" r="1.4" fill="none" stroke="#fff" stroke-width="1.1"/>`
+      : '';
+    return `<svg width="26" height="26" viewBox="-1 -1 26 26" aria-hidden="true">${body}${badge}</svg>`;
+  }
+  const MAP_SYMBOL_LABEL = {
+    setup: 'Instrument setup', control: 'Control point', boundary: 'Boundary point',
+    photo: 'Photo point', 'notes-pin': 'Notes pin', 'map-pin': 'Map pin', voice: 'Voice note',
+    gps: 'Phone GPS point', topo: 'Point', gnss: 'GNSS station',
+  };
+  // Colours for the type badge and code chip on the point sheets (PAGE_TYPES pairs).
+  function mapSymbolTone(sym) {
+    const PT = FB_BRAND.PAGE_TYPES;
+    if (sym === 'photo') return PT.photo;
+    if (sym === 'notes-pin' || sym === 'map-pin') return PT.notes;
+    if (sym === 'gnss') return PT.gnss;
+    if (sym === 'setup' || sym === 'control' || sym === 'voice') return PT.data;
+    return PT.points;
+  }
+
+  // Thin-space grouped grid value at phone (recon) precision.
+  const mapPhoneGrid = v => fbGeo.fmtThin(v, fbGeo.GPS_GRID_DECIMALS);
+  // Decimal places a stored coordinate was typed with.
+  const mapDecimals = s => { const m = String(s || '').trim().match(/\.(\d+)$/); return m ? m[1].length : 0; };
+
+  // My position → a target, in the PROJECT grid. Phone grade: 0.1 m and the
+  // nearest minute. Null when there is no fix or no grid.
+  function mapFromMe(fix, target, crsId) {
+    if (!fix || !target || !fbGeo.isGrid(crsId)) return null;
+    const me = fbGeo.toGrid(fix.lat, fix.lon, crsId);
+    let to = (target.N !== null && target.N !== undefined && target.E !== null && target.E !== undefined) ? { N: target.N, E: target.E } : null;
+    if (!to && Number.isFinite(target.lat)) { const g = fbGeo.toGrid(target.lat, target.lon, crsId); if (g) to = { N: g.n, E: g.e }; }
+    if (!me || !to) return null;
+    const inv = fbGeo.gridInverse({ N: me.n, E: me.e }, to);
+    return { dist: inv.dist.toFixed(1) + ' m', brg: fbGeo.fmtQuadrant(inv.az, { seconds: false }) };
+  }
+
+  // ── Small shared pieces ────────────────────────────────────────────────────
+  const MAP_LBL = 'font-heading text-[11px] tracking-[0.12em] uppercase text-fb-ink-muted';
+  const MAP_FLOAT_BTN = 'fb-map-float w-11 h-11 flex items-center justify-center text-fb-heading active:bg-fb-page-deep';
+
+  function MapGridToggle({ value, onChange, dark }) {
+    const crsList = fbGeo.CRS_REGISTRY.filter(c => c.proj4);
+    return (
+      <div role="group" aria-label="Display grid"
+        className={`flex gap-[3px] p-[3px] rounded-[10px] ${dark ? 'bg-fb-cover-deep' : 'bg-fb-page-alt border border-fb-border'}`}>
+        {crsList.map(c => {
+          const on = c.id === value;
+          return (
+            <button key={c.id} type="button" aria-pressed={on} onClick={() => onChange(c.id)}
+              className={`h-[34px] px-3 rounded-lg font-data text-[13px] whitespace-nowrap ${on
+                ? (dark ? 'bg-fb-page text-fb-cover-deep' : 'bg-fb-cover text-white')
+                : (dark ? 'text-fb-accent-pale' : 'text-fb-ink')}`}>
+              {c.short}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function MapToggleTile({ label, on, onChange, disabled }) {
+    return (
+      <button type="button" role="switch" aria-checked={on} disabled={disabled} onClick={() => onChange(!on)}
+        className="min-h-[44px] flex items-center justify-between gap-2 pl-3 pr-2.5 rounded-[10px] bg-fb-field border border-fb-border text-sm text-fb-ink text-left disabled:opacity-50">
+        <span className="min-w-0">{label}</span>
+        <span className={`text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0 ${on ? 'bg-fb-accent text-white' : 'bg-fb-border text-fb-ink'}`}>{on ? 'ON' : 'OFF'}</span>
+      </button>
+    );
+  }
+
+  // A sheet docked to the bottom of the map: same paper and handle as
+  // .modal-sheet, but no dimmed backdrop — the map stays live above it.
+  function MapDockSheet({ label, onClose, children, maxH = '62%', active = true }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, active, onClose);
+    return (
+      <section ref={trapRef} aria-label={label} className="fb-map-dock" style={{ maxHeight: maxH }}>
+        <div tabIndex={0} className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-3 outline-none flex-shrink-0" />
+        {children}
+      </section>
+    );
+  }
+
+  function MapPhotoViewer({ url, note, onClose }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    return (
+      <div ref={trapRef} role="dialog" aria-label="Photo" onClick={onClose}
+        className="fixed inset-0 z-[70] bg-black/90 flex flex-col items-center justify-center p-4 gap-3">
+        <button type="button" aria-label="Close photo" onClick={onClose}
+          className="absolute top-3 right-3 w-11 h-11 rounded-full flex items-center justify-center text-white active:bg-white/10">
+          <Ico.Close size={22} />
+        </button>
+        {url
+          ? <img src={url} alt={note || 'Point photo'} className="max-w-[96vw] max-h-[80vh] object-contain rounded" />
+          : <p className="text-white/70 text-sm">Photo not found on this device.</p>}
+        {note && <p className="font-handwritten text-white/90 text-xl text-center max-w-[90vw]">{note}</p>}
+      </div>
+    );
+  }
+
+  // ── Find a point ───────────────────────────────────────────────────────────
+  function MapFindSheet({ points, stations, onPick, onClose }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const [q, setQ] = useState('');
+    const t = q.trim().toLowerCase();
+    const hits = !t ? [] : [
+      ...points.filter(p => p.ll && (String(p.number).toLowerCase().startsWith(t) || String(p.desc).toLowerCase().includes(t))),
+      ...stations.filter(s => s.name.toLowerCase().includes(t)),
+    ].slice(0, 60);
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 24 }}>
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-fb-ink mb-3">Find a point</h2>
+          <input type="search" value={q} onChange={e => setQ(e.target.value)} autoFocus aria-label="Point number or description"
+            placeholder="Number or description"
+            className="w-full px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint mb-3" />
+          {t && !hits.length && <p className="text-sm text-fb-ink-muted py-6 text-center rounded-xl bg-fb-page-alt">No point on the map matches.</p>}
+          {hits.length > 0 && (
+            <div className="rounded-xl bg-fb-field border border-fb-border overflow-y-auto" style={{ maxHeight: '50vh' }}>
+              {hits.map(p => (
+                <button key={p.id} type="button" onClick={() => onPick(p)}
+                  className="w-full flex items-center gap-2.5 px-3 min-h-[48px] text-left border-b border-fb-page-alt active:bg-fb-page-alt">
+                  <span className="font-data text-base text-fb-ink w-16 flex-shrink-0 truncate">{p.source === 'gnss-station' ? 'GNSS' : (p.number || '—')}</span>
+                  <span className="flex-1 min-w-0 text-sm text-fb-ink truncate">{p.source === 'gnss-station' ? p.name : (p.desc || '—')}</span>
+                  {p.source !== 'gnss-station' && <SourceTag source={p.source} />}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Drop pin: number, description, note ───────────────────────────────────
+  function MapPinSheet({ project, where, local, crsId, onSave, onClose }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const [number, setNumber] = useState(() => String(fbGeo.nextGpsPtNum(project)));
+    const [desc, setDesc] = useState('');
+    const [note, setNote] = useState('');
+    const numTrim = number.trim();
+    const dup = !!numTrim && !!fbGeo.pointNumberCounts(project)[numTrim];
+    const grid = local ? { n: where.lat, e: where.lng } : fbGeo.toGrid(where.lat, where.lng, crsId);
+    const fieldCls = 'w-full px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint';
+    const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 28 }}>
+          <div tabIndex={0} className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4 outline-none" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-xl font-bold text-fb-ink">Drop pin</h2>
+            <span className="text-xs font-semibold text-fb-ink-muted font-data">{fbGeo.getCrs(crsId).short}</span>
+          </div>
+          <div className="rounded-xl px-3 py-2.5 mb-3 bg-fb-field border border-fb-border">
+            <p className="font-data text-base text-fb-ink">N {grid ? mapPhoneGrid(grid.n) : '—'}</p>
+            <p className="font-data text-base text-fb-ink">E {grid ? mapPhoneGrid(grid.e) : '—'}</p>
+            <p className="text-xs text-fb-ink-muted mt-1">Placed on map (approx.) · no height</p>
+          </div>
+          <div className="flex gap-2 mb-3">
+            <div className="w-[110px]">
+              <p className={lbl}>Pt #</p>
+              <input type="text" inputMode="numeric" value={number} onChange={e => setNumber(e.target.value)} aria-label="Point number" className={fieldCls + ' font-data'} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className={lbl}>Description</p>
+              <input type="text" value={desc} onChange={e => setDesc(e.target.value)} aria-label="Description" placeholder="IP fd, gate…" className={fieldCls} />
+            </div>
+          </div>
+          {dup && <Notice className="mb-3">Point {numTrim} already exists in this project.</Notice>}
+          <p className={lbl}>Note</p>
+          <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} aria-label="Note"
+            className="fb-map-note w-full px-3 py-2 rounded-xl bg-fb-field border border-fb-border outline-none focus:border-fb-accent mb-4" />
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Cancel</button>
+            <button type="button" disabled={!numTrim || !grid}
+              onClick={() => onSave({ number: numTrim, desc: desc.trim(), note: note.trim(), lat: where.lat, lng: where.lng, grid })}
+              className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
+              {dup ? 'Save anyway' : 'Save pin'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Inverse result ─────────────────────────────────────────────────────────
+  function MapInverseSheet({ a, b, crs, onClose }) {
+    const toast = useToast();
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const inv = fbGeo.gridInverse(a, b);
+    const f3 = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(3);
+    const quad = fbGeo.fmtQuadrant(inv.az), az = fbGeo.fmtAzimuth(inv.az);
+    const text = [
+      `Inverse  Pt ${a.number} → Pt ${b.number}  (${crs.short}, grid)`,
+      `Bearing ${quad}  (Az ${az})`,
+      `Grid distance ${inv.dist.toFixed(3)} m`,
+      `ΔN ${f3(inv.dN)}  ΔE ${f3(inv.dE)}${inv.dZ !== null ? `  ΔZ ${f3(inv.dZ)}` : ''}`,
+    ].join('\n');
+    async function copy() {
+      try { await navigator.clipboard.writeText(text); toast.success('Inverse copied'); }
+      catch { toast.error('Couldn\'t copy — select the text instead'); }
+    }
+    const row = (k, v) => (
+      <div className="flex items-baseline justify-between gap-3 py-1">
+        <span className={MAP_LBL}>{k}</span><span className="font-data text-base text-fb-ink">{v}</span>
+      </div>
+    );
+    return (
+      <MapDockSheet label="Inverse" onClose={onClose} maxH="60%">
+        <div className="flex items-baseline justify-between mb-3">
+          <h2 className="text-xl font-bold text-fb-ink">Inverse</h2>
+          <span className="text-xs font-semibold text-fb-ink-muted font-data">{crs.short} · grid</span>
+        </div>
+        <p className="font-data text-sm text-fb-ink-muted mb-2">Pt {a.number} → Pt {b.number}</p>
+        <div data-map-inverse className="rounded-xl px-3 py-2.5 mb-3 bg-fb-field border border-fb-border">
+          <p className="font-data text-[24px] leading-tight text-fb-ink">{quad}</p>
+          <p className="font-data text-sm text-fb-ink-muted mb-1">Az {az}</p>
+          {row('Grid distance', `${inv.dist.toFixed(3)} m`)}
+          {row('ΔN', f3(inv.dN))}
+          {row('ΔE', f3(inv.dE))}
+          {inv.dZ !== null && row('ΔZ', f3(inv.dZ))}
+        </div>
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose} className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Close</button>
+          <button type="button" onClick={copy} className="flex-1 py-3 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep inline-flex items-center justify-center gap-2">
+            <Ico.Copy /> Copy result
+          </button>
+        </div>
+      </MapDockSheet>
+    );
+  }
+
+  // ── Point detail ───────────────────────────────────────────────────────────
+  // Stored N/E/Z exactly as typed, in the PROJECT grid; a converted line only
+  // when the display grid differs, marked display-only.
+  function MapPointSheet({ p, project, projectId, crsId, displayId, local, fix, locked,
+                           onClose, onNavigate, onInverse, onOpenRow, onSaved }) {
+    const toast = useToast();
+    const crs = fbGeo.getCrs(crsId);
+    const sym = p.sym;
+    const tone = mapSymbolTone(sym);
+    const code = fbGeo.pointCode(p.desc);
+    const isRow = p.isRow;
+    const [editing, setEditing] = useState(false);
+    const [num, setNum] = useState(p.number);
+    const [desc, setDesc] = useState(p.desc);
+    const [note, setNote] = useState(p.note || '');
+    const [photos, setPhotos] = useState([]);      // [{ id, url, note }]
+    const [viewer, setViewer] = useState(null);
+
+    // Note: saved 600 ms after typing stops, when the field is left, and when
+    // the sheet closes — through the row, so nothing else on it is touched.
+    const noteRef = useRef(p.note || '');
+    const savedRef = useRef(p.note || '');
+    const timerRef = useRef(null);
+    const flushNote = useCallback(() => {
+      clearTimeout(timerRef.current);
+      const v = noteRef.current;
+      if (v === savedRef.current || !isRow || locked) return;
+      updatePointRowFields(projectId, p.id, { note: v.trim() ? v : undefined });
+      savedRef.current = v;
+      onSaved();
+    }, [projectId, p.id, isRow, locked, onSaved]);
+    useEffect(() => () => flushNote(), [flushNote]);
+    function changeNote(v) {
+      setNote(v);
+      noteRef.current = v;
+      clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(flushNote, 600);
+    }
+
+    // Photos of this point, from photoDB the way PhotoPage loads them.
+    useEffect(() => {
+      let live = true;
+      const recs = isRow
+        ? fbGeo.mediaForPoint(project, p.id, 'photo').map(x => x.rec)
+        : (p.source === 'photo' ? (project.pages.find(pg => pg.id === p.pageId)?.photos || []).filter(r => r.id === p.id) : []);
+      if (!recs.length) { setPhotos([]); return; }
+      photoDB.getMany(recs.map(r => r.photoRef).filter(Boolean)).then(map => {
+        if (!live) return;
+        setPhotos(recs.map(r => ({ id: r.id, url: (r.photoRef && map[r.photoRef]) || r.dataUrl || null, note: r.note || '' })));
+      }).catch(() => live && setPhotos(recs.map(r => ({ id: r.id, url: r.dataUrl || null, note: r.note || '' }))));
+      return () => { live = false; };
+    }, [p.id]);
+    const voice = isRow ? fbGeo.mediaForPoint(project, p.id, 'voice') : (p.source === 'voice' ? [{ pageId: p.pageId }] : []);
+
+    const hasGrid = p.N !== null && p.E !== null;
+    const conv = hasGrid && !local && displayId !== crsId ? fbGeo.convertGrid(p.N, p.E, crsId, displayId) : null;
+    const dec = Math.max(mapDecimals(p.text.n), mapDecimals(p.text.e));
+    const fromMe = local ? null : mapFromMe(fix, p, crsId);
+    const dupNum = editing && num.trim() && num.trim() !== p.number && isPtNumTaken(projectId, num.trim(), p.id);
+
+    function saveEdit() {
+      const n = num.trim();
+      if (!n) return;
+      updatePointRow(projectId, p.id, { col_ptnum: n, col_desc: desc.trim() });
+      setEditing(false);
+      onSaved();
+      toast.success(`Point ${n} updated`);
+    }
+
+    const pageTitle = project.pages.find(pg => pg.id === p.pageId)?.title || '';
+    return (
+      <MapDockSheet label={`Point ${p.number || ''}`} onClose={onClose} active={!viewer}>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <span className="font-heading text-[11px] tracking-[0.12em] uppercase px-2 py-0.5 rounded-md" style={{ background: tone.bg, color: tone.color }}>{MAP_SYMBOL_LABEL[sym]}</span>
+          <span className="flex items-center gap-1">
+            <span className={MAP_LBL + ' truncate max-w-[140px]'}>{pageTitle}</span>
+            <button type="button" aria-label="Close point" onClick={onClose} className="w-11 h-11 -mr-2 flex items-center justify-center text-fb-ink-muted active:bg-fb-page-deep rounded-xl">
+              <Ico.Close />
+            </button>
+          </span>
+        </div>
+
+        {!editing ? (
+          <>
+            <div className="flex items-center gap-3">
+              <span className="font-data text-[34px] leading-tight text-fb-ink">{p.number || '—'}</span>
+              {code && <span className="font-heading text-[14px] tracking-wide px-2.5 py-0.5 rounded-md" style={{ background: tone.bg, color: tone.color }}>{code}</span>}
+              <span className="flex-1" />
+              {isRow && !locked && (
+                <button type="button" aria-label="Edit number and description" onClick={() => { setNum(p.number); setDesc(p.desc); setEditing(true); }}
+                  className="w-11 h-11 rounded-[10px] border border-fb-border bg-fb-page-alt flex items-center justify-center text-fb-ink active:bg-fb-page-deep">
+                  <Ico.Edit />
+                </button>
+              )}
+            </div>
+            {p.desc && <p className="font-handwritten text-[24px] leading-tight text-fb-ink mb-3">{p.desc}</p>}
+          </>
+        ) : (
+          <div className="mb-3">
+            <div className="flex gap-2 mb-2">
+              <input type="text" inputMode="numeric" value={num} onChange={e => setNum(e.target.value)} aria-label="Point number"
+                className="w-[110px] px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent font-data" />
+              <input type="text" value={desc} onChange={e => setDesc(e.target.value)} aria-label="Description"
+                className="flex-1 min-w-0 px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
+            </div>
+            {dupNum && <Notice className="mb-2">Point {num.trim()} already exists in this project.</Notice>}
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setEditing(false)} className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Cancel</button>
+              <button type="button" disabled={!num.trim()} onClick={saveEdit} className="flex-1 py-3 rounded-xl text-sm font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
+                {dupNum ? 'Save anyway' : 'Save'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Coordinates — as stored, project grid */}
+        <div className="rounded-xl px-3.5 py-2.5 mb-3 bg-fb-field border border-fb-border">
+          {hasGrid ? (
+            <>
+              {[['N', p.text.n], ['E', p.text.e], ['Z', p.text.z || '—']].map(([k, v]) => (
+                <div key={k} className="flex items-baseline gap-2.5">
+                  <span className={MAP_LBL + ' w-3.5'}>{k}</span>
+                  <span className="font-data text-[18px] text-fb-ink">{v}</span>
+                </div>
+              ))}
+              {conv && (
+                <p className="font-data text-xs text-fb-ink-muted mt-1">
+                  {fbGeo.getCrs(displayId).short}: N {fbGeo.fmtThin(conv.n, dec)} E {fbGeo.fmtThin(conv.e, dec)} · converted, display only
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="font-data text-base text-fb-ink">{Number.isFinite(p.lat) ? fbGeo.fmtLatLon(p.lat, p.lon) : 'No coordinates'}</p>
+          )}
+          <div className="border-t border-fb-border mt-1.5 pt-1.5 font-data text-[11px] leading-snug text-fb-ink-muted">
+            <p>{crs.short}{local ? '' : ' · NAD83(CSRS)'}</p>
+            <p>{fbGeo.SOURCES[p.source]?.label || p.source}{p.phone ? ' · ' + fbGeo.qualityText(p) : ''}{p.ts ? ' · ' + fbGeo.fmtWhen(p.ts) : ''}</p>
+          </div>
+        </div>
+
+        {/* Attached */}
+        {(photos.length > 0 || voice.length > 0) && (
+          <div className="mb-3">
+            <p className={MAP_LBL + ' mb-1.5'}>Attached</p>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {photos.map(ph => (
+                <button key={ph.id} type="button" aria-label="Open photo" onClick={() => setViewer(ph)}
+                  className="w-[74px] h-[62px] flex-shrink-0 rounded-lg border border-fb-border overflow-hidden bg-fb-page-alt flex items-center justify-center">
+                  {ph.url ? <img src={ph.url} alt="" className="w-full h-full object-cover" /> : <span className="text-fb-ink-faint"><Ico.Camera /></span>}
+                </button>
+              ))}
+              {voice.length > 0 && (
+                <button type="button" onClick={() => navigate(`#/project/${projectId}/page/${voice[0].pageId}`)}
+                  className="h-[62px] px-3 flex-shrink-0 rounded-lg border border-fb-border bg-fb-page-alt text-sm font-semibold text-fb-heading inline-flex items-center gap-2 active:bg-fb-page-deep">
+                  <Ico.Mic /> Voice note{voice.length > 1 ? ` (${voice.length})` : ''}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Note */}
+        <label className="block mb-3">
+          <span className="font-heading text-[10px] tracking-[0.14em] uppercase text-fb-warn">Note</span>
+          <textarea value={note} disabled={!isRow || locked} rows={2} aria-label="Point note"
+            onChange={e => { changeNote(e.target.value); e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
+            onBlur={flushNote}
+            className="fb-map-note block w-full px-2.5 py-1 rounded-lg bg-fb-field border border-fb-border outline-none focus:border-fb-accent disabled:opacity-60" />
+          {!isRow && <span className="block text-xs text-fb-ink-muted mt-1">Open its Photos page once to give it a point, then it can take a note.</span>}
+        </label>
+
+        {/* From you */}
+        <div className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-[10px] bg-fb-page-alt mb-3 ${fromMe ? '' : 'opacity-50'}`}>
+          <span className="text-fb-info"><Ico.Locate size={18} /></span>
+          <span className={MAP_LBL}>From you</span>
+          <span className="flex-1" />
+          {fromMe
+            ? <><span className="font-data text-base font-bold text-fb-ink">{fromMe.dist}</span><span className="font-data text-sm text-fb-heading">{fromMe.brg}</span></>
+            : <span className="text-xs text-fb-ink-muted">{local ? 'Local grid — no GPS' : 'No GPS fix'}</span>}
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-2">
+          <button type="button" disabled={local || !Number.isFinite(p.lat)} onClick={onNavigate}
+            className="flex-1 min-h-[52px] rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint inline-flex items-center justify-center gap-2">
+            <Ico.Navigate /> Navigate to
+          </button>
+          <button type="button" disabled={!hasGrid} onClick={onInverse}
+            className="min-h-[52px] px-4 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-50">
+            Inverse
+          </button>
+          {isRow && (
+            <button type="button" onClick={onOpenRow}
+              className="min-h-[52px] px-3 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep leading-tight">
+              Open on<br />Points page
+            </button>
+          )}
+        </div>
+        {viewer && <MapPhotoViewer url={viewer.url} note={viewer.note} onClose={() => setViewer(null)} />}
+      </MapDockSheet>
+    );
+  }
+
+  function MapStationSheet({ s, projectId, fix, crsId, onClose, onNavigate }) {
+    const fromMe = mapFromMe(fix, s, crsId);
+    const tone = mapSymbolTone('gnss');
+    return (
+      <MapDockSheet label={`GNSS station ${s.name}`} onClose={onClose} maxH="55%">
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <span className="font-heading text-[11px] tracking-[0.12em] uppercase px-2 py-0.5 rounded-md" style={{ background: tone.bg, color: tone.color }}>GNSS station</span>
+          <button type="button" aria-label="Close station" onClick={onClose} className="w-11 h-11 -mr-2 flex items-center justify-center text-fb-ink-muted active:bg-fb-page-deep rounded-xl">
+            <Ico.Close />
+          </button>
+        </div>
+        <p className="font-data text-[30px] leading-tight text-fb-ink mb-2">{s.name}</p>
+        <div className="rounded-xl px-3.5 py-2.5 mb-3 bg-fb-field border border-fb-border">
+          <p className="font-data text-base text-fb-ink">{fbGeo.fmtLatLon(s.lat, s.lon)}</p>
+          {s.h !== null && <p className="font-data text-sm text-fb-ink-muted">h {s.h} m (ellipsoidal, as entered)</p>}
+          <p className="font-data text-[11px] text-fb-ink-muted mt-1">Approximate position · {s.pageTitle}</p>
+        </div>
+        <div className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-[10px] bg-fb-page-alt mb-3 ${fromMe ? '' : 'opacity-50'}`}>
+          <span className="text-fb-info"><Ico.Locate size={18} /></span>
+          <span className={MAP_LBL}>From you</span>
+          <span className="flex-1" />
+          {fromMe
+            ? <><span className="font-data text-base font-bold text-fb-ink">{fromMe.dist}</span><span className="font-data text-sm text-fb-heading">{fromMe.brg}</span></>
+            : <span className="text-xs text-fb-ink-muted">No GPS fix</span>}
+        </div>
+        <div className="flex gap-2">
+          <button type="button" onClick={onNavigate} className="flex-1 min-h-[52px] rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 inline-flex items-center justify-center gap-2">
+            <Ico.Navigate /> Navigate to
+          </button>
+          <button type="button" onClick={() => navigate(`#/project/${projectId}/page/${s.pageId}`)}
+            className="min-h-[52px] px-4 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep">
+            Open GNSS page
+          </button>
+        </div>
+      </MapDockSheet>
+    );
+  }
+
+  // ── Layers, grid & export ──────────────────────────────────────────────────
+  function MapLayersSheet({ project, projectId, prefs, setPrefs, local, displayId, visibleCount, locked,
+                            onExport, onOpenIn, onClose, onSaved, extraToggles }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const codes = fbGeo.symbolCodes(project);
+    const [codeText, setCodeText] = useState(() => {
+      const o = {}; fbGeo.SYMBOL_CODE_KINDS.forEach(k => { o[k] = codes[k].join(', '); }); return o;
+    });
+    function saveCodes(kind) {
+      const list = fbGeo.parseCodeList(codeText[kind]);
+      if (JSON.stringify(list) === JSON.stringify(codes[kind])) return;
+      const next = {}; fbGeo.SYMBOL_CODE_KINDS.forEach(k => { next[k] = k === kind ? list : codes[k]; });
+      DB.updateProject(projectId, { mapSymbolCodes: next });
+      setCodeText(t => ({ ...t, [kind]: list.join(', ') }));
+      onSaved();
+    }
+    const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 28, maxHeight: '92vh' }}>
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-3" />
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-heading text-xl tracking-[0.1em] uppercase text-fb-heading">Map layers</h2>
+            <button type="button" aria-label="Close layers" onClick={onClose} className="w-11 h-11 -mr-2 flex items-center justify-center text-fb-ink-muted active:bg-fb-page-deep rounded-xl"><Ico.Close size={20} /></button>
+          </div>
+
+          <p className={lbl}>Base map</p>
+          <div role="radiogroup" aria-label="Base map" className="rounded-xl border border-fb-border bg-fb-field overflow-hidden mb-1.5">
+            {MAP_BASES.map((b, i) => {
+              const on = (local ? 'paper' : prefs.base) === b.id;
+              return (
+                <button key={b.id} type="button" role="radio" aria-checked={on} disabled={local && b.id !== 'paper'}
+                  onClick={() => setPrefs({ base: b.id })}
+                  className={`w-full flex items-center gap-3 min-h-[46px] px-3.5 text-left disabled:opacity-45 ${i ? 'border-t border-fb-border' : ''} ${on ? 'bg-fb-accent-pale' : ''}`}>
+                  <span className={`w-[18px] h-[18px] rounded-full border-2 border-fb-accent flex-shrink-0 ${on ? 'bg-fb-accent' : ''}`} />
+                  <span className="flex-1 text-[15px] text-fb-ink">{b.label}</span>
+                  <span className={`font-data text-[11px] uppercase ${b.id === 'aerial' ? 'text-fb-warn' : 'text-fb-ink-muted'}`}>{b.tag}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-fb-ink-muted leading-snug mb-4">
+            {local
+              ? 'Local coordinates have no lat/lon, so the map is plain grid paper.'
+              : 'OSM tiles you have viewed stay offline; imagery needs signal; grid paper always works. Positions are NAD83(CSRS) drawn as WGS84 — imagery can sit 1–1.5 m off.'}
+          </p>
+
+          <p className={lbl}>On the map</p>
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            <MapToggleTile label="Point numbers" on={prefs.labels} onChange={v => setPrefs({ labels: v })} />
+            <MapToggleTile label="Descriptions" on={prefs.descs} onChange={v => setPrefs({ descs: v })} />
+            {extraToggles}
+            <MapToggleTile label="Grid ticks" on={prefs.grid} onChange={v => setPrefs({ grid: v })} />
+          </div>
+
+          <p className={lbl}>Symbol codes</p>
+          <div className="rounded-xl border border-fb-border bg-fb-page-alt px-3 py-2 mb-4">
+            {fbGeo.SYMBOL_CODE_KINDS.map(k => (
+              <label key={k} className="flex items-center gap-2 py-1">
+                <span className="w-[70px] flex-shrink-0 text-sm text-fb-ink capitalize">{k}</span>
+                <input type="text" value={codeText[k]} disabled={locked} aria-label={`${k} codes`}
+                  onChange={e => setCodeText(t => ({ ...t, [k]: e.target.value }))} onBlur={() => saveCodes(k)}
+                  className="flex-1 min-w-0 px-2.5 py-2 rounded-lg text-sm font-data uppercase text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
+              </label>
+            ))}
+            <p className="text-[11px] text-fb-ink-muted">Matched against the first word of the description.</p>
+          </div>
+
+          {!local && (
+            <>
+              <p className={lbl}>Coordinate system</p>
+              <div className="flex gap-2 items-center mb-4">
+                <MapGridToggle value={displayId} onChange={id => setPrefs({ display: id })} />
+                <button type="button" disabled className="flex-1 h-[46px] rounded-[10px] border border-dashed border-fb-rule-tan text-fb-heading font-heading text-[13px] tracking-wide disabled:opacity-60">
+                  More systems…
+                </button>
+              </div>
+            </>
+          )}
+
+          <div className="border-t border-fb-border pt-3">
+            <div className="flex items-baseline justify-between mb-2">
+              <span className={lbl + ' mb-0'}>Export</span>
+              <span className="font-data text-xs text-fb-ink-muted">{visibleCount} point{visibleCount === 1 ? '' : 's'} in view · {project.name}</span>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => onExport('csv')} className="flex-1 min-h-[52px] rounded-xl font-data text-sm text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep">PNEZD .csv</button>
+              <button type="button" disabled={local} onClick={() => onExport('kml')} className="flex-1 min-h-[52px] rounded-xl font-data text-sm text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-45">.kml</button>
+              <button type="button" disabled={local || !visibleCount} onClick={onOpenIn}
+                className="flex-[1.4] min-h-[52px] rounded-xl text-sm font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint inline-flex items-center justify-center gap-1.5">
+                <Ico.Upload size={16} /> Open in…
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // A fault in the map must not take the whole app down with it: it only
+  // reads, so the field data is untouched — say so and offer the way back.
+  class MapErrorBoundary extends React.Component {
+    constructor(props) { super(props); this.state = { error: null }; }
+    static getDerivedStateFromError(error) { return { error }; }
+    componentDidCatch(error, info) { console.error('Map page error:', error, info && info.componentStack); }
+    render() {
+      if (!this.state.error) return this.props.children;
+      return (
+        <div className="flex-1 flex flex-col">
+          <NavBar title="Map" onBack={() => navigate(`#/project/${this.props.projectId}`)} />
+          <div className="p-5">
+            <Notice tone="error">The map hit a problem and closed. Nothing in the project was changed.</Notice>
+            <button type="button" onClick={() => navigate(`#/project/${this.props.projectId}`)}
+              className="w-full py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80">Back to project</button>
+          </div>
+        </div>
+      );
+    }
+  }
+
+  // ── The page ───────────────────────────────────────────────────────────────
+  function MapView({ projectId }) {
+    const toast = useToast();
+    const [project, setProject] = useState(() => DB.getProject(projectId));
+    const reload = useCallback(() => { const p = DB.getProject(projectId); setProject(p ? { ...p } : null); }, [projectId]);
+    const [prefs, setPrefs] = useMapPrefs(projectId);
+
+    const crsId = fbGeo.projectCrsId(project);
+    const local = !fbGeo.isGrid(crsId);
+    const displayId = local ? 'utm20n' : (fbGeo.isGrid(prefs.display) ? prefs.display : crsId);
+    const locked = !!project?.lock;
+    const base = local ? 'paper' : prefs.base;
+
+    const { fix, err: gpsErr } = useGpsWatch(!local && !!project);
+
+    // Everything with a position, with its map position (`ll`) and symbol.
+    const feats = React.useMemo(() => {
+      if (!project) return { pts: [], stations: [], byId: {} };
+      const f = fbGeo.getMapFeatures(project);
+      const extras = fbGeo.rowExtras(project), codes = fbGeo.symbolCodes(project);
+      const pts = f.points.map(p => ({
+        ...p,
+        ll: local ? (p.N !== null && p.E !== null ? [p.N, p.E] : null) : (p.lat !== null ? [p.lat, p.lon] : null),
+        sym: fbGeo.pointSymbol(p, codes, extras[p.id]),
+        note: (extras[p.id] && extras[p.id].note) || '',
+        isRow: p.pageType === 'points',
+      }));
+      const stations = local ? [] : f.stations.map(s => ({ ...s, ll: [s.lat, s.lon], sym: 'gnss', N: null, E: null }));
+      const byId = {};
+      pts.forEach(p => { byId[p.id] = p; });
+      stations.forEach(s => { byId[s.id] = s; });
+      return { pts, stations, byId };
+    }, [project, local]);
+
+    const [selId, setSelId]       = useState(null);
+    const [sheet, setSheet]       = useState(null);    // 'detail' | 'layers' | 'find' | 'gps' | 'pin' | 'export' | 'inverse'
+    const [mode, setMode]         = useState(null);    // null | 'pin' | 'inverse'
+    const [navId, setNavId]       = useState(null);
+    const [inv, setInv]           = useState(null);    // { a, b } point entries
+    const [follow, setFollow]     = useState(false);
+    const [pinAt, setPinAt]       = useState(null);    // { lat, lng } for the pin sheet
+    const [exportFmt, setExportFmt] = useState(null);
+    const [view, setView]         = useState(0);       // bumped on every map move
+    const sel = selId ? feats.byId[selId] : null;
+    const navTarget = navId ? feats.byId[navId] : null;
+
+    // ── Leaflet ──
+    const wrapRef = useRef(null), elRef = useRef(null), scaleBoxRef = useRef(null);
+    const mapRef = useRef(null), layersRef = useRef({});
+    const hRef = useRef({});   // current handlers, read by Leaflet callbacks
+    const lastLocate = useRef(0);
+    const L = window.L;
+
+    useEffect(() => {
+      if (!L || !elRef.current || !project) return;
+      const map = L.map(elRef.current, {
+        crs: local ? L.CRS.Simple : L.CRS.EPSG3857,
+        preferCanvas: true, zoomControl: false, attributionControl: true,
+        minZoom: local ? -8 : 3, maxZoom: local ? 8 : 22, zoomSnap: local ? 0.5 : 1,
+      });
+      map.attributionControl.setPrefix(false);
+      const scale = L.control.scale({ metric: true, imperial: false, maxWidth: 110, position: 'bottomleft' }).addTo(map);
+      if (scaleBoxRef.current) scaleBoxRef.current.prepend(scale.getContainer());
+      const renderer = L.canvas({ tolerance: 10 });
+      layersRef.current = {
+        renderer,
+        pts: L.layerGroup().addTo(map),
+        labels: L.layerGroup().addTo(map),
+        grid: L.layerGroup().addTo(map),
+        lines: L.layerGroup().addTo(map),
+        me: L.layerGroup().addTo(map),
+        sel: L.layerGroup().addTo(map),
+      };
+      mapRef.current = map;
+
+      // First view: a point or page handed over from the Points page, then the
+      // saved view, then every point, then Nova Scotia until a fix arrives.
+      let focus = null;
+      try { focus = JSON.parse(sessionStorage.getItem('fb_map_focus') || 'null'); sessionStorage.removeItem('fb_map_focus'); } catch {}
+      if (focus && focus.projectId !== projectId) focus = null;
+      const saved = mapLoad('fb_map_view_' + projectId, null);
+      const savedOk = saved && saved.kind === (local ? 'local' : 'geo') && [saved.lat, saved.lng, saved.zoom].every(Number.isFinite);
+      const focusPt = focus && focus.rowId ? feats.byId[focus.rowId] : null;
+      const pagePts = focus && focus.pageId ? feats.pts.filter(p => p.ll && p.pageId === focus.pageId) : [];
+      const allLL = [...feats.pts, ...feats.stations].filter(p => p.ll).map(p => p.ll);
+      if (focusPt && focusPt.ll) { map.setView(focusPt.ll, local ? 3 : 19); setSelId(focusPt.id); }
+      else if (pagePts.length) map.fitBounds(L.latLngBounds(pagePts.map(p => p.ll)), { padding: [48, 48], maxZoom: local ? 3 : 19 });
+      else if (savedOk) map.setView([saved.lat, saved.lng], saved.zoom);
+      else if (allLL.length) map.fitBounds(L.latLngBounds(allLL), { padding: [48, 48], maxZoom: local ? 3 : 19 });
+      else if (local) map.setView([0, 0], 0);
+      else { map.setView([MAP_NS_VIEW.lat, MAP_NS_VIEW.lng], MAP_NS_VIEW.zoom); hRef.current.wantFix = true; }
+
+      map.on('moveend', () => {
+        const c = map.getCenter();
+        mapSave('fb_map_view_' + projectId, { kind: local ? 'local' : 'geo', lat: c.lat, lng: c.lng, zoom: map.getZoom() });
+        setView(v => v + 1);
+      });
+      map.on('move', () => {
+        // Grid paper rules move with the map.
+        if (wrapRef.current) {
+          const o = map.containerPointToLayerPoint([0, 0]);
+          wrapRef.current.style.backgroundPosition = `${-o.x}px ${-o.y}px`;
+        }
+      });
+      map.on('dragstart', () => setFollow(false));
+      map.on('click', e => hRef.current.mapClick && hRef.current.mapClick(e));
+      const ro = new ResizeObserver(() => map.invalidateSize());
+      ro.observe(elRef.current);
+      setView(v => v + 1);
+      return () => { ro.disconnect(); map.remove(); mapRef.current = null; layersRef.current = {}; };
+    }, [L, !!project, local]);
+
+    // Base map
+    useEffect(() => {
+      const map = mapRef.current;
+      if (!map || local) return;
+      let layer = null;
+      if (base === 'osm') layer = L.tileLayer(MAP_OSM_URL, { maxNativeZoom: 19, maxZoom: 22, crossOrigin: 'anonymous', attribution: MAP_OSM_ATTRIB });
+      else if (base === 'aerial') layer = L.tileLayer(window.fbGnss.SAT_TILE_URL + '/{z}/{y}/{x}', { maxNativeZoom: 19, maxZoom: 22, attribution: window.fbGnss.SAT_ATTRIBUTION });
+      if (layer) { layer.addTo(map); layer.bringToBack(); }
+      return () => { if (layer) map.removeLayer(layer); };
+    }, [base, local, !!mapRef.current]);
+
+    // Points and stations
+    useEffect(() => {
+      const map = mapRef.current, lay = layersRef.current;
+      if (!map || !lay.pts) return;
+      lay.pts.clearLayers();
+      const PT = FB_BRAND.PAGE_TYPES;
+      const tap = id => e => { L.DomEvent.stopPropagation(e); hRef.current.pointTap && hRef.current.pointTap(id); };
+      feats.pts.forEach(p => {
+        if (!p.ll) return;
+        if (MAP_DIV_SYMBOLS.has(p.sym) || p.hasPhoto) {
+          L.marker(p.ll, {
+            icon: L.divIcon({ className: 'fb-map-sym', html: mapSymbolSvg(p.sym, p.hasPhoto), iconSize: [26, 26], iconAnchor: [13, 13] }),
+            keyboard: false, title: `${p.number} ${p.desc}`.trim(), zIndexOffset: p.sym === 'topo' ? 0 : 100,
+          }).on('click', tap(p.id)).addTo(lay.pts);
+        } else if (p.sym === 'gps') {
+          L.circleMarker(p.ll, { renderer: lay.renderer, radius: 5, color: FBC.info, weight: 2.2, fillColor: FBC.field, fillOpacity: 1 })
+            .on('click', tap(p.id)).addTo(lay.pts);
+        } else {
+          L.circleMarker(p.ll, { renderer: lay.renderer, radius: 4, color: FBC.field, weight: 1.4, fillColor: PT.points.color, fillOpacity: 1 })
+            .on('click', tap(p.id)).addTo(lay.pts);
+        }
+      });
+      feats.stations.forEach(s => {
+        L.marker(s.ll, {
+          icon: L.divIcon({ className: 'fb-map-sym', html: mapSymbolSvg('gnss'), iconSize: [26, 26], iconAnchor: [13, 13] }),
+          keyboard: false, title: s.name, zIndexOffset: 200,
+        }).on('click', tap(s.id)).addTo(lay.pts);
+      });
+    }, [feats, !!mapRef.current]);
+
+    // Labels — only close in, and only while there aren't too many to read.
+    useEffect(() => {
+      const map = mapRef.current, lay = layersRef.current;
+      if (!map || !lay.labels) return;
+      lay.labels.clearLayers();
+      if (!prefs.labels && !prefs.descs) return;
+      if (map.getZoom() < (local ? MAP_LOCAL_LABEL_ZOOM : MAP_LABEL_ZOOM)) return;
+      const b = map.getBounds();
+      const inView = [...feats.pts, ...feats.stations].filter(p => p.ll && b.contains(p.ll));
+      if (inView.length > MAP_LABEL_MAX) return;
+      inView.forEach(p => {
+        const num = p.source === 'gnss-station' ? p.name : (prefs.labels ? p.number : '');
+        const text = [num, prefs.descs && p.source !== 'gnss-station' ? p.desc : ''].filter(Boolean).join(' ');
+        if (!text) return;
+        const el = document.createElement('span');
+        el.textContent = text;
+        L.marker(p.ll, {
+          icon: L.divIcon({ className: 'fb-map-label', html: el.outerHTML, iconSize: null, iconAnchor: [-12, 8] }),
+          interactive: false, keyboard: false,
+        }).addTo(lay.labels);
+      });
+    }, [feats, prefs.labels, prefs.descs, view]);
+
+    // Grid ticks in the display grid. Lines are densified before conversion so
+    // they follow the projection's curve on the web-mercator map.
+    useEffect(() => {
+      const map = mapRef.current, lay = layersRef.current;
+      if (!map || !lay.grid) return;
+      lay.grid.clearLayers();
+      if (!prefs.grid) return;
+      const b = map.getBounds(), c = map.getCenter();
+      const size = map.getSize();
+      const style = { renderer: lay.renderer, color: FBC.gridBlue, weight: 1, opacity: 0.9, interactive: false };
+      // Northing labels sit just inside the west edge; easting labels just
+      // above the south edge (clear of the bottom panel's overlap).
+      const label = (ll, text, south) => {
+        const el = document.createElement('span'); el.textContent = text;
+        L.marker(ll, { icon: L.divIcon({ className: 'fb-map-tick', html: el.outerHTML, iconSize: null, iconAnchor: south ? [-3, 34] : [-4, 14] }), interactive: false, keyboard: false }).addTo(lay.grid);
+      };
+      if (local) {
+        const mpp = (b.getEast() - b.getWest()) / size.x;
+        const step = fbGeo.gridStep(mpp);
+        if (!step) return;
+        for (let n = Math.ceil(b.getSouth() / step) * step; n <= b.getNorth(); n += step) {
+          L.polyline([[n, b.getWest()], [n, b.getEast()]], style).addTo(lay.grid);
+          label([n, b.getWest()], fbGeo.fmtThin(n, 0));
+        }
+        for (let e = Math.ceil(b.getWest() / step) * step; e <= b.getEast(); e += step) {
+          L.polyline([[b.getSouth(), e], [b.getNorth(), e]], style).addTo(lay.grid);
+          label([b.getSouth(), e], fbGeo.fmtThin(e, 0), true);
+        }
+        return;
+      }
+      const mpp = 40075016.686 * Math.cos(c.lat * Math.PI / 180) / Math.pow(2, map.getZoom() + 8);
+      const step = fbGeo.gridStep(mpp);
+      if (!step) return;
+      const corners = [b.getNorthWest(), b.getNorthEast(), b.getSouthWest(), b.getSouthEast(), c]
+        .map(ll => fbGeo.toGrid(ll.lat, ll.lng, displayId)).filter(Boolean);
+      if (corners.length < 5) return;
+      const minN = Math.min(...corners.map(g => g.n)), maxN = Math.max(...corners.map(g => g.n));
+      const minE = Math.min(...corners.map(g => g.e)), maxE = Math.max(...corners.map(g => g.e));
+      const SEG = 20;
+      const line = (fn) => {
+        const pts = [];
+        for (let i = 0; i <= SEG; i++) { const ll = fn(i / SEG); if (ll) pts.push([ll.lat, ll.lon]); }
+        return pts;
+      };
+      let count = 0;
+      for (let n = Math.ceil(minN / step) * step; n <= maxN && count < 80; n += step, count++) {
+        const pts = line(t => fbGeo.toLatLon(n, minE + (maxE - minE) * t, displayId));
+        if (pts.length < 2) continue;
+        L.polyline(pts, style).addTo(lay.grid);
+        const first = pts.find(pt => b.contains(pt));
+        if (first) label(first, 'N ' + fbGeo.fmtThin(n, 0));
+      }
+      for (let e = Math.ceil(minE / step) * step; e <= maxE && count < 160; e += step, count++) {
+        // Drawn south → north; the label goes at the bottom, clear of the card.
+        const pts = line(t => fbGeo.toLatLon(minN + (maxN - minN) * t, e, displayId));
+        if (pts.length < 2) continue;
+        L.polyline(pts, style).addTo(lay.grid);
+        const first = pts.find(pt => b.contains(pt));
+        if (first) label(first, 'E ' + fbGeo.fmtThin(e, 0), true);
+      }
+    }, [prefs.grid, displayId, view]);
+
+    // Me: blue dot, accuracy circle, heading cone only when the phone gives one.
+    useEffect(() => {
+      const map = mapRef.current, lay = layersRef.current;
+      if (!map || !lay.me) return;
+      lay.me.clearLayers();
+      if (!fix || local) return;
+      const ll = [fix.lat, fix.lon];
+      if (Number.isFinite(fix.acc)) L.circle(ll, { renderer: lay.renderer, radius: fix.acc, color: FBC.info, weight: 1, opacity: 0.5, fillColor: FBC.info, fillOpacity: 0.12, interactive: false }).addTo(lay.me);
+      const cone = fix.heading !== null
+        ? `<path d="M18 2 L23 12 H13 Z" fill="${FBC.info}" fill-opacity="0.6" transform="rotate(${fix.heading} 18 18)"/>` : '';
+      L.marker(ll, {
+        icon: L.divIcon({ className: 'fb-map-me', html: `<svg width="36" height="36" viewBox="0 0 36 36" aria-hidden="true">${cone}<circle cx="18" cy="18" r="7.5" fill="${FBC.info}" stroke="${FBC.field}" stroke-width="3"/></svg>`, iconSize: [36, 36], iconAnchor: [18, 18] }),
+        interactive: false, keyboard: false, zIndexOffset: 500,
+      }).addTo(lay.me);
+      if (navTarget && navTarget.ll) {
+        L.polyline([ll, navTarget.ll], { renderer: lay.renderer, color: FBC.info, weight: 2, dashArray: '5 5', interactive: false }).addTo(lay.me);
+      }
+      if (follow) map.panTo(ll, { animate: true });
+      if (hRef.current.wantFix && !feats.pts.some(p => p.ll)) { hRef.current.wantFix = false; map.setView(ll, 17); }
+    }, [fix, navTarget, follow, local]);
+
+    // Selection ring, and the inverse line while its result is open.
+    useEffect(() => {
+      const map = mapRef.current, lay = layersRef.current;
+      if (!map || !lay.sel) return;
+      lay.sel.clearLayers();
+      if (sel && sel.ll) {
+        L.marker(sel.ll, {
+          icon: L.divIcon({ className: 'fb-map-sel', html: '<span></span>', iconSize: [36, 36], iconAnchor: [18, 18] }),
+          interactive: false, keyboard: false, zIndexOffset: -100,
+        }).addTo(lay.sel);
+      }
+      if (inv && inv.b && inv.a.ll && inv.b.ll) {
+        L.polyline([inv.a.ll, inv.b.ll], { renderer: lay.renderer, color: FBC.ink, weight: 2, dashArray: '6 4', interactive: false }).addTo(lay.sel);
+      }
+    }, [sel, inv]);
+
+    // ── Taps ──
+    hRef.current.pointTap = id => {
+      if (mode === 'inverse') {
+        const b = feats.byId[id];
+        if (!b || b.N === null || b.N === undefined || b.E === null) { toast.error('That point has no stored N/E'); return; }
+        if (b.id === inv?.a?.id) return;
+        setInv(v => ({ a: v.a, b }));
+        setMode(null);
+        setSheet('inverse');
+        return;
+      }
+      if (mode === 'pin') return;
+      if (id === selId && !sheet) { setSheet('detail'); return; }
+      setSelId(id);
+      if (sheet === 'detail') setSheet(null);
+    };
+    hRef.current.mapClick = () => {
+      if (mode || sheet) return;
+      setSelId(null);
+    };
+
+    // Keep the selected point in the strip of map left between the
+    // coordinate card and the detail sheet (measured once the sheet is up).
+    useEffect(() => {
+      const map = mapRef.current;
+      if (sheet !== 'detail' || !map || !sel || !sel.ll) return;
+      const t = setTimeout(() => {
+        const wrap = wrapRef.current, dock = document.querySelector('.fb-map-dock'), card = document.querySelector('.fb-map-card');
+        if (!wrap || !dock || !mapRef.current) return;
+        const w = wrap.getBoundingClientRect();
+        const top = (card && !card.hidden ? card.getBoundingClientRect().bottom : w.top) - w.top;
+        const bottom = Math.min(dock.getBoundingClientRect().top, w.bottom) - w.top;
+        const want = (top + bottom) / 2;                       // where the point should sit (map px)
+        const now = map.latLngToContainerPoint(sel.ll);
+        map.panBy([now.x - w.width / 2, now.y - want], { animate: true });
+      }, 260);
+      return () => clearTimeout(t);
+    }, [sheet, selId]);
+
+    if (!project) {
+      return (
+        <div className="flex-1 flex flex-col">
+          <NavBar title="Map" onBack={() => navigate('#/')} />
+          <p className="p-6 text-fb-ink-muted">This project isn't on this device.</p>
+        </div>
+      );
+    }
+
+    // ── Readouts ──
+    const dCrs = fbGeo.getCrs(displayId), pCrs = fbGeo.getCrs(crsId);
+    const myGrid = fix && !local ? fbGeo.toGrid(fix.lat, fix.lon, displayId) : null;
+    const myH = fix && !local ? fbGeo.orthoHeight(fix.alt, fix.lat, fix.lon).H : null;
+    const centre = local && mapRef.current ? mapRef.current.getCenter() : null;
+    const toTarget = navTarget || sel;
+    const toRow = !local && toTarget ? mapFromMe(fix, toTarget, crsId) : null;
+    const counts = { pts: feats.pts.length, off: feats.pts.filter(p => !p.ll).length };
+    ['setup', 'photo', 'notes-pin', 'map-pin'].forEach(k => { counts[k] = feats.pts.filter(p => p.sym === k || (k === 'photo' && p.hasPhoto && p.sym !== 'photo')).length; });
+    const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    const summary = [
+      `${counts.pts} pt${counts.pts === 1 ? '' : 's'}`,
+      counts.setup && plural(counts.setup, 'setup'),
+      counts.photo && plural(counts.photo, 'photo'),
+      counts['notes-pin'] && plural(counts['notes-pin'], 'note'),
+      counts['map-pin'] && plural(counts['map-pin'], 'pin'),
+      feats.stations.length && plural(feats.stations.length, 'station'),
+      counts.off && `${counts.off} not on map`,
+    ].filter(Boolean).join(' · ');
+    const visibleIds = () => {
+      const map = mapRef.current;
+      if (!map) return new Set(feats.pts.map(p => p.id));
+      const b = map.getBounds();
+      return new Set(feats.pts.filter(p => p.ll && b.contains(p.ll)).map(p => p.id));
+    };
+
+    // ── Actions ──
+    function fitAll() {
+      const map = mapRef.current;
+      const lls = [...feats.pts, ...feats.stations].filter(p => p.ll).map(p => p.ll);
+      if (!map) return;
+      if (!lls.length) { toast.error('No points on the map yet'); return; }
+      setFollow(false);
+      map.fitBounds(L.latLngBounds(lls), { padding: [48, 48], maxZoom: local ? 3 : 19 });
+    }
+    function locate() {
+      const now = Date.now();
+      if (now - lastLocate.current < 350) { setFollow(f => !f); lastLocate.current = 0; return; }
+      lastLocate.current = now;
+      const map = mapRef.current;
+      if (!fix) { toast(gpsErr || 'Waiting for GPS…'); return; }
+      map.setView([fix.lat, fix.lon], Math.max(map.getZoom(), 17), { animate: true });
+    }
+    function flyTo(p) {
+      setSheet(null);
+      setSelId(p.id);
+      if (p.ll && mapRef.current) mapRef.current.setView(p.ll, local ? Math.max(mapRef.current.getZoom(), 3) : Math.max(mapRef.current.getZoom(), 19));
+    }
+    function startPin() {
+      if (locked) return;
+      setSheet(null); setSelId(null); setMode('pin');
+    }
+    function placePin() {
+      const c = mapRef.current.getCenter();
+      setPinAt({ lat: c.lat, lng: c.lng });
+      setSheet('pin');
+    }
+    function savePin({ number, desc, note, lat, lng, grid }) {
+      const row = addMapPinRow(projectId, { number, desc, note, lat, lng, grid, local });
+      setSheet(null); setMode(null); setPinAt(null);
+      if (!row) { toast.error('Pin not saved'); return; }
+      reload();
+      setSelId(row.id);
+      toast.success(`Map pin ${number} saved to Points`);
+    }
+    function openExport(fmt) { setExportFmt(fmt); setSheet('export'); }
+    async function openIn() {
+      const ids = visibleIds();
+      const chosen = fbGeo.getProjectPoints(project).filter(p => ids.has(p.id));
+      const out = fbGeo.toGPX(chosen, project);
+      if (!out.count) { toast.error('No points in view to send'); return; }
+      const name = (project.name || 'project').replace(/[^a-z0-9_\-]+/gi, '_').replace(/^_+|_+$/g, '') || 'project';
+      try {
+        const how = await deliverFile(out.text, `${name}_points.gpx`, 'application/gpx+xml');
+        if (how === 'shared') toast.success(`${out.count} point${out.count === 1 ? '' : 's'} shared`);
+        else if (how === 'saved') toast.success(`Saved ${out.count} — open it from Downloads with OsmAnd`);
+      } catch (e) { console.error('Map GPX failed:', e); toast.error('Export failed'); }
+    }
+    function openOnPoints(p) {
+      try { sessionStorage.setItem('fb_focus_row', JSON.stringify({ pageId: p.pageId, rowId: p.id })); } catch {}
+      navigate(`#/project/${projectId}/page/${p.pageId}`);
+    }
+
+    const pinMode = mode === 'pin', invMode = mode === 'inverse';
+    const banner = invMode ? `Tap a point to inverse from Pt ${inv?.a?.number}` : null;
+
+    return (
+      <div className="fb-map-page flex-1 flex flex-col min-h-0">
+        {/* Top bar — cover */}
+        <header className="fb-map-top bg-fb-cover text-white px-2 flex-shrink-0">
+          <div className="flex items-center gap-1 min-w-0">
+            <button type="button" aria-label="Back to project" onClick={() => navigate(`#/project/${projectId}`)}
+              className="w-11 h-11 flex items-center justify-center rounded-xl active:bg-white/10 flex-shrink-0"><Ico.Back /></button>
+            <div className="flex-1 min-w-0">
+              <p className="font-heading text-[11px] tracking-[0.18em] text-fb-accent-pale leading-none">MAP</p>
+              <h1 className="font-heading text-[19px] font-medium tracking-wide truncate leading-tight">{project.name || 'Untitled project'}</h1>
+            </div>
+            <div className="fb-map-top-grid items-center gap-2">
+              {!local && <MapGridToggle dark value={displayId} onChange={id => setPrefs({ display: id })} />}
+            </div>
+            <button type="button" aria-label="Find a point" onClick={() => setSheet('find')}
+              className="w-11 h-11 flex items-center justify-center rounded-xl active:bg-white/10 flex-shrink-0"><Ico.Search /></button>
+          </div>
+          <div className="fb-map-top-row2 items-center gap-2.5 px-1 pb-2">
+            {!local
+              ? <><MapGridToggle dark value={displayId} onChange={id => setPrefs({ display: id })} />
+                  <span className="font-data text-[11px] leading-tight text-fb-accent-pale">CSRS<br />CGVD2013</span></>
+              : <span className="font-data text-xs text-fb-accent-pale">Local / assumed coordinates</span>}
+          </div>
+        </header>
+
+        {/* Map */}
+        <div ref={wrapRef} className={`fb-map-wrap flex-1 min-h-0 ${base === 'paper' ? 'fb-map-paper' : ''}`}>
+          {L
+            ? <div ref={elRef} className="fb-map-el" />
+            : <div className="p-6"><Notice tone="error">The map engine hasn't been downloaded to this device yet. Open the map once with signal.</Notice></div>}
+
+          {/* Coordinate card — out of the way while a point sheet is up (the
+              sheet has its own "from you" row), so the point stays in sight. */}
+          <section aria-label={local ? 'Map centre' : 'Current position'} hidden={sheet === 'detail' || sheet === 'inverse'}
+            className="fb-map-card fb-map-float rounded-xl px-3.5 py-2">
+            <div className="flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                {local ? (
+                  <>
+                    <p className={MAP_LBL + ' text-[10px]'}>Map centre · local</p>
+                    <p className="font-data text-[17px] text-fb-ink leading-snug"><span className={MAP_LBL + ' mr-2'}>N</span>{centre ? mapPhoneGrid(centre.lat) : '—'}</p>
+                    <p className="font-data text-[17px] text-fb-ink leading-snug"><span className={MAP_LBL + ' mr-2'}>E</span>{centre ? mapPhoneGrid(centre.lng) : '—'}</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-data text-[17px] text-fb-ink leading-snug"><span className={MAP_LBL + ' mr-2'}>N</span>{myGrid ? mapPhoneGrid(myGrid.n) : '—'}</p>
+                    <p className="font-data text-[17px] text-fb-ink leading-snug"><span className={MAP_LBL + ' mr-2'}>E</span>{myGrid ? mapPhoneGrid(myGrid.e) : '—'}</p>
+                  </>
+                )}
+              </div>
+              {!local && (
+                <div className="flex flex-col items-end gap-1">
+                  <p className="font-data text-[17px] text-fb-ink"><span className={MAP_LBL + ' mr-1.5'}>H</span>{myH !== null ? fbGeo.fmtThin(myH, fbGeo.GPS_ELEV_DECIMALS) : '—'}</p>
+                  <span className="font-heading text-[11px] tracking-wide px-2 py-0.5 rounded-full bg-fb-accent-pale text-fb-cover-deep whitespace-nowrap">
+                    {fix ? fbGeo.fmtAcc(fix.acc).toUpperCase() : (gpsErr || 'Waiting for GPS…')}
+                  </span>
+                </div>
+              )}
+            </div>
+            {toTarget && !local && (
+              <div className="flex items-center gap-2 border-t border-fb-border mt-1.5 pt-1.5">
+                <span className="text-fb-heading"><Ico.Navigate size={15} /></span>
+                <span className={MAP_LBL + ' truncate'}>To {toTarget.source === 'gnss-station' ? toTarget.name : `Pt ${toTarget.number}`}</span>
+                <span className="flex-1" />
+                {toRow
+                  ? <><span className="font-data text-base font-bold text-fb-ink">{toRow.dist}</span><span className="font-data text-[13px] text-fb-heading">{toRow.brg}</span></>
+                  : <span className="text-xs text-fb-ink-muted">No GPS fix</span>}
+                {navTarget && (
+                  <button type="button" aria-label="Stop navigating" onClick={() => setNavId(null)} className="w-9 h-9 -mr-1.5 flex items-center justify-center text-fb-ink-muted rounded-lg active:bg-fb-page-deep"><Ico.Close size={16} /></button>
+                )}
+              </div>
+            )}
+            {locked && <p className="text-xs text-fb-ink-muted mt-1 flex items-center gap-1"><Ico.Lock size={12} /> Locked · read only</p>}
+          </section>
+
+          {/* Left: zoom to all */}
+          <div className="fb-map-left">
+            <button type="button" aria-label="Zoom to all points" title="Zoom to all points" onClick={fitAll} className={MAP_FLOAT_BTN + ' rounded-full flex-col gap-0'}>
+              <span className="font-heading text-[9px] leading-none text-fb-error">N</span>
+              <Ico.FitAll size={18} />
+            </button>
+          </div>
+          {/* Right: layers, zoom */}
+          <div className="fb-map-right flex flex-col gap-2.5">
+            <button type="button" aria-label="Layers, grid and export" title="Layers" onClick={() => setSheet('layers')} className={MAP_FLOAT_BTN + ' rounded-xl'}><Ico.Layers /></button>
+            <div className="fb-map-float rounded-xl overflow-hidden flex flex-col">
+              <button type="button" aria-label="Zoom in" onClick={() => mapRef.current && mapRef.current.zoomIn()} className="w-11 h-11 flex items-center justify-center text-fb-ink border-b border-fb-border active:bg-fb-page-deep"><Ico.ZoomIn /></button>
+              <button type="button" aria-label="Zoom out" onClick={() => mapRef.current && mapRef.current.zoomOut()} className="w-11 h-11 flex items-center justify-center text-fb-ink active:bg-fb-page-deep"><Ico.ZoomOut /></button>
+            </div>
+          </div>
+
+          {pinMode && (
+            <div className="fb-map-crosshair" aria-hidden="true"><Ico.Pin size={44} /></div>
+          )}
+
+          {/* Bottom left: scale + zone */}
+          <div ref={scaleBoxRef} className="fb-map-scale fb-map-float rounded-lg px-2.5 py-1.5">
+            <span className="block font-data text-[11px] text-fb-ink-muted">{local ? 'Local grid' : dCrs.label.replace('NAD83(CSRS) / ', '')}</span>
+          </div>
+          {/* Bottom right: me */}
+          {!local && (
+            <button type="button" aria-label={follow ? 'Following my position — double-tap to stop' : 'Centre on my position (double-tap to follow)'} aria-pressed={follow}
+              onClick={locate}
+              className={`fb-map-locate fb-map-float w-[52px] h-[52px] rounded-full flex items-center justify-center ${follow ? 'bg-fb-info text-white' : 'text-fb-info'}`}>
+              <Ico.Locate />
+            </button>
+          )}
+
+        </div>
+
+        {/* Bottom panel */}
+        <section aria-label="Map actions" className="fb-map-bottom flex-shrink-0">
+          {banner ? (
+            <div className="flex items-center gap-2 min-h-[44px] mb-2.5">
+              <span className="flex-1 text-sm font-semibold text-fb-ink">{banner}</span>
+              <button type="button" onClick={() => { setMode(null); setInv(null); }} className="py-2.5 px-4 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Cancel</button>
+            </div>
+          ) : pinMode ? (
+            <div className="flex items-center gap-2 min-h-[44px] mb-2.5">
+              <span className="flex-1 text-sm text-fb-ink">Move the map to put the cross on the spot.</span>
+              <button type="button" onClick={() => setMode(null)} className="py-2.5 px-4 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Cancel</button>
+            </div>
+          ) : sel ? (
+            <div className="flex items-center gap-2.5 min-h-[56px] mb-2.5">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-data text-[18px] font-bold text-fb-ink whitespace-nowrap truncate">{sel.source === 'gnss-station' ? sel.name : `PT ${sel.number || '—'}`}</span>
+                  {sel.source !== 'gnss-station' && fbGeo.pointCode(sel.desc) && (
+                    <span className="font-heading text-xs tracking-wide px-2 py-0.5 rounded-md" style={{ background: mapSymbolTone(sel.sym).bg, color: mapSymbolTone(sel.sym).color }}>{fbGeo.pointCode(sel.desc)}</span>
+                  )}
+                  {sel.text && sel.text.z && <span className="font-data text-xs text-fb-ink-muted whitespace-nowrap">H {sel.text.z}</span>}
+                </div>
+                <p className="font-handwritten text-[22px] leading-tight text-fb-ink truncate">{sel.source === 'gnss-station' ? 'GNSS station' : (sel.desc || '—')}</p>
+              </div>
+              <button type="button" onClick={() => setSheet('detail')}
+                className="h-11 px-3.5 rounded-[10px] border border-fb-accent text-fb-heading text-sm font-semibold active:bg-fb-accent-pale">Details</button>
+              <button type="button" aria-label="Clear selection" onClick={() => setSelId(null)} className="w-9 h-11 flex items-center justify-center text-fb-ink-muted rounded-lg active:bg-fb-page-deep"><Ico.Close /></button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2 min-h-[44px] mb-2">
+              <span className="font-data text-[13px] text-fb-ink-muted truncate">{summary}</span>
+              <button type="button" onClick={() => setSheet('layers')} className="min-h-[44px] px-1 text-sm font-semibold text-fb-heading flex-shrink-0">Export ›</button>
+            </div>
+          )}
+          <div className="flex gap-2">
+            {pinMode ? (
+              <button type="button" onClick={placePin}
+                className="flex-1 min-h-[52px] rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 inline-flex items-center justify-center gap-2">
+                <Ico.Pin size={18} /> Place here
+              </button>
+            ) : (
+              <>
+                <button type="button" disabled={local || locked || !!mode} onClick={() => setSheet('gps')}
+                  className="flex-1 min-h-[52px] rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint inline-flex items-center justify-center gap-2">
+                  <Ico.ZoomIn /> Store GPS point
+                </button>
+                <button type="button" disabled={locked || !!mode} onClick={startPin}
+                  className="min-h-[52px] px-4 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-50">
+                  Drop pin
+                </button>
+              </>
+            )}
+          </div>
+        </section>
+
+        {sheet === 'detail' && sel && sel.source !== 'gnss-station' && (
+          <MapPointSheet key={sel.id} p={sel} project={project} projectId={projectId} crsId={crsId} displayId={displayId}
+            local={local} fix={fix} locked={locked} onSaved={reload}
+            onClose={() => setSheet(null)}
+            onNavigate={() => { setNavId(sel.id); setSheet(null); }}
+            onInverse={() => { setInv({ a: sel, b: null }); setMode('inverse'); setSheet(null); }}
+            onOpenRow={() => openOnPoints(sel)} />
+        )}
+        {sheet === 'detail' && sel && sel.source === 'gnss-station' && (
+          <MapStationSheet key={sel.id} s={sel} projectId={projectId} fix={fix} crsId={crsId}
+            onClose={() => setSheet(null)} onNavigate={() => { setNavId(sel.id); setSheet(null); }} />
+        )}
+        {sheet === 'inverse' && inv && inv.b && (
+          <MapInverseSheet a={inv.a} b={inv.b} crs={pCrs} onClose={() => { setSheet(null); setInv(null); }} />
+        )}
+        {sheet === 'find' && (
+          <MapFindSheet points={feats.pts} stations={feats.stations} onPick={flyTo} onClose={() => setSheet(null)} />
+        )}
+        {sheet === 'layers' && (
+          <MapLayersSheet project={project} projectId={projectId} prefs={prefs} setPrefs={setPrefs} local={local}
+            displayId={displayId} visibleCount={visibleIds().size} locked={locked} onSaved={reload}
+            onExport={openExport} onOpenIn={openIn} onClose={() => setSheet(null)} />
+        )}
+        {sheet === 'export' && (
+          <ExportPointsModal projectId={projectId} initialIds={visibleIds()} initialFormat={exportFmt} onClose={() => setSheet(null)} />
+        )}
+        {sheet === 'gps' && (
+          <GpsCaptureSheet projectId={projectId}
+            onClose={() => setSheet(null)}
+            onSave={pt => {
+              const row = addGpsPointRow(projectId, pt);
+              setSheet(null);
+              reload();
+              if (row) setSelId(row.id);
+              toast.success(`GPS point ${pt.number} saved to Points`);
+            }} />
+        )}
+        {sheet === 'pin' && pinAt && (
+          <MapPinSheet project={project} where={pinAt} local={local} crsId={crsId} onSave={savePin}
+            onClose={() => { setSheet(null); setPinAt(null); }} />
+        )}
+      </div>
+    );
+  }
+
   function ProjectView({ projectId }) {
     const [project, setProject] = useState(null);
     const [addStep, setAddStep] = useState(null); // null | 'type'
@@ -6100,7 +7640,6 @@
     const [coverForm, setCoverForm] = useState({});
     const [exporting, setExporting] = useState(false);
     const [showSettings,    setShowSettings]    = useState(false);
-    const [showGps,         setShowGps]         = useState(false);
     const [showExportPts,   setShowExportPts]   = useState(false);
     const [pageActionTarget, setPageActionTarget] = useState(null); // page object
     const [pageExportTarget, setPageExportTarget] = useState(null); // page object
@@ -6309,12 +7848,14 @@
               >
                 <Ico.Upload />
               </button>
+              {/* GPS capture lives on the map now (Store GPS point) — the bar holds four actions. */}
               <button
-                onClick={() => setShowGps(true)}
-                title="Record a GPS point"
+                onClick={() => navigate(`#/project/${projectId}/map`)}
+                title="Map"
+                aria-label="Map"
                 className="p-2 rounded-xl active:bg-white/10 transition-colors"
               >
-                <Ico.Pin size={18} />
+                <Ico.Map size={19} />
               </button>
               <button
                 onClick={() => setShowSettings(true)}
@@ -6561,17 +8102,6 @@
               toast.success(kind === 'archived' ? 'Project locked and kept viewable' : 'Project reopened for editing');
             }}
           />
-        )}
-
-        {showGps && (
-          <GpsCaptureSheet projectId={projectId}
-            onClose={() => setShowGps(false)}
-            onSave={pt => {
-              addGpsPointRow(projectId, pt);
-              setShowGps(false);
-              reload();
-              toast.success(`GPS point ${pt.number} saved to Points`);
-            }} />
         )}
 
         {pageActionTarget && (
@@ -11141,6 +12671,20 @@
 
     // Sync rows when page changes
     useEffect(() => { setRows(page.rows || []); setSrcFilter('all'); }, [page.id]);
+    // Arriving from the Map page's "Open on Points page": select that row and
+    // bring it into view. The hand-over is a one-shot sessionStorage note.
+    useEffect(() => {
+      if (page.type !== 'points') return;
+      let want = null;
+      try { want = JSON.parse(sessionStorage.getItem('fb_focus_row') || 'null'); } catch {}
+      if (!want || want.pageId !== page.id) return;
+      try { sessionStorage.removeItem('fb_focus_row'); } catch {}
+      const idx = (page.rows || []).findIndex(r => r.id === want.rowId);
+      if (idx < 0) return;
+      setActiveCell({ rowIdx: idx, colIdx: 0 });
+      setSelectionAnchor({ rowIdx: idx, colIdx: columns.length - 1 });
+      setTimeout(() => document.querySelector(`tr[data-row-idx="${idx}"]`)?.scrollIntoView({ block: 'center' }), 250);
+    }, [page.id]);
 
     // Reset drag-selection flag on global pointer-up (handles releases outside cells)
     useEffect(() => {
@@ -12573,6 +14117,19 @@
             Edit ▾
           </button>
 
+          {/* Map — this page's points on the in-app map (the selected row, if one is) */}
+          {page.type === 'points' && (
+            <button className="dp-drop-btn" data-tb-map title="Show these points on the map"
+              onClick={() => {
+                const b = getSelectionBounds();
+                const one = b && b.minR === b.maxR ? rows[b.minR] : null;
+                try { sessionStorage.setItem('fb_map_focus', JSON.stringify({ projectId, pageId: page.id, rowId: one ? one.id : null })); } catch {}
+                navigate(`#/project/${projectId}/map`);
+              }}>
+              <Ico.Map size={13} /> Map
+            </button>
+          )}
+
           {/* ── Dropdown panels — fixed-position, avoids toolbar overflow clipping ── */}
           {openTbMenu === 'insert' && (() => {
             // Rows and Columns each open a short list in place. "Above / below" and
@@ -12973,7 +14530,7 @@
                     onDrop={e => handleRowDrop(e, ri)}
                     onDragEnd={handleRowDragEnd}
                     onDragLeave={() => { if (dragOverRow === ri) setDragOverRow(null); }}
-                    title={row.geo ? `${fbGeo.SOURCES[row.geo.source]?.label || 'GPS point'} · ${fbGeo.fmtAcc(row.geo.acc)}` : 'Tap to select the row · Drag (or long-press and drag) to reorder'}
+                    title={row.geo ? `${fbGeo.SOURCES[row.geo.source]?.label || 'GPS point'} · ${row.geo.source === 'map-pin' ? fbGeo.qualityText({ phone: true, source: 'map-pin' }) : fbGeo.fmtAcc(row.geo.acc)}` : 'Tap to select the row · Drag (or long-press and drag) to reorder'}
                     style={row.geo ? { background: FBC.warnPale } : undefined}>
                     {row.geo
                       ? <div className="flex justify-center text-fb-heading">{React.createElement(SOURCE_ICO[row.geo.source] || Ico.Pin, { size: 13 })}</div>
@@ -15313,6 +16870,7 @@
           {route.view === 'project' && <ProjectView projectId={route.projectId} />}
           {route.view === 'page'    && <PageView    projectId={route.projectId} pageId={route.pageId} />}
           {route.view === 'timeline' && <TimelinePage />}
+          {route.view === 'map'     && <MapErrorBoundary key={route.projectId} projectId={route.projectId}><MapView projectId={route.projectId} /></MapErrorBoundary>}
         </div>
         {/* App-level: PWA file-open import modal */}
         {pendingFileImport && (
@@ -15438,6 +16996,23 @@
     const updatedRows = [...(pg.rows || []), row];
     DB.updatePage(projectId, pg.id, { rows: updatedRows });
     return row.id;
+  }
+
+  // Sets optional fields on a point row (note, …) — everything else on the row
+  // is kept. A field set to undefined is removed, so a cleared note leaves no key.
+  function updatePointRowFields(projectId, rowId, patch) {
+    const project = DB.getProject(projectId);
+    if (!project) return false;
+    for (const pg of project.pages) {
+      if (pg.type !== 'points' || !pg.rows) continue;
+      const idx = pg.rows.findIndex(r => r.id === rowId);
+      if (idx < 0) continue;
+      const next = { ...pg.rows[idx] };
+      Object.keys(patch).forEach(k => { if (patch[k] === undefined) delete next[k]; else next[k] = patch[k]; });
+      DB.updatePage(projectId, pg.id, { rows: pg.rows.map((r, i) => (i === idx ? next : r)) });
+      return true;
+    }
+    return false;
   }
 
   // Updates specific cells on an existing point row (by rowId) across all points pages.
