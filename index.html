@@ -806,7 +806,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.199';
+  const APP_VERSION = '1.200';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -7547,6 +7547,7 @@
     const [pinAt, setPinAt]       = useState(null);    // { lat, lng } for the pin sheet
     const [exportFmt, setExportFmt] = useState(null);
     const [view, setView]         = useState(0);       // bumped on every map move
+    const [exporting, setExporting] = useState(false);   // a Map page's PDF is being made
     const sel = selId ? feats.byId[selId] : null;
     const navTarget = navId ? feats.byId[navId] : null;
 
@@ -8156,6 +8157,31 @@
               <p className="font-heading text-[11px] tracking-[0.18em] text-fb-accent-pale leading-none">MAP · {local ? 'LOCAL' : pCrs.short}</p>
               <h1 className="font-heading text-[19px] font-medium tracking-wide truncate leading-tight">{project.name || 'Untitled project'}</h1>
             </div>
+            {activePage && (() => {
+              // The same page actions as every other page: previous / next, PDF, delete.
+              const idx = project.pages.findIndex(p => p.id === activePage.id);
+              const prev = project.pages[idx - 1] || null, next = project.pages[idx + 1] || null;
+              const act = 'w-10 h-11 flex items-center justify-center rounded-xl active:bg-white/10 flex-shrink-0 disabled:opacity-30';
+              return (
+                <>
+                  <button type="button" title="Previous page" aria-label="Previous page" disabled={!prev}
+                    onClick={() => prev && navigate(`#/project/${projectId}/page/${prev.id}`)} className={act}><Ico.PageL /></button>
+                  <button type="button" title="Next page" aria-label="Next page" disabled={!next}
+                    onClick={() => next && navigate(`#/project/${projectId}/page/${next.id}`)} className={act}><Ico.PageR /></button>
+                  <button type="button" title="Export page as PDF" aria-label="Export page as PDF" disabled={exporting}
+                    onClick={() => exportSinglePagePDF(projectId, activePage.id, toast, setExporting)} className={act}>
+                    {exporting ? <span className="text-xs font-data">…</span> : <Ico.Download />}
+                  </button>
+                  <button type="button" title="Delete page" aria-label="Delete page" disabled={locked}
+                    onClick={() => {
+                      if (window.confirm(`Delete Page ${activePage.pageNumber}? This cannot be undone.`)) {
+                        DB.deletePage(projectId, activePage.id);
+                        navigate(`#/project/${projectId}`);
+                      }
+                    }} className={act + ' text-red-300'}><Ico.Trash /></button>
+                </>
+              );
+            })()}
             <button type="button" aria-label="Find a point" onClick={() => setSheet('find')}
               className="w-11 h-11 flex items-center justify-center rounded-xl active:bg-white/10 flex-shrink-0"><Ico.Search /></button>
           </div>
