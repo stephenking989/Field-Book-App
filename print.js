@@ -128,10 +128,71 @@
     return out;
   }
 
+  // ─── Map pages ─────────────────────────────────────────────────────────────
+  // A Map page has one frame, { kind, x, y, w }, in "world" metres with y
+  // pointing down (like a sketch's px): on a grid project the web-mercator
+  // plane the base map is drawn in (so the frame is an exact screen rectangle
+  // at any zoom); on a Local project x = easting, y = −northing. The frame is
+  // the same paper shape as a sketch frame, so every function above — move,
+  // resize, fromDrag, fitView, hit — works on it unchanged.
+  const R_EARTH = 6378137, D2R = Math.PI / 180;
+  const mercX = lon => R_EARTH * lon * D2R;
+  const mercY = lat => -R_EARTH * Math.log(Math.tan(Math.PI / 4 + lat * D2R / 2));
+  const mercLon = x => x / R_EARTH / D2R;
+  const mercLat = y => (2 * Math.atan(Math.exp(-y / R_EARTH)) - Math.PI / 2) / D2R;
+  function toWorld(kind, lat, lng) { return kind === 'local' ? { x: lng, y: -lat } : { x: mercX(lng), y: mercY(lat) }; }
+  function fromWorld(kind, x, y) { return kind === 'local' ? { lat: -y, lng: x } : { lat: mercLat(y), lng: mercLon(x) }; }
+  // Mercator stretches distances by 1/cos(latitude); a frame's ground width is
+  // its width times cos(lat) at its own centre.
+  function groundFactor(f) {
+    if (f.kind === 'local') return 1;
+    const c = centre(f);
+    return Math.cos(fromWorld('geo', c.x, c.y).lat * D2R);
+  }
+  const groundWidth = f => f.w * groundFactor(f);
+  // The print scale denominator: ground width over the paper's 182 mm.
+  const mapScale = f => groundWidth(f) / (PAPER.w / 1000);
+  // The frame resized about its centre to print at exactly 1:denom.
+  function mapSetScale(f, denom) {
+    const c = centre(f), w = denom * (PAPER.w / 1000) / groundFactor(f);
+    return { ...f, x: c.x - w / 2, y: c.y - w * RATIO / 2, w };
+  }
+  // Lat/lng (N/E on Local) of the four corners, for Leaflet.
+  function frameCorners(f) {
+    const r = frameRect(f), at = (x, y) => fromWorld(f.kind, x, y);
+    return { nw: at(r.x, r.y), ne: at(r.x + r.w, r.y), se: at(r.x + r.w, r.y + r.h), sw: at(r.x, r.y + r.h) };
+  }
+  // Base-map tiles for a frame. `z` is the first zoom whose tiles are at least
+  // `outPx` pixels across the frame (never past the 19 the tile servers have).
+  function tileZoom(f, outPx) {
+    const z = Math.ceil(Math.log2((2 * Math.PI * R_EARTH / 256) * outPx / f.w));
+    return Math.max(0, Math.min(19, z));
+  }
+  // The tiles that cover a frame at zoom z: x / y / z for the URL, and dx / dy
+  // — where each lands on a canvas whose top-left is the frame's top-left, in
+  // tile pixels (scale by outPx / wPx to draw). wPx × hPx is the frame in tile pixels.
+  function tilePlan(f, z, tileSize) {
+    const T = tileSize || 256, n = Math.pow(2, z), k = T * n / (2 * Math.PI * R_EARTH), o = Math.PI * R_EARTH;
+    const r = frameRect(f);
+    const px0 = (r.x + o) * k, py0 = (r.y + o) * k, px1 = (r.x + r.w + o) * k, py1 = (r.y + r.h + o) * k;
+    const tx0 = Math.floor(px0 / T), tx1 = Math.floor((px1 - 1e-9) / T), ty0 = Math.max(0, Math.floor(py0 / T)), ty1 = Math.min(n - 1, Math.floor((py1 - 1e-9) / T));
+    const tiles = [];
+    for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) {
+      tiles.push({ x: ((tx % n) + n) % n, y: ty, z, dx: tx * T - px0, dy: ty * T - py0 });
+    }
+    return { z, tiles, wPx: px1 - px0, hPx: py1 - py0 };
+  }
+  // What a Map page has saved, made safe to use: a frame with real numbers, or null.
+  function normalizeMapFrame(raw) {
+    if (!raw || !fin(raw.x) || !fin(raw.y) || !fin(raw.w) || raw.w <= 0) return null;
+    return { kind: raw.kind === 'local' ? 'local' : 'geo', x: raw.x, y: raw.y, w: raw.w };
+  }
+
   const api = {
     PAPER, RATIO, frameRect, frameScale, widthForScale, setScale, scaleText,
     move, resize, fromDrag, fitView,
     labelAt, nextLabel, sorted, primary, hit, normalize, newId,
+    toWorld, fromWorld, groundWidth, mapScale, mapSetScale, frameCorners, tileZoom, tilePlan, normalizeMapFrame,
   };
   root.fbPrint = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

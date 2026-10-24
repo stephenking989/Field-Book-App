@@ -669,8 +669,6 @@
     /* ── Map page (DESIGN.md → Map page) ─────────────────────────── */
     .fb-map-page { position: relative; }
     .fb-map-top { padding-top: max(6px, env(safe-area-inset-top)); }
-    .fb-map-top-grid { display: none; }
-    .fb-map-top-row2 { display: flex; }
     .fb-map-wrap { position: relative; z-index: 0; isolation: isolate; overflow: hidden; background: var(--fb-page); }
     .fb-map-el { position: absolute; inset: 0; }
     .fb-map-paper {
@@ -687,11 +685,11 @@
       border: 1px solid var(--fb-border);
       box-shadow: 0 3px 8px rgb(var(--fb-cover-deep-rgb) / 0.16);
     }
-    .fb-map-card   { position: absolute; z-index: 800; left: 12px; right: 12px; top: 10px; max-width: 460px; }
-    .fb-map-left   { position: absolute; z-index: 800; left: 12px; top: 132px; }
-    .fb-map-right  { position: absolute; z-index: 800; right: 12px; top: 132px; }
+    .fb-map-card   { position: absolute; z-index: 800; left: 12px; right: 76px; top: 10px; max-width: 460px; }
+    .fb-map-compass { position: absolute; z-index: 800; right: 12px; top: 10px; width: 56px; height: 56px; pointer-events: none; }
+    .fb-map-right  { position: absolute; z-index: 800; right: 12px; top: 76px; }
     .fb-map-scale  { position: absolute; z-index: 800; left: 12px; bottom: 42px; }
-    .fb-map-locate { position: absolute; z-index: 800; right: 12px; bottom: 50px; }
+    .fb-map-br     { position: absolute; z-index: 800; right: 12px; bottom: 50px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
     .fb-map-crosshair { position: absolute; z-index: 790; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--fb-error); pointer-events: none; }
     .fb-map-bottom {
       background: var(--fb-page);
@@ -718,6 +716,16 @@
     }
     .fb-map-sym, .fb-map-me, .fb-map-sel, .fb-map-label, .fb-map-tick, .fb-map-figlabel { background: none; border: none; }
     .fb-map-sym svg, .fb-map-me svg { display: block; overflow: visible; }
+    /* Map page frames: a label chip on the frame's top-left corner and its corner handles. */
+    .fb-map-frame-tag, .fb-map-frame-handle { background: none; border: none; }
+    .fb-map-frame-tag span {
+      display: inline-block; transform: translateY(-100%); white-space: nowrap;
+      font-family: var(--fb-font-mono); font-size: 11px; line-height: 1; padding: 4px 7px;
+      border-radius: 5px 5px 0 0; background: var(--fb-field); color: var(--fb-info);
+      border: 1px solid var(--fb-info); border-bottom: none;
+    }
+    .fb-map-frame-tag.on span { background: var(--fb-info); color: var(--fb-page); }
+    .fb-map-frame-handle span { display: block; width: 16px; height: 16px; margin: 2px; box-sizing: border-box; border-radius: 3px; background: var(--fb-page); border: 2px solid var(--fb-info); }
     .fb-map-sel span {
       display: block; width: 36px; height: 36px; border-radius: 50%;
       border: 2px solid var(--fb-ink); background: rgb(var(--fb-field-rgb) / 0.55);
@@ -758,12 +766,9 @@
         display: flex; flex-direction: column; justify-content: flex-end;
       }
       .fb-map-page .leaflet-bottom { bottom: 0; }
-      .fb-map-top-grid { display: flex; }
-      .fb-map-top-row2 { display: none; }
       .fb-map-card { right: auto; width: min(340px, 62%); }
-      .fb-map-left, .fb-map-right { top: 10px; }
-      .fb-map-left { left: auto; right: 64px; }
-      .fb-map-scale, .fb-map-locate { bottom: 24px; }
+      .fb-map-right { top: 10px; right: 76px; }
+      .fb-map-scale, .fb-map-br { bottom: 24px; }
       .fb-map-dock { max-height: 88% !important; }
     }
 
@@ -801,7 +806,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.196';
+  const APP_VERSION = '1.198';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1299,7 +1304,9 @@
     try {
       stored = await Promise.race([
         projectDB.getAll(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('IndexedDB open timed out')), 10000)),
+        // A busy main thread (Babel compiling the page) can hold the open's reply
+        // back for 20+ s; a real failure rejects at once, so this only guards a hang.
+        new Promise((_, reject) => setTimeout(() => reject(new Error('IndexedDB open timed out')), 45000)),
       ]);
     } catch (err) {
       console.error('FieldBook: IndexedDB unavailable — using localStorage', err);
@@ -1662,8 +1669,9 @@
     if (pageMatch) return { view: 'page', projectId: pageMatch[1], pageId: pageMatch[2] };
     const projMatch = path.match(/^\/project\/([^/]+)$/);
     if (projMatch) return { view: 'project', projectId: projMatch[1] };
-    const mapMatch = path.match(/^\/project\/([^/]+)\/map$/);
-    if (mapMatch) return { view: 'map', projectId: mapMatch[1] };
+    // #/project/:id/map is the main map; …/map/:pageId is the map zoomed to a Map page's frame.
+    const mapMatch = path.match(/^\/project\/([^/]+)\/map(?:\/([^/]+))?$/);
+    if (mapMatch) return { view: 'map', projectId: mapMatch[1], mapPageId: mapMatch[2] || null };
     if (path === '/timeline') return { view: 'timeline' };
     return { view: 'home' };
   }
@@ -1956,6 +1964,14 @@
         <rect x="6" y="5" width="10" height="4" rx="1"/>
         <rect x="9" y="11" width="11" height="4" rx="1"/>
         <rect x="5" y="17" width="7" height="4" rx="1"/>
+      </svg>
+    ),
+    // Map page: a print frame (corner brackets) round a folded-map fold line.
+    MapFrame: ({ size = 16 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 8V4h4M17 4h4v4M21 16v4h-4M7 20H3v-4"/>
+        <path d="M8 8.5 12 7l4 1.5v7L12 17l-4-1.5z"/>
+        <line x1="12" y1="7" x2="12" y2="17" opacity="0.5"/>
       </svg>
     ),
     SkyPlot: ({ size = 16 } = {}) => (
@@ -2969,12 +2985,15 @@
   // Build a Points-page row for a phone-GPS point. `geo` (from fbGeo.makeGeo)
   // rides on the row beside the PNEZD cells; lat/lon is the source of truth and
   // N/E are derived from it in the project's CRS.
-  function makeGpsRow(project, { number, desc, geo }) {
-    return {
+  function makeGpsRow(project, { number, desc, geo, mapSym }) {
+    const row = {
       id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
       cells: { col_ptnum: String(number || ''), ...fbGeo.gpsCells(geo, project), col_desc: desc || '' },
       geo,
     };
+    const sym = fbGeo.cleanMapSym(mapSym);
+    if (sym) row.mapSym = sym;
+    return row;
   }
 
   // Add a phone-GPS point to the project's Points page, creating that page if
@@ -2999,7 +3018,7 @@
   // a CRS change like any phone point. On a Local project there is no lat/lon:
   // the crosshair's N/E go in the cells and `mapPin` marks it for the map only;
   // to everything else it is an ordinary typed point. Returns the row.
-  function addMapPinRow(projectId, { number, desc, note, lat, lng, grid, local }) {
+  function addMapPinRow(projectId, { number, desc, note, lat, lng, grid, local, mapSym }) {
     const project = DB.getProject(projectId);
     if (!project) return null;
     const ts = new Date().toISOString();
@@ -3012,11 +3031,13 @@
         mapPin: { ts },
       };
       if (note) row.note = note;
+      const sym = fbGeo.cleanMapSym(mapSym);
+      if (sym) row.mapSym = sym;
       addPointRow(projectId, row);
       return row;
     }
     row = addGpsPointRow(projectId, {
-      number, desc,
+      number, desc, mapSym,
       geo: { source: 'map-pin', from: 'map', lat, lon: lng, h: null, N: null, H: null, acc: null, ts },
     });
     if (row && note) updatePointRowFields(projectId, row.id, { note });
@@ -3111,8 +3132,9 @@
   // mode 'position' drops the point number / description and just returns the
   // fix — used where a position is wanted but no point is created (GNSS Obs page).
   const GPS_AVG_CHOICES = [5, 10, 30, 60];
-  function GpsCaptureSheet({ projectId, source = 'gps', heading = 'GPS Point', mode = 'point', onSave, onClose }) {
+  function GpsCaptureSheet({ projectId, source = 'gps', heading = 'GPS Point', mode = 'point', symbolPicker = false, onSave, onClose }) {
     const isPoint = mode === 'point';
+    const [mapSym, setMapSym] = useState(null);   // map symbol pick; null = Auto
     const project = DB.getProject(projectId);
     const crs = fbGeo.projectCrs(project);
     const [fix, setFix]         = useState(null);   // latest live fix
@@ -3197,7 +3219,7 @@
 
     function save() {
       if (!result) return;
-      onSave({ number: numTrim, desc: desc.trim(), geo: fbGeo.makeGeo({ ...result, ts: new Date().toISOString() }, source) });
+      onSave({ number: numTrim, desc: desc.trim(), geo: fbGeo.makeGeo({ ...result, ts: new Date().toISOString() }, source), ...(symbolPicker && mapSym ? { mapSym } : {}) });
     }
 
     const grid = result && fbGeo.toGrid(result.lat, result.lon, crs.id);
@@ -3275,6 +3297,12 @@
             </div>
           )}
           {isPoint && duplicate && <Notice className="mb-3">Point {numTrim} already exists in this project.</Notice>}
+          {isPoint && symbolPicker && (
+            <div className="mb-3">
+              <p className={lbl + ' mb-1.5'}>Symbol</p>
+              <MapSymbolPicker value={mapSym} onChange={setMapSym} />
+            </div>
+          )}
 
           {phase !== 'averaging' && (
             <div className="flex items-center gap-1.5 mb-3">
@@ -3856,6 +3884,10 @@
 
           {tab === 'settings' && (
             <>
+              <div className="flex items-center justify-between mb-3 text-sm">
+                <span className="text-fb-muted">Created</span>
+                <span className="font-data text-fb-ink">{new Date(project.createdAt).toLocaleDateString('en-CA')}</span>
+              </div>
               <ProjectGeoSettings project={project} projectId={projectId} onReload={onReload} />
               {project.lock ? (
                 <>
@@ -5129,6 +5161,172 @@
     }
   }
 
+  // ── MAP PAGE SHEET ─────────────────────────────────────────────────────────
+
+  // Title block of a Map page's sheet: its title and the frame's scale. The
+  // notes band is left off — it would change the shape of the box the frame
+  // was fitted to (fbPrint.PAPER).
+  function _pdfMapHeader(pdf, page, frame, meta, W, H, margin, F) {
+    const y = _pdfPageHeader(pdf, { ...page, title: page.title?.trim() || 'Map', notes: '' }, meta, W, H, margin, F);
+    if (frame) {
+      pdf.setFontSize(8); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(30, 30, 30);
+      pdf.text(`Scale ${fbPrint.scaleText(fbPrint.mapScale(frame)).replace('≈', 'approx. ')}`, W - margin - 4, margin + 7, { align: 'right' });
+    }
+    return y;
+  }
+
+  // The base map under a frame, stitched from its tiles onto one canvas the
+  // size the tiles come in (so nothing is scaled up). Tiles that don't arrive
+  // are left as plain paper. null when there is nothing to draw on.
+  async function _mapBaseCanvas(frame, base) {
+    const z = fbPrint.tileZoom(frame, 900);
+    const plan = fbPrint.tilePlan(frame, z);
+    if (!plan.tiles.length || plan.tiles.length > 120) return null;
+    const url = t => base === 'aerial'
+      ? `${fbGnss.SAT_TILE_URL}/${t.z}/${t.y}/${t.x}`
+      : MAP_OSM_URL.replace('{z}', t.z).replace('{x}', t.x).replace('{y}', t.y);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(plan.wPx)); canvas.height = Math.max(1, Math.round(plan.hPx));
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = FBC.page; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const load = t => new Promise(resolve => {
+      let tries = 0;
+      const go = () => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => { ctx.drawImage(img, t.dx, t.dy); resolve(true); };
+        img.onerror = () => { if (tries++ < 1) setTimeout(go, 700); else resolve(false); };
+        img.src = url(t);
+      };
+      go();
+    });
+    // A few at a time, and give up on stragglers after 25 s — a sheet with
+    // some tiles missing is better than none.
+    let giveUp = false;
+    const timer = setTimeout(() => { giveUp = true; }, 25000);
+    const queue = plan.tiles.slice();
+    const worker = async () => { while (queue.length && !giveUp) await load(queue.shift()); };
+    await Promise.race([Promise.all([worker(), worker(), worker(), worker(), worker(), worker()]), new Promise(r => setTimeout(r, 26000))]);
+    clearTimeout(timer);
+    return canvas;
+  }
+
+  // Segment a→b clipped to the box (Liang–Barsky), or null when it misses it.
+  function _clipSeg(a, b, x0, y0, x1, y1) {
+    let t0 = 0, t1 = 1;
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    for (const [p, q] of [[-dx, a[0] - x0], [dx, x1 - a[0]], [-dy, a[1] - y0], [dy, y1 - a[1]]]) {
+      if (p === 0) { if (q < 0) return null; continue; }
+      const r = q / p;
+      if (p < 0) { if (r > t1) return null; if (r > t0) t0 = r; }
+      else { if (r < t0) return null; if (r < t1) t1 = r; }
+    }
+    return [[a[0] + t0 * dx, a[1] + t0 * dy], [a[0] + t1 * dx, a[1] + t1 * dy]];
+  }
+
+  // One Map page's sheet below its header: base map, the project's linework and
+  // points drawn as vectors in black and grey, then scale bar, north arrow and
+  // the imagery credit. Everything is placed from the frame, so the printed
+  // scale is the frame's scale. `quiet` leaves a missing frame blank.
+  async function _pdfMapSheet(pdf, project, page, { W, H, margin, contentY, quiet }) {
+    const availW = W - margin * 2, boxH = fbPrint.PAPER.h;
+    const note = text => {
+      if (quiet) return;
+      pdf.setTextColor(150, 150, 150); pdf.setFontSize(9);
+      pdf.text(text, W / 2, contentY + boxH / 2, { align: 'center' });
+    };
+    const crsId = fbGeo.projectCrsId(project), local = !fbGeo.isGrid(crsId), kind = local ? 'local' : 'geo';
+    const frame = fbPrint.normalizeMapFrame(page.mapFrame);
+    if (!frame || frame.kind !== kind) { note('(No map frame set)'); return; }
+    const base = local ? 'paper' : (page.base === 'aerial' ? 'aerial' : 'osm');
+    const r = fbPrint.frameRect(frame);
+    const k = availW / r.w;                                     // mm per world metre
+    const toMM = (lat, lng) => { const w = fbPrint.toWorld(kind, lat, lng); return [margin + (w.x - r.x) * k, contentY + (w.y - r.y) * k]; };
+    const x0 = margin, y0 = contentY, x1 = margin + availW, y1 = contentY + boxH;
+    const inside = p => p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1;
+
+    // Base
+    let drewBase = false;
+    if (base !== 'paper') {
+      try {
+        const canvas = await _mapBaseCanvas(frame, base);
+        if (canvas) { pdf.addImage(canvas.toDataURL('image/jpeg', 0.85), 'JPEG', x0, y0, availW, boxH, undefined, 'FAST'); drewBase = true; }
+      } catch { /* a canvas the browser won't let us read: fall back to paper */ }
+      if (!drewBase) note('(Base map unavailable — check signal)');
+    }
+    if (!drewBase) _drawPdfGrid(pdf, W, H, margin, contentY);
+
+    // Linework: figures solid, code lines dashed. Black and grey only.
+    const feats = mapProjectFeats(project, local);
+    pdf.setDrawColor(30, 30, 30); pdf.setLineWidth(0.3);
+    mapProjectLines(project, local, crsId).forEach(l => {
+      const pts = l.lls.map(ll => toMM(ll[0], ll[1]));
+      if (pts.length < 2) return;
+      if (l.closed && pts.length >= 3) pts.push(pts[0]);
+      pdf.setLineDashPattern(l.source === 'code' ? [1.4, 1] : [], 0);
+      for (let i = 1; i < pts.length; i++) {
+        const s = _clipSeg(pts[i - 1], pts[i], x0, y0, x1, y1);
+        if (s) pdf.line(s[0][0], s[0][1], s[1][0], s[1][1]);
+      }
+    });
+    pdf.setLineDashPattern([], 0);
+
+    // Points, then their numbers where they fit.
+    const ink = [20, 20, 20];
+    const mark = (sym, glyph, [x, y]) => {
+      pdf.setDrawColor(...ink); pdf.setFillColor(...ink); pdf.setLineWidth(0.25);
+      const s = 1.5;
+      if (sym === 'setup')         { pdf.setFillColor(255, 255, 255); pdf.circle(x, y, 1.5, 'FD'); pdf.setFillColor(...ink); pdf.circle(x, y, 0.5, 'F'); }
+      else if (sym === 'control')  pdf.triangle(x, y - s, x + s, y + s * 0.8, x - s, y + s * 0.8, 'F');
+      else if (sym === 'boundary') pdf.lines([[s, s], [-s, s], [-s, -s], [s, -s]], x, y - s, [1, 1], 'F', true);
+      else if (sym === 'benchmark') { pdf.setFillColor(255, 255, 255); pdf.circle(x, y, 1.6, 'FD'); pdf.setFillColor(...ink); pdf.triangle(x, y - 0.9, x + 0.9, y + 0.7, x - 0.9, y + 0.7, 'F'); }
+      else if (sym === 'monument') { pdf.setFillColor(255, 255, 255); pdf.rect(x - 1.4, y - 1.4, 2.8, 2.8, 'FD'); pdf.setFillColor(...ink); pdf.circle(x, y, 0.5, 'F'); }
+      else if (sym === 'gnss')     { pdf.setFillColor(255, 255, 255); pdf.circle(x, y, 1.7, 'FD'); pdf.line(x - 1.1, y, x + 1.1, y); pdf.line(x, y - 1.1, x, y + 1.1); }
+      else if (['photo', 'voice', 'notes-pin', 'map-pin', 'gps'].includes(sym)) { pdf.setFillColor(255, 255, 255); pdf.circle(x, y, 1, 'FD'); }
+      else if (glyph === 'cross')    { pdf.line(x - 1, y, x + 1, y); pdf.line(x, y - 1, x, y + 1); }
+      else if (glyph === 'x')        { pdf.line(x - 0.9, y - 0.9, x + 0.9, y + 0.9); pdf.line(x - 0.9, y + 0.9, x + 0.9, y - 0.9); }
+      else if (glyph === 'square')   pdf.rect(x - 0.9, y - 0.9, 1.8, 1.8, 'F');
+      else if (glyph === 'triangle') pdf.triangle(x, y - 1.1, x + 1, y + 0.8, x - 1, y + 0.8, 'F');
+      else if (glyph === 'diamond')  pdf.lines([[1, 1], [-1, 1], [-1, -1], [1, -1]], x, y - 1, [1, 1], 'F', true);
+      else if (glyph === 'circle')   { pdf.setFillColor(255, 255, 255); pdf.circle(x, y, 0.9, 'FD'); }
+      else                           pdf.circle(x, y, 0.65, 'F');
+    };
+    const placed = [];                                          // symbol and label boxes already used
+    const free = b => !placed.some(p => b[0] < p[2] && b[2] > p[0] && b[1] < p[3] && b[3] > p[1]);
+    const dots = [...feats.pts, ...feats.stations].filter(p => p.ll).map(p => ({ p, xy: toMM(p.ll[0], p.ll[1]) })).filter(d => inside(d.xy));
+    dots.forEach(({ p, xy }) => { mark(p.sym, p.glyph, xy); placed.push([xy[0] - 1.6, xy[1] - 1.6, xy[0] + 1.6, xy[1] + 1.6]); });
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(5.5); pdf.setTextColor(...ink);
+    dots.slice(0, 400).forEach(({ p, xy }) => {
+      const text = p.source === 'gnss-station' ? (p.name || '') : String(p.number || '');
+      if (!text) return;
+      const w = pdf.getTextWidth(text) + 0.6;
+      // right of the symbol first, then left, then above
+      for (const [bx, by] of [[xy[0] + 1.9, xy[1] + 0.8], [xy[0] - 1.9 - w, xy[1] + 0.8], [xy[0] - w / 2, xy[1] - 2]]) {
+        const box = [bx, by - 2, bx + w, by + 0.4];
+        if (box[0] < x0 || box[2] > x1 || box[1] < y0 || box[3] > y1 || !free(box)) continue;
+        pdf.text(text, bx + 0.3, by);
+        placed.push(box);
+        break;
+      }
+    });
+
+    // North arrow, scale bar, credit and frame edge
+    pdf.setFillColor(255, 255, 255);
+    pdf.roundedRect(W - margin - 15, contentY + 0.8, 12, 18, 1, 1, 'F');
+    _drawPdfNorthArrow(pdf, W, margin);
+    _drawPdfScaleBar(pdf, fbPrint.mapScale(frame), 'm', W, H, margin, availW, availW, true);
+    if (base !== 'paper') {
+      const credit = base === 'aerial' ? fbGnss.SAT_ATTRIBUTION : String.fromCharCode(169) + ' OpenStreetMap contributors';
+      pdf.setFontSize(5.5); pdf.setFont('helvetica', 'normal');
+      pdf.setFillColor(255, 255, 255);
+      pdf.rect(x0, y1 - 3.4, pdf.getTextWidth(credit) + 3, 3.4, 'F');
+      pdf.setTextColor(60, 60, 60);
+      pdf.text(credit, x0 + 1.2, y1 - 1.1);
+    }
+    pdf.setDrawColor(60, 60, 60); pdf.setLineWidth(0.3);
+    pdf.rect(x0, y0, availW, boxH, 'S');
+  }
+
   // ── PDF SKETCH OVERLAY HELPERS ─────────────────────────────────────────────
 
   // Draw a 5mm graph-paper grid over the content area of a notebook page.
@@ -5175,7 +5373,7 @@
   // targetReal for a ~50 mm bar:
   //   realToPx(targetReal) × (availW / vbW) = 50
   //   → targetReal = 50 × vbW / availW × scaleDenom / 1000   (metres)
-  function _drawPdfScaleBar(pdf, scaleDenom, units, W, H, margin, vbW, availW) {
+  function _drawPdfScaleBar(pdf, scaleDenom, units, W, H, margin, vbW, availW, backing) {
     if (!scaleDenom || scaleDenom <= 1 || !vbW || !availW) return;
     const u = units === 'ft' ? 'ft' : 'm';
 
@@ -5210,6 +5408,12 @@
     const by   = H - margin - 19;
     const dk   = [55, 55, 55];
     const wh   = [255, 255, 255];
+
+    // Over a map the bar sits on a pale patch so it stays readable.
+    if (backing) {
+      pdf.setFillColor(...wh);
+      pdf.roundedRect(bx - 4, by - 5, barW + 11, barH + 8, 1, 1, 'F');
+    }
 
     // Alternating filled / white segments
     for (let i = 0; i < nSegs; i++) {
@@ -5673,8 +5877,7 @@
       pdf.setFontSize(9); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(28, 28, 28);
       pdf.text(value || '—', x, y + 5);
     };
-    cell('Created',     fmtDateDMY(proj.createdAt), margin + 8, ty + 11);
-    cell('Survey Date', page.surveyDate ? fmtDateDMY(page.surveyDate) : '', margin + 10 + usable / 2, ty + 11);
+    cell('Survey Date', page.surveyDate ? fmtDateDMY(page.surveyDate) : '', margin + 8, ty + 11);
     [['Start', clock(page.startTime)], ['Stop', clock(page.stopTime)], ['Duration', dur ? dur.text : '']]
       .forEach(([label, value], i) => cell(label, value, margin + 8 + i * usable / 3, ty + 23));
     pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.25);
@@ -5793,16 +5996,12 @@
       pdf.setDrawColor(180, 180, 180); pdf.setLineWidth(0.3);
       pdf.line(28, afterMetaY, W - 28, afterMetaY);
 
-      // ── Page count + created date ─────────────────────────────────────────
+      // ── Page count ────────────────────────────────────────────────────────
       // The count is the number of content sheets in THIS PDF, which is only
       // known once they are drawn — it is filled in after the content below.
-      const createdStr = new Date(proj.createdAt).toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' });
       const infoY = afterMetaY + 10;
       pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(120, 120, 120);
       pdf.text('PAGES', mLeft, infoY);
-      pdf.text('CREATED', mRight, infoY);
-      pdf.setFontSize(11); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(20, 20, 20);
-      pdf.text(createdStr, mRight, infoY + 7);
 
       // ── Footer — bottom of page, rule + export info ───────────────────────
       const exportDateStr = new Date().toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' });
@@ -5841,6 +6040,7 @@
                        points: { label: 'Points', color: '#606060', bg: '#EEEEEE' },
                        notes:  { label: 'Notes',  color: '#606060', bg: '#EEEEEE' },
                        gnss:   { label: 'GNSS Obs' },
+                       map:    { label: 'Map' },
                        obstructions: { label: 'Obstructions' } }[page.type]
                    || { label: 'Data', color: '#606060', bg: '#EEEEEE' };
         // An untitled GNSS or Obstructions page is listed by its station.
@@ -5865,6 +6065,10 @@
             const contentY = _pdfAreaHeader(pdf, page, area, meta, W, H, margin, F);
             await _pdfSketchSheet(pdf, page, fbPrint.frameRect(area), _skImgMap, { W, H, margin, contentY });
           }
+
+        } else if (page.type === 'map') {
+          const contentY = _pdfMapHeader(pdf, page, fbPrint.normalizeMapFrame(page.mapFrame), meta, W, H, margin, F);
+          await _pdfMapSheet(pdf, proj, page, { W, H, margin, contentY });
 
         } else if (page.type === 'title') {
           // ── TITLE PAGE — professional cover sheet ────────────────────────────
@@ -6178,6 +6382,7 @@
         photo:  { label: 'Photos', color: '#606060', bg: '#EEEEEE' },
         notes:  { label: 'Notes',  color: '#606060', bg: '#EEEEEE' },
         gnss:   { label: 'GNSS Obs' },
+        map:    { label: 'Map' },
         obstructions: { label: 'Obstructions' },
       };
       const meta = metaMap[page.type] || metaMap.data;
@@ -6193,9 +6398,12 @@
       // A sketch with print areas opens on its first area (see the sketch branch).
       const areas = page.type === 'sketch' ? fbPrint.sorted(fbPrint.normalize(page.printAreas)) : [];
       const contentY = areas.length ? _pdfAreaHeader(pdf, page, areas[0], meta, W, H, margin, F)
+                     : page.type === 'map' ? _pdfMapHeader(pdf, page, fbPrint.normalizeMapFrame(page.mapFrame), meta, W, H, margin, F)
                                     : _pdfPageHeader(pdf, headPage, meta, W, H, margin, F);
 
-      if (page.type === 'sketch') {
+      if (page.type === 'map') {
+        await _pdfMapSheet(pdf, proj, page, { W, H, margin, contentY, quiet: true });
+      } else if (page.type === 'sketch') {
         const _skImgIds2 = (page.shapes || []).filter(s => s.type === 'image' && s.imageId).map(s => s.imageId);
         const _skImgMap2 = _skImgIds2.length > 0 ? await photoDB.getMany(_skImgIds2) : {};
         if (areas.length === 0) await _pdfSketchSheet(pdf, page, page.viewBox, _skImgMap2, { W, H, margin, contentY, quiet: true });
@@ -6367,6 +6575,7 @@
     gnss:   { label: 'GNSS Obs', ...FB_BRAND.PAGE_TYPES.gnss, Icon: () => <Ico.Antenna /> },
     obstructions: { label: 'Obstructions', ...FB_BRAND.PAGE_TYPES.obstructions, Icon: () => <Ico.SkyPlot /> },
     tracker: { label: 'Tracker', ...FB_BRAND.PAGE_TYPES.tracker, Icon: () => <Ico.Gantt /> },
+    map:    { label: 'Map',    ...FB_BRAND.PAGE_TYPES.map,    Icon: () => <Ico.MapFrame /> },
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -6388,7 +6597,7 @@
   const MAP_LABEL_ZOOM   = 18;     // point numbers appear at this zoom (grid projects)
   const MAP_LOCAL_LABEL_ZOOM = 2;  // …and at this one on a Local (CRS.Simple, 1 unit = 1 m) map
   const MAP_LABEL_MAX    = 300;    // …while no more than this many are in view
-  const MAP_PREF_DEFAULTS = { base: 'osm', labels: true, descs: false, lines: true, codeLines: true, grid: false, display: null };
+  const MAP_PREF_DEFAULTS = { base: 'osm', labels: true, descs: false, lines: true, codeLines: true, grid: false };
   const MAP_BASES = [
     { id: 'osm',    label: 'OpenStreetMap', tag: 'Offline once viewed' },
     { id: 'aerial', label: 'Aerial imagery', tag: 'Needs signal' },
@@ -6450,7 +6659,21 @@
   // Every symbol differs in SHAPE as well as colour. Ordinary and phone points
   // are canvas circles (thousands of topo shots stay fast); the rest are small
   // SVG divIcons. Colours come from brand.js.
-  const MAP_DIV_SYMBOLS = new Set(['setup', 'control', 'boundary', 'photo', 'notes-pin', 'map-pin', 'voice']);
+  const MAP_DIV_SYMBOLS = new Set(['setup', 'control', 'boundary', 'benchmark', 'monument', 'photo', 'notes-pin', 'map-pin', 'voice']);
+  // The mark an ordinary point is drawn with when the user picks one (same
+  // names as the sketch's point symbols). A dot is the default and has no entry.
+  function mapGlyphBody(glyph, color, edge) {
+    const lines = {
+      cross: 'M12 6.5v11M6.5 12h11',
+      x: 'M7.5 7.5l9 9M16.5 7.5l-9 9',
+    };
+    if (lines[glyph]) return `<path d="${lines[glyph]}" fill="none" stroke="${edge}" stroke-width="4.6" stroke-linecap="round"/><path d="${lines[glyph]}" fill="none" stroke="${color}" stroke-width="2.4" stroke-linecap="round"/>`;
+    if (glyph === 'square')   return `<rect x="7.2" y="7.2" width="9.6" height="9.6" fill="${color}" stroke="${edge}" stroke-width="1.6"/>`;
+    if (glyph === 'triangle') return `<path d="M12 6.2 18.2 17.4H5.8z" fill="${color}" stroke="${edge}" stroke-width="1.6" stroke-linejoin="round"/>`;
+    if (glyph === 'diamond')  return `<rect x="7.6" y="7.6" width="8.8" height="8.8" transform="rotate(45 12 12)" fill="${color}" stroke="${edge}" stroke-width="1.6"/>`;
+    if (glyph === 'circle')   return `<circle cx="12" cy="12" r="5.4" fill="none" stroke="${edge}" stroke-width="4.6"/><circle cx="12" cy="12" r="5.4" fill="none" stroke="${color}" stroke-width="2.4"/>`;
+    return `<circle cx="12" cy="12" r="4" fill="${color}" stroke="${edge}" stroke-width="1.4"/>`;
+  }
   function mapGlyph(kind) {
     const w = '#fff';
     if (kind === 'photo')     return `<path d="M7.5 10h2l1.2-1.8h2.6L14.5 10h2v6.5h-9z" fill="none" stroke="${w}" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="13" r="1.8" fill="none" stroke="${w}" stroke-width="1.5"/>`;
@@ -6460,10 +6683,12 @@
     if (kind === 'gnss')      return `<path d="M8.8 10.4a3.2 3.2 0 0 1 6.4 0M7.5 10.4h9M12 10.4v2.8M12 13.2l-3 4M12 13.2l3 4" fill="none" stroke="${w}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
     return '';
   }
-  function mapSymbolSvg(sym, hasPhoto) {
+  function mapSymbolSvg(sym, hasPhoto, glyph) {
     const PT = FB_BRAND.PAGE_TYPES, edge = FBC.field;
     let body;
     if (sym === 'setup')         body = `<circle cx="12" cy="12" r="8" fill="${edge}" stroke="${FBC.coverDeep}" stroke-width="2.6"/><circle cx="12" cy="12" r="3.2" fill="${FBC.coverDeep}"/>`;
+    else if (sym === 'benchmark') body = `<circle cx="12" cy="12" r="9" fill="${edge}" stroke="${FBC.coverDeep}" stroke-width="2.4"/><path d="M12 6.8 17 16.2H7z" fill="${FBC.coverDeep}" stroke-linejoin="round"/>`;
+    else if (sym === 'monument')  body = `<rect x="5.5" y="5.5" width="13" height="13" fill="${edge}" stroke="${PT.points.color}" stroke-width="2.6"/><circle cx="12" cy="12" r="2.6" fill="${PT.points.color}"/>`;
     else if (sym === 'control')  body = `<path d="M12 3.5 20.5 19H3.5z" fill="${FBC.coverDeep}" stroke="${edge}" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="13.6" r="1.8" fill="${edge}"/>`;
     else if (sym === 'boundary') body = `<rect x="7" y="7" width="10" height="10" transform="rotate(45 12 12)" fill="${PT.points.color}" stroke="${edge}" stroke-width="1.8"/>`;
     else if (sym === 'gnss')     body = `<circle cx="12" cy="12" r="9.5" fill="${PT.gnss.color}" stroke="${edge}" stroke-width="1.8"/>${mapGlyph('gnss')}`;
@@ -6473,14 +6698,14 @@
     else /* topo dot / gps ring drawn as a divIcon only when it needs a photo badge */
       body = sym === 'gps'
         ? `<circle cx="12" cy="12" r="4.6" fill="${edge}" stroke="${FBC.info}" stroke-width="2.2"/>`
-        : `<circle cx="12" cy="12" r="4" fill="${PT.points.color}" stroke="${edge}" stroke-width="1.4"/>`;
+        : mapGlyphBody(glyph, PT.points.color, edge);
     const badge = hasPhoto && sym !== 'photo'
       ? `<circle cx="19.5" cy="4.5" r="4.3" fill="${PT.photo.color}" stroke="${edge}" stroke-width="1.2"/><circle cx="19.5" cy="4.6" r="1.4" fill="none" stroke="#fff" stroke-width="1.1"/>`
       : '';
     return `<svg width="26" height="26" viewBox="-1 -1 26 26" aria-hidden="true">${body}${badge}</svg>`;
   }
   const MAP_SYMBOL_LABEL = {
-    setup: 'Instrument setup', control: 'Control point', boundary: 'Boundary point',
+    setup: 'Instrument setup', control: 'Control point', boundary: 'Boundary point', benchmark: 'Benchmark', monument: 'Monument',
     photo: 'Photo point', 'notes-pin': 'Notes pin', 'map-pin': 'Map pin', voice: 'Voice note',
     gps: 'Phone GPS point', topo: 'Point', gnss: 'GNSS station',
   };
@@ -6490,7 +6715,7 @@
     if (sym === 'photo') return PT.photo;
     if (sym === 'notes-pin' || sym === 'map-pin') return PT.notes;
     if (sym === 'gnss') return PT.gnss;
-    if (sym === 'setup' || sym === 'control' || sym === 'voice') return PT.data;
+    if (sym === 'setup' || sym === 'control' || sym === 'benchmark' || sym === 'voice') return PT.data;
     return PT.points;
   }
 
@@ -6515,22 +6740,59 @@
   const MAP_LBL = 'font-heading text-[11px] tracking-[0.12em] uppercase text-fb-ink-muted';
   const MAP_FLOAT_BTN = 'fb-map-float w-11 h-11 flex items-center justify-center text-fb-heading active:bg-fb-page-deep';
 
-  function MapGridToggle({ value, onChange, dark }) {
-    const crsList = fbGeo.CRS_REGISTRY.filter(c => c.proj4);
+  // Symbol choice for a point: Auto (what the map works out from the code and
+  // source) or a kind; an ordinary Point also picks the mark it is drawn with.
+  const MAP_KIND_CHOICES = [[null, 'Auto'], ['topo', 'Point'], ['setup', 'Setup'], ['control', 'Control'], ['boundary', 'Boundary'], ['benchmark', 'Benchmark'], ['monument', 'Monument']];
+  const MAP_GLYPH_LABEL = { dot: 'Dot', cross: 'Cross', x: 'X', square: 'Square', triangle: 'Triangle', diamond: 'Diamond', circle: 'Circle' };
+  function MapSymbolPicker({ value, onChange }) {
+    const kind = (value && value.kind) || null;
+    const glyph = (value && value.glyph) || 'dot';
+    const set = (k, g) => onChange(k === null ? null : { kind: k, glyph: k === 'topo' ? g : null });
+    const chip = on => `h-9 px-3 rounded-lg text-sm font-semibold border inline-flex items-center flex-shrink-0 whitespace-nowrap ${on
+      ? 'bg-fb-cover border-fb-cover text-white' : 'bg-fb-page-alt border-fb-border text-fb-heading'}`;
     return (
-      <div role="group" aria-label="Display grid"
-        className={`flex gap-[3px] p-[3px] rounded-[10px] ${dark ? 'bg-fb-cover-deep' : 'bg-fb-page-alt border border-fb-border'}`}>
-        {crsList.map(c => {
-          const on = c.id === value;
-          return (
-            <button key={c.id} type="button" aria-pressed={on} onClick={() => onChange(c.id)}
-              className={`h-[34px] px-3 rounded-lg font-data text-[13px] whitespace-nowrap ${on
-                ? (dark ? 'bg-fb-page text-fb-cover-deep' : 'bg-fb-cover text-white')
-                : (dark ? 'text-fb-accent-pale' : 'text-fb-ink')}`}>
-              {c.short}
-            </button>
-          );
-        })}
+      <div>
+        <div role="group" aria-label="Point symbol" className="flex gap-1.5 overflow-x-auto pb-0.5">
+          {MAP_KIND_CHOICES.map(([k, label]) => (
+            <button key={label} type="button" aria-pressed={kind === k} onClick={() => set(k, glyph)} className={chip(kind === k)}>{label}</button>
+          ))}
+        </div>
+        {kind === 'topo' && (
+          <div role="group" aria-label="Point mark" className="flex gap-1.5 mt-1.5 overflow-x-auto pb-0.5">
+            {fbGeo.MAP_GLYPHS.map(g => (
+              <button key={g} type="button" aria-label={MAP_GLYPH_LABEL[g]} aria-pressed={glyph === g} onClick={() => set('topo', g)}
+                className={`w-11 h-10 rounded-lg border inline-flex items-center justify-center flex-shrink-0 ${glyph === g ? 'bg-fb-accent-pale border-fb-accent' : 'bg-fb-page-alt border-fb-border'}`}>
+                <svg width="26" height="26" viewBox="-1 -1 26 26" aria-hidden="true" dangerouslySetInnerHTML={{ __html: mapGlyphBody(g, FB_BRAND.PAGE_TYPES.points.color, FBC.field) }} />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // The map never rotates, so this is a fixed north-up rose, not a control.
+  function MapCompass() {
+    const kite = (d, cls, rot) => <path d={d} className={cls} transform={rot ? `rotate(${rot} 28 28)` : undefined} />;
+    return (
+      <div className="fb-map-compass fb-map-float rounded-full" role="img" aria-label="North is up">
+        <svg viewBox="0 0 56 56" width="56" height="56" className="block">
+          <circle cx="28" cy="28" r="26" fill="none" strokeWidth="1" className="stroke-fb-border" />
+          <g fill="currentColor" className="text-fb-ink-faint">
+            {kite('M28 18 L30 28 L28 26 L26 28 Z', '', 45)}
+            {kite('M28 18 L30 28 L28 26 L26 28 Z', '', 135)}
+            {kite('M28 18 L30 28 L28 26 L26 28 Z', '', 225)}
+            {kite('M28 18 L30 28 L28 26 L26 28 Z', '', 315)}
+          </g>
+          <g fill="currentColor" className="text-fb-ink">
+            <path d="M28 46 L31.5 28 L28 31.5 L24.5 28 Z" />
+            <path d="M46 28 L28 24.5 L31.5 28 L28 31.5 Z" />
+            <path d="M10 28 L28 24.5 L24.5 28 L28 31.5 Z" />
+          </g>
+          <path d="M28 10 L31.5 28 L28 24.5 L24.5 28 Z" fill="currentColor" className="text-fb-error" />
+          <circle cx="28" cy="28" r="1.8" className="fill-fb-page" />
+          <text x="28" y="8.5" textAnchor="middle" fontSize="8" fill="currentColor" className="font-heading text-fb-error">N</text>
+        </svg>
       </div>
     );
   }
@@ -6619,6 +6881,7 @@
     const [number, setNumber] = useState(() => String(fbGeo.nextGpsPtNum(project)));
     const [desc, setDesc] = useState('');
     const [note, setNote] = useState('');
+    const [mapSym, setMapSym] = useState(null);
     const numTrim = number.trim();
     const dup = !!numTrim && !!fbGeo.pointNumberCounts(project)[numTrim];
     const grid = local ? { n: where.lat, e: where.lng } : fbGeo.toGrid(where.lat, where.lng, crsId);
@@ -6648,13 +6911,15 @@
             </div>
           </div>
           {dup && <Notice className="mb-3">Point {numTrim} already exists in this project.</Notice>}
+          <p className={lbl}>Symbol</p>
+          <div className="mb-3"><MapSymbolPicker value={mapSym} onChange={setMapSym} /></div>
           <p className={lbl}>Note</p>
           <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} aria-label="Note"
             className="fb-map-note w-full px-3 py-2 rounded-xl bg-fb-field border border-fb-border outline-none focus:border-fb-accent mb-4" />
           <div className="flex gap-2">
             <button type="button" onClick={onClose} className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Cancel</button>
             <button type="button" disabled={!numTrim || !grid}
-              onClick={() => onSave({ number: numTrim, desc: desc.trim(), note: note.trim(), lat: where.lat, lng: where.lng, grid })}
+              onClick={() => onSave({ number: numTrim, desc: desc.trim(), note: note.trim(), lat: where.lat, lng: where.lng, grid, mapSym })}
               className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
               {dup ? 'Save anyway' : 'Save pin'}
             </button>
@@ -6715,7 +6980,7 @@
   // ── Point detail ───────────────────────────────────────────────────────────
   // Stored N/E/Z exactly as typed, in the PROJECT grid; a converted line only
   // when the display grid differs, marked display-only.
-  function MapPointSheet({ p, project, projectId, crsId, displayId, local, fix, locked,
+  function MapPointSheet({ p, project, projectId, crsId, local, fix, locked,
                            onClose, onNavigate, onInverse, onOpenRow, onSaved }) {
     const toast = useToast();
     const crs = fbGeo.getCrs(crsId);
@@ -6724,6 +6989,7 @@
     const code = fbGeo.pointCode(p.desc);
     const isRow = p.isRow;
     const [editing, setEditing] = useState(false);
+    const [symSel, setSymSel] = useState(p.userSym || null);
     const [num, setNum] = useState(p.number);
     const [desc, setDesc] = useState(p.desc);
     const [note, setNote] = useState(p.note || '');
@@ -6767,7 +7033,6 @@
     const voice = isRow ? fbGeo.mediaForPoint(project, p.id, 'voice') : (p.source === 'voice' ? [{ pageId: p.pageId }] : []);
 
     const hasGrid = p.N !== null && p.E !== null;
-    const conv = hasGrid && !local && displayId !== crsId ? fbGeo.convertGrid(p.N, p.E, crsId, displayId) : null;
     const dec = Math.max(mapDecimals(p.text.n), mapDecimals(p.text.e));
     const fromMe = local ? null : mapFromMe(fix, p, crsId);
     const dupNum = editing && num.trim() && num.trim() !== p.number && isPtNumTaken(projectId, num.trim(), p.id);
@@ -6776,6 +7041,8 @@
       const n = num.trim();
       if (!n) return;
       updatePointRow(projectId, p.id, { col_ptnum: n, col_desc: desc.trim() });
+      const before = JSON.stringify(p.userSym || null), after = JSON.stringify(symSel || null);
+      if (before !== after) updatePointRowFields(projectId, p.id, { mapSym: symSel || undefined });
       setEditing(false);
       onSaved();
       toast.success(`Point ${n} updated`);
@@ -6801,7 +7068,7 @@
               {code && <span className="font-heading text-[14px] tracking-wide px-2.5 py-0.5 rounded-md" style={{ background: tone.bg, color: tone.color }}>{code}</span>}
               <span className="flex-1" />
               {isRow && !locked && (
-                <button type="button" aria-label="Edit number and description" onClick={() => { setNum(p.number); setDesc(p.desc); setEditing(true); }}
+                <button type="button" aria-label="Edit number and description" onClick={() => { setNum(p.number); setDesc(p.desc); setSymSel(p.userSym || null); setEditing(true); }}
                   className="w-11 h-11 rounded-[10px] border border-fb-border bg-fb-page-alt flex items-center justify-center text-fb-ink active:bg-fb-page-deep">
                   <Ico.Edit />
                 </button>
@@ -6818,6 +7085,7 @@
                 className="flex-1 min-w-0 px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
             </div>
             {dupNum && <Notice className="mb-2">Point {num.trim()} already exists in this project.</Notice>}
+            <div className="mb-2"><MapSymbolPicker value={symSel} onChange={setSymSel} /></div>
             <div className="flex gap-2">
               <button type="button" onClick={() => setEditing(false)} className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Cancel</button>
               <button type="button" disabled={!num.trim()} onClick={saveEdit} className="flex-1 py-3 rounded-xl text-sm font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
@@ -6837,11 +7105,6 @@
                   <span className="font-data text-[18px] text-fb-ink">{v}</span>
                 </div>
               ))}
-              {conv && (
-                <p className="font-data text-xs text-fb-ink-muted mt-1">
-                  {fbGeo.getCrs(displayId).short}: N {fbGeo.fmtThin(conv.n, dec)} E {fbGeo.fmtThin(conv.e, dec)} · converted, display only
-                </p>
-              )}
             </>
           ) : (
             <p className="font-data text-base text-fb-ink">{Number.isFinite(p.lat) ? fbGeo.fmtLatLon(p.lat, p.lon) : 'No coordinates'}</p>
@@ -6954,7 +7217,7 @@
   }
 
   // ── Layers, grid & export ──────────────────────────────────────────────────
-  function MapLayersSheet({ project, projectId, prefs, setPrefs, local, displayId, visibleCount, locked,
+  function MapLayersSheet({ project, projectId, prefs, setPrefs, local, summary, visibleCount, locked,
                             onExport, onOpenIn, onClose, onSaved, extraToggles }) {
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
@@ -6979,6 +7242,7 @@
             <h2 className="font-heading text-xl tracking-[0.1em] uppercase text-fb-heading">Map layers</h2>
             <button type="button" aria-label="Close layers" onClick={onClose} className="w-11 h-11 -mr-2 flex items-center justify-center text-fb-ink-muted active:bg-fb-page-deep rounded-xl"><Ico.Close size={20} /></button>
           </div>
+          {summary && <p className="font-data text-xs text-fb-ink-muted -mt-2 mb-3">{summary}</p>}
 
           <p className={lbl}>Base map</p>
           <div role="radiogroup" aria-label="Base map" className="rounded-xl border border-fb-border bg-fb-field overflow-hidden mb-1.5">
@@ -7021,18 +7285,6 @@
             ))}
             <p className="text-[11px] text-fb-ink-muted">Matched against the first word of the description.</p>
           </div>
-
-          {!local && (
-            <>
-              <p className={lbl}>Coordinate system</p>
-              <div className="flex gap-2 items-center mb-4">
-                <MapGridToggle value={displayId} onChange={id => setPrefs({ display: id })} />
-                <button type="button" disabled className="flex-1 h-[46px] rounded-[10px] border border-dashed border-fb-rule-tan text-fb-heading font-heading text-[13px] tracking-wide disabled:opacity-60">
-                  More systems…
-                </button>
-              </div>
-            </>
-          )}
 
           <div className="border-t border-fb-border pt-3">
             <div className="flex items-baseline justify-between mb-2">
@@ -7198,7 +7450,76 @@
   }
 
   // ── The page ───────────────────────────────────────────────────────────────
-  function MapView({ projectId }) {
+  // The next round scale at or past d — 1:1000, not ≈1:937 — so the frame
+  // that replaces it is never bigger than what was asked for.
+  function mapNiceScale(d) {
+    const base = Math.pow(10, Math.floor(Math.log10(d)));
+    return [1, 1.25, 2, 2.5, 5, 10].map(s => s * base).find(v => v >= d * 0.999) || d;
+  }
+
+  // What the map draws, worked out from the project alone — shared by the live
+  // map and the Map page's PDF so the two can't disagree. `ll` is [lat, lng]
+  // (or [N, E] on a Local project).
+  function mapProjectFeats(project, local) {
+    if (!project) return { pts: [], stations: [], byId: {} };
+    const f = fbGeo.getMapFeatures(project);
+    const extras = fbGeo.rowExtras(project), codes = fbGeo.symbolCodes(project);
+    const pts = f.points.map(p => {
+      const sym = fbGeo.pointSymbol(p, codes, extras[p.id]);
+      return {
+        ...p,
+        ll: local ? (p.N !== null && p.E !== null ? [p.N, p.E] : null) : (p.lat !== null ? [p.lat, p.lon] : null),
+        sym,
+        glyph: fbGeo.pointGlyph(sym, extras[p.id]),
+        userSym: (extras[p.id] && extras[p.id].mapSym) || null,
+        note: (extras[p.id] && extras[p.id].note) || '',
+        isRow: p.pageType === 'points',
+      };
+    });
+    const stations = local ? [] : f.stations.map(s => ({ ...s, ll: [s.lat, s.lon], sym: 'gnss', N: null, E: null }));
+    const byId = {};
+    pts.forEach(p => { byId[p.id] = p; });
+    stations.forEach(s => { byId[s.id] = s; });
+    return { pts, stations, byId };
+  }
+  // Manual figures, then the lines the description codes draw (never stored).
+  // A code line already converted to a figure isn't drawn twice.
+  function mapProjectLines(project, local, crsId) {
+    if (!project) return [];
+    const lookup = fbGeo.vertexLookup(project);
+    const toLL = v => (local ? [v.N, v.E] : (v.lat !== null ? [v.lat, v.lon] : null));
+    const labelAt = verts => {
+      const c = fbGeo.figureLabelPoint(verts);
+      if (local) return [c.N, c.E];
+      const ll = fbGeo.toLatLon(c.N, c.E, crsId);
+      return ll ? [ll.lat, ll.lon] : null;
+    };
+    const figs = fbGeo.getFigures(project).map(f => {
+      const r = fbGeo.resolveFigure(f, lookup);
+      return {
+        key: 'fig:' + f.id, fig: f, source: 'figure', name: f.name || fbGeo.figureLayer(f.layer).label,
+        layer: f.layer, closed: r.closed, r, lls: r.verts.map(toLL).filter(Boolean),
+        labelLL: r.closed && r.verts.length >= 3 ? labelAt(r.verts) : null,
+      };
+    });
+    const run = verts => verts.map(v => v.id).join('|');
+    const taken = new Set();
+    figs.forEach(l => { taken.add(run(l.r.verts)); taken.add(run(l.r.verts.slice().reverse())); });
+    const codes = fbGeo.codeLines(project).filter(c => !taken.has(run(c.pts))).map(c => {
+      const area = c.closed ? fbGeo.shoelaceArea(c.pts) : null;
+      return {
+        key: 'code:' + c.name, code: c, source: 'code', name: c.name, layer: c.layer, closed: c.closed,
+        r: { verts: c.pts, missing: [], closed: c.closed, length: fbGeo.pathLength(c.pts, c.closed), area },
+        lls: c.pts.map(toLL).filter(Boolean), labelLL: c.closed ? labelAt(c.pts) : null,
+      };
+    });
+    return [...figs, ...codes];
+  }
+
+  // mapPageId: opened from a Map page — the map is fitted to that page's print
+  // frame and the frame can be edited. Without it this is the main map, which
+  // shows every Map page's frame and opens one when its label is tapped.
+  function MapView({ projectId, mapPageId }) {
     const toast = useToast();
     const [project, setProject] = useState(() => DB.getProject(projectId));
     const reload = useCallback(() => { const p = DB.getProject(projectId); setProject(p ? { ...p } : null); }, [projectId]);
@@ -7206,30 +7527,14 @@
 
     const crsId = fbGeo.projectCrsId(project);
     const local = !fbGeo.isGrid(crsId);
-    const displayId = local ? 'utm20n' : (fbGeo.isGrid(prefs.display) ? prefs.display : crsId);
+    const displayId = local ? 'utm20n' : crsId;
     const locked = !!project?.lock;
     const base = local ? 'paper' : prefs.base;
 
     const { fix, err: gpsErr } = useGpsWatch(!local && !!project);
 
     // Everything with a position, with its map position (`ll`) and symbol.
-    const feats = React.useMemo(() => {
-      if (!project) return { pts: [], stations: [], byId: {} };
-      const f = fbGeo.getMapFeatures(project);
-      const extras = fbGeo.rowExtras(project), codes = fbGeo.symbolCodes(project);
-      const pts = f.points.map(p => ({
-        ...p,
-        ll: local ? (p.N !== null && p.E !== null ? [p.N, p.E] : null) : (p.lat !== null ? [p.lat, p.lon] : null),
-        sym: fbGeo.pointSymbol(p, codes, extras[p.id]),
-        note: (extras[p.id] && extras[p.id].note) || '',
-        isRow: p.pageType === 'points',
-      }));
-      const stations = local ? [] : f.stations.map(s => ({ ...s, ll: [s.lat, s.lon], sym: 'gnss', N: null, E: null }));
-      const byId = {};
-      pts.forEach(p => { byId[p.id] = p; });
-      stations.forEach(s => { byId[s.id] = s; });
-      return { pts, stations, byId };
-    }, [project, local]);
+    const feats = React.useMemo(() => mapProjectFeats(project, local), [project, local]);
 
     const [selId, setSelId]       = useState(null);
     const [sheet, setSheet]       = useState(null);    // 'detail' | 'layers' | 'find' | 'gps' | 'pin' | 'export' | 'inverse' | 'figure' | 'figname'
@@ -7248,37 +7553,7 @@
     // Linework with its map positions: manual figures, then the lines the
     // description codes draw (computed each time, never stored). A code line
     // already converted to a figure isn't drawn twice.
-    const lines = React.useMemo(() => {
-      if (!project) return [];
-      const lookup = fbGeo.vertexLookup(project);
-      const toLL = v => (local ? [v.N, v.E] : (v.lat !== null ? [v.lat, v.lon] : null));
-      const labelAt = verts => {
-        const c = fbGeo.figureLabelPoint(verts);
-        if (local) return [c.N, c.E];
-        const ll = fbGeo.toLatLon(c.N, c.E, crsId);
-        return ll ? [ll.lat, ll.lon] : null;
-      };
-      const figs = fbGeo.getFigures(project).map(f => {
-        const r = fbGeo.resolveFigure(f, lookup);
-        return {
-          key: 'fig:' + f.id, fig: f, source: 'figure', name: f.name || fbGeo.figureLayer(f.layer).label,
-          layer: f.layer, closed: r.closed, r, lls: r.verts.map(toLL).filter(Boolean),
-          labelLL: r.closed && r.verts.length >= 3 ? labelAt(r.verts) : null,
-        };
-      });
-      const run = verts => verts.map(v => v.id).join('|');
-      const taken = new Set();
-      figs.forEach(l => { taken.add(run(l.r.verts)); taken.add(run(l.r.verts.slice().reverse())); });
-      const codes = fbGeo.codeLines(project).filter(c => !taken.has(run(c.pts))).map(c => {
-        const area = c.closed ? fbGeo.shoelaceArea(c.pts) : null;
-        return {
-          key: 'code:' + c.name, code: c, source: 'code', name: c.name, layer: c.layer, closed: c.closed,
-          r: { verts: c.pts, missing: [], closed: c.closed, length: fbGeo.pathLength(c.pts, c.closed), area },
-          lls: c.pts.map(toLL).filter(Boolean), labelLL: c.closed ? labelAt(c.pts) : null,
-        };
-      });
-      return [...figs, ...codes];
-    }, [project, local, crsId]);
+    const lines = React.useMemo(() => mapProjectLines(project, local, crsId), [project, local, crsId]);
     const openLine = lineKey ? lines.find(l => l.key === lineKey) : null;
     const exportLines = lines.filter(l => l.source === 'figure' || prefs.codeLines)
       .map(l => ({ name: l.name, layer: l.layer, closed: l.closed, source: l.source, verts: l.r.verts }));
@@ -7286,6 +7561,7 @@
     // ── Leaflet ──
     const wrapRef = useRef(null), elRef = useRef(null), scaleBoxRef = useRef(null);
     const mapRef = useRef(null), layersRef = useRef({});
+    const [mapReady, setMapReady] = useState(false);
     const hRef = useRef({});   // current handlers, read by Leaflet callbacks
     const lastLocate = useRef(0);
     const L = window.L;
@@ -7306,11 +7582,14 @@
         pts: L.layerGroup().addTo(map),
         labels: L.layerGroup().addTo(map),
         grid: L.layerGroup().addTo(map),
+        frameRenderer: L.svg(),
+        frames: L.layerGroup().addTo(map),
         lines: L.layerGroup().addTo(map),
         me: L.layerGroup().addTo(map),
         sel: L.layerGroup().addTo(map),
       };
       mapRef.current = map;
+      setMapReady(true);
 
       // First view: a point or page handed over from the Points page, then the
       // saved view, then every point, then Nova Scotia until a fix arrives.
@@ -7331,7 +7610,8 @@
 
       map.on('moveend', () => {
         const c = map.getCenter();
-        mapSave('fb_map_view_' + projectId, { kind: local ? 'local' : 'geo', lat: c.lat, lng: c.lng, zoom: map.getZoom() });
+        // A Map page is opened at its frame; that view is not the one to come back to.
+        if (!hRef.current.noSaveView) mapSave('fb_map_view_' + projectId, { kind: local ? 'local' : 'geo', lat: c.lat, lng: c.lng, zoom: map.getZoom() });
         setView(v => v + 1);
       });
       map.on('move', () => {
@@ -7348,7 +7628,7 @@
       setView(v => v + 1);
       // For browser-tests/part11-map.js: canvas dots have no DOM element to tap.
       window._fbMapTest = { map, tap: id => hRef.current.pointTap && hRef.current.pointTap(id), line: key => hRef.current.lineTap && hRef.current.lineTap(key) };
-      return () => { ro.disconnect(); map.remove(); mapRef.current = null; layersRef.current = {}; delete window._fbMapTest; };
+      return () => { ro.disconnect(); map.remove(); mapRef.current = null; layersRef.current = {}; setMapReady(false); delete window._fbMapTest; };
     }, [L, !!project, local]);
 
     // Base map
@@ -7389,9 +7669,9 @@
       });
       feats.pts.forEach(p => {
         if (!p.ll) return;
-        if (MAP_DIV_SYMBOLS.has(p.sym) || p.hasPhoto) {
+        if (MAP_DIV_SYMBOLS.has(p.sym) || p.hasPhoto || p.glyph) {
           L.marker(p.ll, {
-            icon: L.divIcon({ className: 'fb-map-sym', html: mapSymbolSvg(p.sym, p.hasPhoto), iconSize: [26, 26], iconAnchor: [13, 13] }),
+            icon: L.divIcon({ className: 'fb-map-sym', html: mapSymbolSvg(p.sym, p.hasPhoto, p.glyph), iconSize: [26, 26], iconAnchor: [13, 13] }),
             keyboard: false, title: `${p.number} ${p.desc}`.trim(), zIndexOffset: p.sym === 'topo' ? 0 : 100,
           }).on('click', tap(p.id)).addTo(lay.pts);
         } else if (p.sym === 'gps') {
@@ -7542,6 +7822,142 @@
       }
     }, [sel, inv, openLine, draft, feats]);
 
+    // ── Map pages: print frames ──
+    // A frame is { kind, x, y, w } in world metres (see print.js): the paper
+    // shape, fixed on the ground, so panning and zooming never change it.
+    const fbPrint = window.fbPrint;
+    const frameKind = local ? 'local' : 'geo';
+    const mapPages = React.useMemo(() => (project ? project.pages.filter(p => p.type === 'map') : []), [project]);
+    const activePage = mapPageId ? (mapPages.find(p => p.id === mapPageId) || null) : null;
+    const storedFrame = activePage ? fbPrint.normalizeMapFrame(activePage.mapFrame) : null;
+    const [liveFrame, setLiveFrame] = useState(null);      // the frame while a finger or mouse has hold of it
+    const frame = liveFrame || (storedFrame && storedFrame.kind === frameKind ? storedFrame : null);
+    const liveRef = useRef(null), frameNow = useRef(null);
+    frameNow.current = frame;
+    hRef.current.noSaveView = !!activePage;
+    hRef.current.saveFrame = f => {
+      if (!activePage || locked) return;
+      DB.updatePage(projectId, activePage.id, { mapFrame: f ? { kind: frameKind, x: f.x, y: f.y, w: f.w } : null, base });
+      liveRef.current = null; setLiveFrame(null); reload();
+    };
+    // A frame filling most of what is on screen, at a round scale.
+    function placeInView() {
+      const b = mapRef.current.getBounds();
+      const nw = fbPrint.toWorld(frameKind, b.getNorth(), b.getWest()), se = fbPrint.toWorld(frameKind, b.getSouth(), b.getEast());
+      const f = { kind: frameKind, ...fbPrint.fitView({ x: nw.x, y: nw.y, w: se.x - nw.x, h: se.y - nw.y }, 0.8) };
+      return fbPrint.mapSetScale(f, mapNiceScale(fbPrint.mapScale(f)));
+    }
+    hRef.current.placeInView = placeInView;
+
+    // Arriving on a Map page: fit its frame, or — a new page — fit the points
+    // and drop a frame on them with the frame tool open.
+    useEffect(() => {
+      const map = mapRef.current;
+      if (!mapReady || !map || !activePage) return;
+      const sf = storedFrame && storedFrame.kind === frameKind ? storedFrame : null;
+      if (sf) {
+        const c = fbPrint.frameCorners(sf);
+        map.fitBounds(L.latLngBounds([[c.nw.lat, c.nw.lng], [c.se.lat, c.se.lng]]), { padding: [24, 24], animate: false });
+        setMode(m => (m === 'frame' ? null : m));
+        return;
+      }
+      if (locked) return;
+      const lls = [...feats.pts, ...feats.stations].filter(p => p.ll).map(p => p.ll);
+      if (lls.length) map.fitBounds(L.latLngBounds(lls), { padding: [48, 48], maxZoom: local ? 3 : 19, animate: false });
+      setSheet(null); setSelId(null);
+      hRef.current.saveFrame(hRef.current.placeInView());
+      setMode('frame');
+    }, [mapReady, mapPageId]);
+
+    // The base map a frame was set on is what its PDF prints.
+    useEffect(() => {
+      if (activePage && !locked && activePage.base !== base) DB.updatePage(projectId, activePage.id, { base });
+    }, [mapPageId, base]);
+
+    // Every Map page's frame, with a label chip on its corner. The open page's
+    // is solid (and has handles while the frame tool is on); the others open
+    // their page when their label is tapped.
+    useEffect(() => {
+      const map = mapRef.current, lay = layersRef.current;
+      if (!mapReady || !map || !lay.frames) return;
+      lay.frames.clearLayers();
+      mapPages.forEach(pg => {
+        const open = pg.id === mapPageId;
+        const f = open ? frame : fbPrint.normalizeMapFrame(pg.mapFrame);
+        if (!f || f.kind !== frameKind) return;
+        const c = fbPrint.frameCorners(f), editing = open && mode === 'frame';
+        L.polygon([c.nw, c.ne, c.se, c.sw].map(p => [p.lat, p.lng]), {
+          renderer: lay.frameRenderer, interactive: false, color: FBC.info, weight: editing ? 2.4 : 1.8,
+          dashArray: editing ? null : '7 5', opacity: open ? 1 : 0.75, fill: editing, fillColor: FBC.info, fillOpacity: 0.06,
+        }).addTo(lay.frames);
+        const tag = document.createElement('span');
+        tag.textContent = `P.${pg.pageNumber}${pg.title ? ' ' + pg.title : ''} · ${fbPrint.scaleText(fbPrint.mapScale(f))}`;
+        const chip = L.marker([c.nw.lat, c.nw.lng], {
+          icon: L.divIcon({ className: 'fb-map-frame-tag' + (open ? ' on' : ''), html: tag.outerHTML, iconSize: null, iconAnchor: [0, 0] }),
+          interactive: !open, keyboard: false, zIndexOffset: 300,
+        });
+        if (!open) chip.on('click', ev => { L.DomEvent.stopPropagation(ev); navigate(`#/project/${projectId}/map/${pg.id}`); });
+        chip.addTo(lay.frames);
+        if (editing) [c.nw, c.ne, c.se, c.sw].forEach(p => L.marker([p.lat, p.lng], {
+          icon: L.divIcon({ className: 'fb-map-frame-handle', html: '<span></span>', iconSize: [20, 20], iconAnchor: [10, 10] }),
+          interactive: false, keyboard: false, zIndexOffset: 310,
+        }).addTo(lay.frames));
+      });
+    }, [mapReady, mapPages, mapPageId, liveFrame, mode, frameKind]);
+
+    // Moving and resizing the frame. Pointer-down on it (capture phase) takes
+    // the gesture from the map; a second finger hands it back so the map can
+    // pinch. Moves are kept in state; the frame is saved when the finger lifts.
+    useEffect(() => {
+      const map = mapRef.current;
+      if (!mapReady || !map || mode !== 'frame' || !activePage || locked) return;
+      const el = map.getContainer();
+      let drag = null;
+      const world = e => { const ll = map.mouseEventToLatLng(e); return fbPrint.toWorld(frameKind, ll.lat, ll.lng); };
+      const perPx = () => {
+        const c = map.getSize().divideBy(2);
+        const a = map.containerPointToLatLng(c), b = map.containerPointToLatLng(c.add([1, 0]));
+        return Math.abs(fbPrint.toWorld(frameKind, b.lat, b.lng).x - fbPrint.toWorld(frameKind, a.lat, a.lng).x) || 1e-9;
+      };
+      const cancel = () => { if (!drag) return; drag = null; map.dragging.enable(); liveRef.current = null; setLiveFrame(null); };
+      const down = e => {
+        if (drag) { cancel(); return; }
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        const f = frameNow.current && { ...frameNow.current };
+        if (!f) return;
+        const pt = world(e), h = fbPrint.hit([{ id: 'f', ...f }], pt, 18 * perPx(), 'f');
+        if (!h) return;
+        e.preventDefault(); e.stopPropagation();
+        map.dragging.disable();
+        drag = { id: e.pointerId, part: h.part, start: pt, before: f, moved: false, px: perPx() };
+      };
+      const move = e => {
+        if (!drag || e.pointerId !== drag.id) return;
+        const pt = world(e), dx = pt.x - drag.start.x, dy = pt.y - drag.start.y;
+        if (!drag.moved && Math.hypot(dx, dy) < 4 * drag.px) return;
+        drag.moved = true;
+        const n = drag.part === 'body' ? fbPrint.move(drag.before, dx, dy) : fbPrint.resize(drag.before, drag.part, pt, 24 * drag.px);
+        liveRef.current = { kind: frameKind, x: n.x, y: n.y, w: n.w };
+        setLiveFrame(liveRef.current);
+      };
+      const up = e => {
+        if (!drag || e.pointerId !== drag.id) return;
+        const d = drag; drag = null; map.dragging.enable();
+        if (d.moved && liveRef.current) hRef.current.saveFrame(liveRef.current); else { liveRef.current = null; setLiveFrame(null); }
+      };
+      el.addEventListener('pointerdown', down, true);
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', cancel);
+      return () => {
+        el.removeEventListener('pointerdown', down, true);
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', cancel);
+        if (drag) map.dragging.enable();
+      };
+    }, [mapReady, mode, mapPageId, frameKind, locked]);
+
     // ── Taps ──
     hRef.current.pointTap = id => {
       if (mode === 'figure') { addVertex(id); return; }
@@ -7654,8 +8070,8 @@
       setPinAt({ lat: c.lat, lng: c.lng });
       setSheet('pin');
     }
-    function savePin({ number, desc, note, lat, lng, grid }) {
-      const row = addMapPinRow(projectId, { number, desc, note, lat, lng, grid, local });
+    function savePin({ number, desc, note, lat, lng, grid, mapSym }) {
+      const row = addMapPinRow(projectId, { number, desc, note, lat, lng, grid, local, mapSym });
       setSheet(null); setMode(null); setPinAt(null);
       if (!row) { toast.error('Pin not saved'); return; }
       reload();
@@ -7720,6 +8136,13 @@
     }
 
     const pinMode = mode === 'pin', invMode = mode === 'inverse', figMode = mode === 'figure' && !!draft;
+    const frameMode = mode === 'frame' && !!activePage;
+    const frameDenom = frame ? fbPrint.mapScale(frame) : 0;
+    function applyScale(v) {
+      const d = parseFloat(String(v).replace(/[^0-9.]/g, ''));
+      if (!frame || !(d > 0) || !isFinite(d)) return;
+      hRef.current.saveFrame(fbPrint.mapSetScale(frame, d));
+    }
     const banner = invMode ? `Tap a point to inverse from Pt ${inv?.a?.number}` : null;
 
     return (
@@ -7730,21 +8153,17 @@
             <button type="button" aria-label="Back to project" onClick={() => navigate(`#/project/${projectId}`)}
               className="w-11 h-11 flex items-center justify-center rounded-xl active:bg-white/10 flex-shrink-0"><Ico.Back /></button>
             <div className="flex-1 min-w-0">
-              <p className="font-heading text-[11px] tracking-[0.18em] text-fb-accent-pale leading-none">MAP</p>
+              <p className="font-heading text-[11px] tracking-[0.18em] text-fb-accent-pale leading-none">MAP · {local ? 'LOCAL' : pCrs.short}</p>
               <h1 className="font-heading text-[19px] font-medium tracking-wide truncate leading-tight">{project.name || 'Untitled project'}</h1>
-            </div>
-            <div className="fb-map-top-grid items-center gap-2">
-              {!local && <MapGridToggle dark value={displayId} onChange={id => setPrefs({ display: id })} />}
             </div>
             <button type="button" aria-label="Find a point" onClick={() => setSheet('find')}
               className="w-11 h-11 flex items-center justify-center rounded-xl active:bg-white/10 flex-shrink-0"><Ico.Search /></button>
           </div>
-          <div className="fb-map-top-row2 items-center gap-2.5 px-1 pb-2">
-            {!local
-              ? <><MapGridToggle dark value={displayId} onChange={id => setPrefs({ display: id })} />
-                  <span className="font-data text-[11px] leading-tight text-fb-accent-pale">CSRS<br />CGVD2013</span></>
-              : <span className="font-data text-xs text-fb-accent-pale">Local / assumed coordinates</span>}
-          </div>
+          {activePage && (
+            <div className="-mx-2 mt-1 bg-fb-page text-fb-ink">
+              <PageHeaderStrip page={activePage} projectId={projectId} onReload={reload} noNotes />
+            </div>
+          )}
         </header>
 
         {/* Map */}
@@ -7797,13 +8216,8 @@
             {locked && <p className="text-xs text-fb-ink-muted mt-1 flex items-center gap-1"><Ico.Lock size={12} /> Locked · read only</p>}
           </section>
 
-          {/* Left: zoom to all */}
-          <div className="fb-map-left">
-            <button type="button" aria-label="Zoom to all points" title="Zoom to all points" onClick={fitAll} className={MAP_FLOAT_BTN + ' rounded-full flex-col gap-0'}>
-              <span className="font-heading text-[9px] leading-none text-fb-error">N</span>
-              <Ico.FitAll size={18} />
-            </button>
-          </div>
+          {/* Top right: north-up compass rose */}
+          <MapCompass />
           {/* Right: layers, zoom */}
           <div className="fb-map-right flex flex-col gap-2.5">
             <button type="button" aria-label="Layers, grid and export" title="Layers" onClick={() => setSheet('layers')} className={MAP_FLOAT_BTN + ' rounded-xl'}><Ico.Layers /></button>
@@ -7819,14 +8233,19 @@
 
           {/* Bottom left: scale bar only — the grid in use is in the top bar. */}
           <div ref={scaleBoxRef} className="fb-map-scale fb-map-float rounded-lg px-2 pt-1 pb-0.5" />
-          {/* Bottom right: me */}
-          {!local && (
-            <button type="button" aria-label={follow ? 'Following my position — double-tap to stop' : 'Centre on my position (double-tap to follow)'} aria-pressed={follow}
-              onClick={locate}
-              className={`fb-map-locate fb-map-float w-[52px] h-[52px] rounded-full flex items-center justify-center ${follow ? 'bg-fb-info text-white' : 'text-fb-info'}`}>
-              <Ico.Locate />
+          {/* Bottom right: zoom to all points, then centre on me */}
+          <div className="fb-map-br">
+            <button type="button" aria-label="Zoom to all points" title="Zoom to all points" onClick={fitAll} className={MAP_FLOAT_BTN + ' rounded-full'}>
+              <Ico.FitAll size={20} />
             </button>
-          )}
+            {!local && (
+              <button type="button" aria-label={follow ? 'Following my position — double-tap to stop' : 'Centre on my position (double-tap to follow)'} aria-pressed={follow}
+                onClick={locate}
+                className={`fb-map-float w-[52px] h-[52px] rounded-full flex items-center justify-center ${follow ? 'bg-fb-info text-white' : 'text-fb-info'}`}>
+                <Ico.Locate />
+              </button>
+            )}
+          </div>
 
         </div>
 
@@ -7864,6 +8283,36 @@
               <span className="flex-1 text-sm text-fb-ink">Move the map to put the cross on the spot.</span>
               <button type="button" onClick={() => setMode(null)} className="py-2.5 px-4 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Cancel</button>
             </div>
+          ) : frameMode ? (
+            <div className="mb-2.5" data-map-frame-bar>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="font-heading text-[15px] tracking-wide uppercase text-fb-heading">Print frame</span>
+                <span className="flex-1" />
+                <label className="flex items-center gap-1.5 font-data text-base text-fb-ink">
+                  1:
+                  <input key={Math.round(frameDenom)} type="text" inputMode="numeric" aria-label="Print scale" defaultValue={frame ? Math.round(frameDenom) : ''}
+                    onBlur={e => applyScale(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                    className="w-[86px] px-2.5 py-2 rounded-lg text-base font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => hRef.current.saveFrame(placeInView())}
+                  className="h-10 px-4 rounded-lg text-sm font-semibold bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep">Fit to view</button>
+                <button type="button" onClick={() => { hRef.current.saveFrame(null); setMode(null); }}
+                  className="h-10 px-4 rounded-lg text-sm font-semibold bg-fb-page-alt border border-fb-border text-fb-error active:bg-fb-page-deep">Delete frame</button>
+                <span className="flex-1 text-right text-xs text-fb-ink-muted">Drag to move · corners to resize</span>
+              </div>
+            </div>
+          ) : activePage && !sel ? (
+            <div className="flex items-center gap-2 min-h-[44px] mb-2.5" data-map-frame-strip>
+              <span className="flex-1 min-w-0 font-data text-[13px] text-fb-ink-muted truncate">
+                {frame ? `Page frame · ${fbPrint.scaleText(frameDenom)}` : 'No frame on this page yet'}
+              </span>
+              {!locked && (
+                <button type="button" onClick={() => { if (!frame) hRef.current.saveFrame(placeInView()); setMode('frame'); }}
+                  className="h-11 px-4 rounded-[10px] border border-fb-accent text-fb-heading text-sm font-semibold active:bg-fb-accent-pale">{frame ? 'Edit frame' : 'Place frame'}</button>
+              )}
+            </div>
           ) : sel ? (
             <div className="flex items-center gap-2.5 min-h-[56px] mb-2.5">
               <div className="flex-1 min-w-0">
@@ -7880,12 +8329,7 @@
                 className="h-11 px-3.5 rounded-[10px] border border-fb-accent text-fb-heading text-sm font-semibold active:bg-fb-accent-pale">Details</button>
               <button type="button" aria-label="Clear selection" onClick={() => setSelId(null)} className="w-9 h-11 flex items-center justify-center text-fb-ink-muted rounded-lg active:bg-fb-page-deep"><Ico.Close /></button>
             </div>
-          ) : (
-            <div className="flex items-center justify-between gap-2 min-h-[44px] mb-2">
-              <span className="font-data text-[13px] text-fb-ink-muted truncate">{summary}</span>
-              <button type="button" onClick={() => setSheet('layers')} className="min-h-[44px] px-1 text-sm font-semibold text-fb-heading flex-shrink-0">Export ›</button>
-            </div>
-          )}
+          ) : null}
           <div className="flex gap-2">
             {figMode ? (
               <>
@@ -7898,6 +8342,9 @@
                 className="flex-1 min-h-[52px] rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 inline-flex items-center justify-center gap-2">
                 <Ico.Pin size={18} /> Place here
               </button>
+            ) : frameMode ? (
+              <button type="button" onClick={() => setMode(null)}
+                className="flex-1 min-h-[52px] rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80">Done</button>
             ) : (
               <>
                 <button type="button" disabled={local || locked || !!mode} onClick={() => setSheet('gps')}
@@ -7918,7 +8365,7 @@
         </section>
 
         {sheet === 'detail' && sel && sel.source !== 'gnss-station' && (
-          <MapPointSheet key={sel.id} p={sel} project={project} projectId={projectId} crsId={crsId} displayId={displayId}
+          <MapPointSheet key={sel.id} p={sel} project={project} projectId={projectId} crsId={crsId}
             local={local} fix={fix} locked={locked} onSaved={reload}
             onClose={() => setSheet(null)}
             onNavigate={() => { setNavId(sel.id); setSheet(null); }}
@@ -7937,7 +8384,7 @@
         )}
         {sheet === 'layers' && (
           <MapLayersSheet project={project} projectId={projectId} prefs={prefs} setPrefs={setPrefs} local={local}
-            displayId={displayId} visibleCount={visibleIds().size} locked={locked} onSaved={reload}
+            summary={summary} visibleCount={visibleIds().size} locked={locked} onSaved={reload}
             onExport={openExport} onOpenIn={openIn} onClose={() => setSheet(null)}
             extraToggles={<>
               <MapToggleTile label="Lines & lots" on={prefs.lines} onChange={v => setPrefs({ lines: v })} />
@@ -7948,7 +8395,7 @@
           <ExportPointsModal projectId={projectId} initialIds={visibleIds()} initialFormat={exportFmt} linework={exportLines} onClose={() => setSheet(null)} />
         )}
         {sheet === 'gps' && (
-          <GpsCaptureSheet projectId={projectId}
+          <GpsCaptureSheet projectId={projectId} symbolPicker
             onClose={() => setSheet(null)}
             onSave={pt => {
               const row = addGpsPointRow(projectId, pt);
@@ -8136,8 +8583,12 @@
         if (prev) ['observer', 'bearingRef', 'declination', 'elevMask'].forEach(k => { if (prev[k] != null) carry[k] = prev[k]; });
         pageData = { type: 'obstructions', site: fbGnss.emptySite({ date: todayLocalISO(), ...carry }) };
       }
+      if (type === 'map') {
+        // The frame is placed on the map itself — the page opens there.
+        pageData = { type: 'map', mapFrame: null, base: fbGeo.isGrid(fbGeo.projectCrsId(project)) ? 'osm' : 'paper' };
+      }
       const page = DB.addPage(projectId, pageData, addAtIndex);
-      if (page) { reload(); setAddStep(null); setAddAtIndex(null); navigate(`#/project/${projectId}/page/${page.id}`); }
+      if (page) { reload(); setAddStep(null); setAddAtIndex(null); navigate(type === 'map' ? `#/project/${projectId}/map/${page.id}` : `#/project/${projectId}/page/${page.id}`); }
     }
 
     const pageCount = project.pages?.length || 0;
@@ -8315,7 +8766,6 @@
                   </div>
                   <div className="grid grid-cols-2 gap-x-5 pt-1 opacity-40">
                     <CoverField label="Pages" value={String(pageCount)} mono />
-                    <CoverField label="Created" value={new Date(project.createdAt).toLocaleDateString('en-CA')} mono />
                   </div>
                 </div>
               </>
@@ -8338,7 +8788,6 @@
                   <CoverField label="Client" value={project.client || '—'} />
                   <CoverField label="Surveyor" value={project.surveyor || '—'} />
                   <CoverField label="Pages" value={String(pageCount)} mono />
-                  <CoverField label="Created" value={new Date(project.createdAt).toLocaleDateString('en-CA')} mono />
                 </div>
               </>
             )}
@@ -9216,6 +9665,7 @@
       { id: 'gnss',   Icon: () => <Ico.Antenna size={20} />, label: 'GNSS Obs Page', desc: 'Static session log' },
       { id: 'obstructions', Icon: () => <Ico.SkyPlot size={20} />, label: 'Obstructions Page', desc: 'Obstruction table and sky plot' },
       { id: 'tracker', Icon: () => <Ico.Gantt size={20} />, label: 'Tracker Page', desc: 'Survey days and critical-path tasks' },
+      { id: 'map',    Icon: () => <Ico.MapFrame size={20} />, label: 'Map Page', desc: 'A map view that prints in the book' },
     ];
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -9278,6 +9728,11 @@
       if (proj) setPage(proj.pages.find(p => p.id === pageId) || null);
     }
     useEffect(() => { migrateGeoDefaults(projectId); reload(); }, [projectId, pageId]);
+    // A Map page lives on the map: every way into it (page list, prev / next,
+    // a restored route) lands on the map fitted to its frame.
+    const isMapPage = !!page && page.type === 'map';
+    useEffect(() => { if (isMapPage) window.location.replace(`#/project/${projectId}/map/${pageId}`); }, [isMapPage, projectId, pageId]);
+    if (isMapPage) return null;
 
     if (!project || !page) return (
       <div className="flex flex-col h-full bg-fb-cream">
@@ -10997,6 +11452,43 @@
   // `autoTasks` are read-only rows that come first (the project's survey days,
   // from fbSchedule.surveyTasks). Every index below runs over `all` = auto + own,
   // and `off` is how many auto rows there are; own rows are all[off..].
+  // Shared by the project tracker and the Survey Timeline: the day / week grid
+  // lines, the Week | Month | Today buttons and the width of the scroller.
+  // Rows start on a Monday, so a repeating background lines up with the days.
+  function schGridBg(pxd, zoom) {
+    const week = `linear-gradient(to right, var(--fb-ink-faint) 1px, transparent 1px) 0 0 / ${7 * pxd}px 100% repeat-x`;
+    if (zoom === 'month') return { background: week };
+    return { background: `${week}, linear-gradient(to right, var(--fb-border) 1px, transparent 1px) 0 0 / ${pxd}px 100% repeat-x` };
+  }
+  function useSchWidth(ref, key) {
+    const [w, setW] = useState(0);
+    useEffect(() => {
+      const el = ref.current;
+      if (!el) return;
+      const read = () => setW(el.clientWidth);
+      read();
+      let ro = null;
+      try { ro = new ResizeObserver(read); ro.observe(el); } catch {}
+      window.addEventListener('resize', read);
+      return () => { if (ro) ro.disconnect(); window.removeEventListener('resize', read); };
+    }, [key]);
+    return w;
+  }
+  function SchZoomControls({ zoom, setZoom, onToday }) {
+    return (
+      <>
+        <div className="inline-flex rounded-lg border border-fb-border overflow-hidden">
+          {['week', 'month'].map(z => (
+            <button key={z} onClick={() => setZoom(z)} aria-pressed={zoom === z}
+              className={'px-3 py-2 text-sm capitalize ' + (zoom === z ? 'text-white font-semibold' : 'text-fb-ink bg-fb-page-alt')}
+              style={zoom === z ? { background: FBC.cover } : undefined}>{z}</button>
+          ))}
+        </div>
+        <button onClick={onToday} className="px-3 py-2 rounded-lg text-sm text-fb-ink border border-fb-border bg-fb-page-alt active:opacity-80">Today</button>
+      </>
+    );
+  }
+
   function ScheduleView({ tasks, autoTasks, onChange, readOnly }) {
     const wide = useWideLayout();
     const toast = useToast();
@@ -11037,10 +11529,12 @@
     const maxF = R.length ? Math.max(todayN, ...R.map(r => r.f)) : todayN;
     let rs = minS - 7;
     while (new Date(rs * 864e5).getUTCDay() !== 1) rs--;
-    const re = maxF + 14;
+    const leftW = wide ? split : 132;
+    const viewW = useSchWidth(tlRef, all.length > 0);
+    // Run the grid out to the screen edge when the data is shorter than the screen.
+    const re = Math.max(maxF + 14, rs + Math.ceil((viewW - leftW) / pxd));
     const W = (re - rs + 1) * pxd;
     const X = n => (n - rs) * pxd;
-    const leftW = wide ? split : 132;
 
     const monthTicks = [];
     for (let n = rs; n <= re;) {
@@ -11142,14 +11636,7 @@
             </>
           )}
           <span className="flex-1" />
-          <div className="inline-flex rounded-lg border border-fb-border overflow-hidden">
-            {['week', 'month'].map(z => (
-              <button key={z} onClick={() => setZoom(z)} aria-pressed={zoom === z}
-                className={'px-3 py-2 text-sm capitalize ' + (zoom === z ? 'text-white font-semibold' : 'text-fb-ink bg-fb-page-alt')}
-                style={zoom === z ? { background: FBC.cover } : undefined}>{z}</button>
-            ))}
-          </div>
-          <button onClick={scrollToday} className="px-3 py-2 rounded-lg text-sm text-fb-ink border border-fb-border bg-fb-page-alt active:opacity-80">Today</button>
+          <SchZoomControls zoom={zoom} setZoom={setZoom} onToday={scrollToday} />
           {conflictSet.size > 0 && (
             <p className="w-full text-xs text-fb-error">{conflictSet.size} task{conflictSet.size === 1 ? '' : 's'} start before a predecessor finishes. Use Align all.</p>
           )}
@@ -11176,8 +11663,9 @@
                   {monthTicks.map((m, i) => (
                     <div key={i} className="sch-tk sch-month" style={{ left: X(m.n), width: m.w, top: 0, height: 22 }}>{m.w > 60 ? m.label : ''}</div>
                   ))}
-                  {zoom === 'week' && Array.from({ length: Math.ceil((re - rs + 1) / 7) }, (_, k) => rs + k * 7).map(n => (
-                    <div key={n} className="sch-tk" style={{ left: X(n), width: 7 * pxd, top: 22, height: 24 }}>{new Date(n * 864e5).getUTCDate()}</div>
+                  {zoom === 'week' && <div style={{ position: 'absolute', left: 0, top: 22, width: W, height: 24, ...schGridBg(pxd, 'week') }} />}
+                  {Array.from({ length: Math.ceil((re - rs + 1) / 7) }, (_, k) => rs + k * 7).map(n => (
+                    <div key={n} className="sch-tk" style={{ left: X(n), width: 7 * pxd, top: 22, height: 24, borderLeftColor: 'var(--fb-ink-faint)' }}>{new Date(n * 864e5).getUTCDate()}</div>
                   ))}
                   <div className="sch-today" style={{ left: X(todayN) + pxd / 2 }} />
                 </div>
@@ -11215,7 +11703,7 @@
                         </div>
                       )}
                     </div>
-                    <div className="sch-tl" style={{ width: W, height: SCH_ROW }}>{bar}</div>
+                    <div className="sch-tl" style={{ width: W, height: SCH_ROW, ...schGridBg(pxd, zoom) }}>{bar}</div>
                   </div>
                 );
               })}
@@ -11517,16 +12005,22 @@
     const [activeGroup, setActiveGroup] = useState('');
     const [showGroups, setShowGroups] = useState(false);
     const [busy, setBusy] = useState(false);
+    const [zoom, setZoom] = useState('week');
+    const scrollRef = useRef(null);
     const toast = useToast();
 
     const projects = DB.getProjects();
     const group = groups.find(g => g.id === activeGroup) || null;
     const data = group ? fbSchedule.portfolioFor(projects, group.projectIds) : fbSchedule.portfolio(projects);
-    const R = timelineRange(data);
-    const pxd = TL_PX;
+    const R0 = timelineRange(data);
+    const pxd = zoom === 'month' ? 5 : TL_PX;
+    const leftW = 150;
+    const viewW = useSchWidth(scrollRef, data.rows.length > 0);
+    // Run the grid out to the screen edge when the data is shorter than the screen.
+    const R = { ...R0, re: Math.max(R0.re, R0.rs + Math.ceil((viewW - leftW) / pxd)) };
     const W = (R.re - R.rs + 1) * pxd;
     const X = n => (n - R.rs) * pxd;
-    const leftW = 150;
+    const scrollToday = () => { if (scrollRef.current) scrollRef.current.scrollLeft = Math.max(0, X(R.todayN) - 80); };
 
     const monthTicks = [];
     for (let n = R.rs; n <= R.re;) {
@@ -11568,6 +12062,8 @@
           <button onClick={() => setShowGroups(true)} className="px-3 py-2 rounded-lg text-sm font-semibold text-fb-ink border border-fb-border bg-fb-page-alt active:opacity-80">
             {groups.length ? 'Edit groups' : 'Make a group'}
           </button>
+          <span className="flex-1" />
+          <SchZoomControls zoom={zoom} setZoom={setZoom} onToday={scrollToday} />
         </div>
 
         {data.rows.length === 0 ? (
@@ -11577,7 +12073,7 @@
               : "Add a survey date on a project's title page and it will appear here."}
           </div>
         ) : (
-          <div className="flex-1 overflow-auto">
+          <div ref={scrollRef} className="flex-1 overflow-auto">
             <div style={{ width: leftW + W, position: 'relative' }}>
               <div className="sch-head" style={{ height: 46 }}>
                 <div className="sch-left" style={{ width: leftW, height: 46 }}>
@@ -11587,8 +12083,9 @@
                   {monthTicks.map((m, i) => (
                     <div key={i} className="sch-tk sch-month" style={{ left: X(m.n), width: m.w, top: 0, height: 22 }}>{m.w > 60 ? m.label : ''}</div>
                   ))}
+                  {zoom === 'week' && <div style={{ position: 'absolute', left: 0, top: 22, width: W, height: 24, ...schGridBg(pxd, 'week') }} />}
                   {weekStarts.map(n => (
-                    <div key={n} className="sch-tk" style={{ left: X(n), width: 7 * pxd, top: 22, height: 24 }}>{new Date(n * 864e5).getUTCDate()}</div>
+                    <div key={n} className="sch-tk" style={{ left: X(n), width: 7 * pxd, top: 22, height: 24, borderLeftColor: 'var(--fb-ink-faint)' }}>{new Date(n * 864e5).getUTCDate()}</div>
                   ))}
                   <div className="sch-today" style={{ left: X(R.todayN) + pxd / 2 }} />
                 </div>
@@ -11603,12 +12100,12 @@
                       <div className="sch-wbs">{r.jobNumber ? '#' + r.jobNumber : ''}{r.status !== 'live' ? (r.jobNumber ? ' · ' : '') + r.status : ''}</div>
                     </div>
                   </div>
-                  <div className="sch-tl" style={{ width: W, height: 46 }}>
+                  <div className="sch-tl" style={{ width: W, height: 46, ...schGridBg(pxd, zoom) }}>
                     <div className="sch-sum" style={{ left: X(r.s) + pxd / 2, width: (r.f - r.s) * pxd, top: 36 }} />
                     {r.days.map(d => (
                       <div key={d.day} className={'sch-bar ' + timelineBlockClass(r.status, d.day, R.todayN)}
                         title={`${d.iso}${d.count > 1 ? ' · ' + d.count + ' title pages' : ''}`}
-                        style={{ left: X(d.day) + 2, width: pxd - 4, top: 9, height: 22 }} />
+                        style={{ left: X(d.day) + (pxd > 8 ? 2 : 0), width: Math.max(3, pxd - (pxd > 8 ? 4 : 1)), top: 9, height: 22 }} />
                     ))}
                   </div>
                 </div>
@@ -11732,7 +12229,7 @@
   // SHARED PAGE HEADER STRIP
   // ─────────────────────────────────────────────────────────────────────────────
 
-  function PageHeaderStrip({ page, projectId, onReload }) {
+  function PageHeaderStrip({ page, projectId, onReload, noNotes }) {
     const [editing, setEditing] = useState(false);
     const [form, setForm] = useState({
       title: page.title || '', date: page.date || '', weather: page.weather || '', notes: page.notes || '',
@@ -11766,10 +12263,12 @@
               <input type="text" value={form.weather} onChange={e => setForm(f => ({ ...f, weather: e.target.value }))} placeholder="Clear, +12°C..." />
             </div>
           </div>
-          <div>
-            <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Notes / Station</p>
-            <input type="text" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Inst. at BM-1, B.S. to BM-2..." />
-          </div>
+          {!noNotes && (
+            <div>
+              <p className="text-[9px] font-bold text-fb-mid uppercase tracking-widest mb-0.5">Notes / Station</p>
+              <input type="text" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Inst. at BM-1, B.S. to BM-2..." />
+            </div>
+          )}
           <div className="flex gap-2 pt-1">
             <button onClick={() => setEditing(false)} className="text-xs text-fb-muted px-3 py-1.5 rounded-lg border border-gray-200 active:bg-gray-50">Cancel</button>
             <button onClick={save} className="text-xs text-white px-4 py-1.5 rounded-lg font-semibold active:opacity-80" style={{ background: '#2D6A4F' }}>Save</button>
@@ -11793,7 +12292,7 @@
             <HCell label="Date" value={page.date || '—'} mono />
             <HCell label="Weather" value={page.weather || '—'} />
           </div>
-          {page.notes && (
+          {page.notes && !noNotes && (
             <p className="text-xs text-fb-muted font-data truncate mt-0.5">{page.notes}</p>
           )}
         </div>
@@ -14542,7 +15041,7 @@
             );
           })()}
           {openTbMenu === 'formulas' && (
-            <div ref={tbMenuRef} className="dp-drop-panel" style={tbPanelAt}>
+            <div ref={tbMenuRef} className="dp-drop-panel" style={{ ...tbPanelAt, minWidth: 200 }}>
               <div className="dp-drop-section">Insert Formula</div>
               <button onClick={() => {
                 setOpenTbMenu(null);
@@ -14572,6 +15071,37 @@
               <div className="dp-drop-sep" />
               <div className="dp-drop-section">Fill</div>
               <button onClick={() => { fillDown(); setOpenTbMenu(null); }}>Fill ↓</button>
+              {page.type === 'points' && (
+                <>
+                  <div className="dp-drop-sep" />
+                  <div className="dp-drop-section">Check</div>
+                  <button onClick={() => {
+                    setOpenTbMenu(null);
+                    const b = getSelectionBounds();
+                    const pt = i => String(rows[i]?.cells?.col_ptnum ?? '').trim();
+                    setInverseOpen(b ? { from: pt(b.minR), to: b.maxR !== b.minR ? pt(b.maxR) : '' } : { from: '', to: '' });
+                  }}>Inverse…</button>
+                  <div className="dp-drop-sep" />
+                  <div className="dp-drop-section">Compute</div>
+                  <button data-menu-forward onClick={() => {
+                    setOpenTbMenu(null);
+                    const b = getSelectionBounds();
+                    setForwardOpen({ from: b ? String(rows[b.minR]?.cells?.col_ptnum ?? '').trim() : '' });
+                  }}>Forward point…</button>
+                  <button data-menu-stakeout onClick={() => {
+                    setOpenTbMenu(null);
+                    const b = getSelectionBounds();
+                    setStakeoutOpen({ oc: b ? String(rows[b.minR]?.cells?.col_ptnum ?? '').trim() : '' });
+                  }}>Stakeout…</button>
+                  <button data-menu-intersection onClick={() => {
+                    setOpenTbMenu(null);
+                    const b = getSelectionBounds();
+                    const pt = i => String(rows[i]?.cells?.col_ptnum ?? '').trim();
+                    setIsectOpen(b ? { a: pt(b.minR), b: b.maxR !== b.minR ? pt(b.maxR) : '' } : { a: '', b: '' });
+                  }}>Intersection…</button>
+                  <button data-menu-angles onClick={() => { setOpenTbMenu(null); setAngleOpen(true); }}>Angles…</button>
+                </>
+              )}
             </div>
           )}
           {openTbMenu === 'view' && (
@@ -14601,33 +15131,6 @@
                       {rowSrc(mapRow) === 'voice' ? <Ico.Mic size={14} /> : <Ico.Camera size={14} />} Go to {rowSrc(mapRow) === 'voice' ? 'voice note' : 'photo'}
                     </button>
                   )}
-                  <div className="dp-drop-sep" />
-                  <div className="dp-drop-section">Check</div>
-                  <button onClick={() => {
-                    setOpenTbMenu(null);
-                    const b = getSelectionBounds();
-                    const pt = i => String(rows[i]?.cells?.col_ptnum ?? '').trim();
-                    setInverseOpen(b ? { from: pt(b.minR), to: b.maxR !== b.minR ? pt(b.maxR) : '' } : { from: '', to: '' });
-                  }}>Inverse…</button>
-                  <div className="dp-drop-sep" />
-                  <div className="dp-drop-section">Compute</div>
-                  <button data-menu-forward onClick={() => {
-                    setOpenTbMenu(null);
-                    const b = getSelectionBounds();
-                    setForwardOpen({ from: b ? String(rows[b.minR]?.cells?.col_ptnum ?? '').trim() : '' });
-                  }}>Forward point…</button>
-                  <button data-menu-stakeout onClick={() => {
-                    setOpenTbMenu(null);
-                    const b = getSelectionBounds();
-                    setStakeoutOpen({ oc: b ? String(rows[b.minR]?.cells?.col_ptnum ?? '').trim() : '' });
-                  }}>Stakeout…</button>
-                  <button data-menu-intersection onClick={() => {
-                    setOpenTbMenu(null);
-                    const b = getSelectionBounds();
-                    const pt = i => String(rows[i]?.cells?.col_ptnum ?? '').trim();
-                    setIsectOpen(b ? { a: pt(b.minR), b: b.maxR !== b.minR ? pt(b.maxR) : '' } : { a: '', b: '' });
-                  }}>Intersection…</button>
-                  <button data-menu-angles onClick={() => { setOpenTbMenu(null); setAngleOpen(true); }}>Angles…</button>
                   <div className="dp-drop-sep" />
                   <div className="dp-drop-section">Show points</div>
                   <button onClick={() => { setSrcFilter('all'); setOpenTbMenu(null); }}>
@@ -15603,12 +16106,6 @@
           <div className={secClass}>
             <p className={lblClass}>Dates &amp; Times</p>
             <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-0.5">
-              <div className="flex flex-col gap-0.5">
-                <span className={GN.lbl}>Created</span>
-                <span className="font-handwritten text-base text-fb-text" style={{ opacity: 0.7 }}>
-                  {fmtDateDMY((project && project.createdAt) || page.createdAt) || '—'}
-                </span>
-              </div>
               <div className="flex flex-col gap-0.5">
                 <span className={GN.lbl}>Survey Date</span>
                 <input
@@ -17227,7 +17724,7 @@
           {route.view === 'project' && <ProjectView projectId={route.projectId} />}
           {route.view === 'page'    && <PageView    projectId={route.projectId} pageId={route.pageId} />}
           {route.view === 'timeline' && <TimelinePage />}
-          {route.view === 'map'     && <MapErrorBoundary key={route.projectId} projectId={route.projectId}><MapView projectId={route.projectId} /></MapErrorBoundary>}
+          {route.view === 'map'     && <MapErrorBoundary key={route.projectId} projectId={route.projectId}><MapView projectId={route.projectId} mapPageId={route.mapPageId} /></MapErrorBoundary>}
         </div>
         {/* App-level: PWA file-open import modal */}
         {pendingFileImport && (

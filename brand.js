@@ -66,6 +66,7 @@
     gnss:   { color: '#BE185D', bg: '#FCE7F3' },
     obstructions: { color: '#4D7C0F', bg: '#ECFCCB' },
     tracker: { color: '#4338CA', bg: '#E0E7FF' },
+    map: { color: '#A21CAF', bg: '#FAE8FF' },
   };
 
   // ── SKETCH PANELS (brown drafting-kit palette for the sketch inspector) ──

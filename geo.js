@@ -663,15 +663,39 @@ ${wpts}${trks ? '\n' + trks : ''}
 
   // Optional Points-row fields the map uses, by row id: the row's note, and
   // mapPin — a pin dropped on a Local project, which has no geo.
+  // mapSym is the symbol the user picked on the map ({ kind?, glyph? }); it is
+  // only present when set, so older rows read exactly as before.
   function rowExtras(project) {
     const out = {};
     (project && project.pages || []).forEach(pg => {
       if (pg.type !== 'points') return;
       (pg.rows || []).forEach(r => {
-        if (r && (r.note || r.mapPin)) out[r.id] = { note: typeof r.note === 'string' ? r.note : '', mapPin: r.mapPin || null };
+        if (!r) return;
+        const sym = cleanMapSym(r.mapSym);
+        if (r.note || r.mapPin || sym) {
+          out[r.id] = { note: typeof r.note === 'string' ? r.note : '', mapPin: r.mapPin || null };
+          if (sym) out[r.id].mapSym = sym;
+        }
       });
     });
     return out;
+  }
+
+  // A symbol the user chose. `kind` is what the point is (point, setup, control,
+  // boundary, benchmark, monument); `glyph` is the mark an ordinary point is
+  // drawn with. Neither set = Auto.
+  const USER_SYMBOL_KINDS = ['topo', 'setup', 'control', 'boundary', 'benchmark', 'monument'];
+  const MAP_GLYPHS = ['dot', 'cross', 'x', 'square', 'triangle', 'diamond', 'circle'];
+  function cleanMapSym(v) {
+    if (!v || typeof v !== 'object') return null;
+    const kind = USER_SYMBOL_KINDS.indexOf(v.kind) !== -1 ? v.kind : null;
+    const glyph = MAP_GLYPHS.indexOf(v.glyph) !== -1 ? v.glyph : null;
+    return kind || glyph ? { kind, glyph } : null;
+  }
+  // The mark for an ordinary point: only a point with no other meaning has one.
+  function pointGlyph(sym, extra) {
+    const m = extra && extra.mapSym;
+    return sym === 'topo' && m && m.glyph && m.glyph !== 'dot' ? m.glyph : null;
   }
 
   // Setup / control / boundary symbols are picked by the field code — the
@@ -702,6 +726,7 @@ ${wpts}${trks ? '\n' + trks : ''}
   // Returns setup | control | boundary | map-pin | notes-pin | photo | voice | gps | topo.
   const SOURCE_SYMBOL = { 'map-pin': 'map-pin', 'notes-pin': 'notes-pin', 'photo': 'photo', 'voice': 'voice', 'gps': 'gps' };
   function pointSymbol(p, codes, extra) {
+    if (extra && extra.mapSym && extra.mapSym.kind) return extra.mapSym.kind;   // the user's pick beats everything
     const code = pointCode(p.desc);
     if (code) for (const k of SYMBOL_CODE_KINDS) if (codes[k] && codes[k].indexOf(code) !== -1) return k;
     if (extra && extra.mapPin) return 'map-pin';
@@ -1132,6 +1157,7 @@ ${wpts}${trks ? '\n' + trks : ''}
     parseRange, inRanges,
     toPNEZD, toKML, toGPX, qualityText, fmtWhen,
     gnssStations, getMapFeatures, rowExtras,
+    USER_SYMBOL_KINDS, MAP_GLYPHS, cleanMapSym, pointGlyph,
     DEFAULT_SYMBOL_CODES, SYMBOL_CODE_KINDS, parseCodeList, symbolCodes, pointCode, pointSymbol,
     mediaForPoint, convertGrid, gridInverse, fmtAzimuth, fmtQuadrant, fmtThin,
     shoelaceArea, pathLength, fmtArea, GRID_STEPS, gridStep,
