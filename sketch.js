@@ -7745,9 +7745,21 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   // ── Draw preview shape ─────────────────────────────────────────────────────
   function renderPreview() {
     if (!drawState) return null;
-    const props = { stroke: STROKE, strokeWidth: STROKE_W, fill: 'none',
-      strokeDasharray: '5,4', strokeLinecap: 'round', opacity: 0.7 };
+    // Sizes are in world units, so they are multiplied by ps (world units per
+    // screen px) like every committed shape — otherwise the rubber band shrinks
+    // to a hairline when the view is zoomed out (an aerial image forces that).
     const ps  = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+    const props = { stroke: (activeStrokeColor && activeStrokeColor !== 'none') ? activeStrokeColor : STROKE,
+      strokeWidth: (defaultStrokeW || STROKE_W) * ps, fill: 'none',
+      strokeDasharray: `${5 * ps},${4 * ps}`, strokeLinecap: 'round', opacity: 0.9 };
+    // Over imagery a dark line is easy to lose: a pale casing goes under it.
+    const casing = { stroke: '#fff', strokeWidth: props.strokeWidth + 2.5 * ps, fill: 'none', strokeLinecap: 'round', opacity: 0.55 };
+    const stroked = (tag, attrs) => (
+      <>
+        {aerialShown && React.createElement(tag, { ...attrs, ...casing })}
+        {React.createElement(tag, { ...attrs, ...props })}
+      </>
+    );
     const OFF = 13 * ps;
     switch (drawState.type) {
       case 'line': {
@@ -7759,7 +7771,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const az  = len > 0 ? ((Math.atan2(drawState.x2-drawState.x1, -(drawState.y2-drawState.y1))*180/Math.PI)+360)%360 : 0;
         const na  = normAng(ang);
         return <>
-          <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />
+          {stroked('line', { x1: drawState.x1, y1: drawState.y1, x2: drawState.x2, y2: drawState.y2 })}
           {showDims && len >= 5*ps && <>
             {dimTextEl(mx + nx*OFF, my + ny*OFF, na, fmtPxAsReal(len, scaleDenom, units), ps)}
             {dimTextEl(mx - nx*OFF, my - ny*OFF, na, toDMS(az), ps)}
@@ -7777,7 +7789,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           const az  = len > 0 ? ((Math.atan2(drawState.x2-drawState.x1, -(drawState.y2-drawState.y1))*180/Math.PI)+360)%360 : 0;
           const na  = normAng(ang);
           return <>
-            <line x1={drawState.x1} y1={drawState.y1} x2={drawState.x2} y2={drawState.y2} {...props} />
+            {stroked('line', { x1: drawState.x1, y1: drawState.y1, x2: drawState.x2, y2: drawState.y2 })}
             <circle cx={drawState.x1} cy={drawState.y1} r={4*ps} fill="#3B82F6" opacity={0.7} />
             {showDims && len >= 5*ps && <>
               {dimTextEl(mx + nx*OFF, my + ny*OFF, na, fmtPxAsReal(len, scaleDenom, units), ps)}
@@ -7797,7 +7809,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           const ux   = (ppx-midX)/olen, uy = (ppy-midY)/olen;
           return <>
             {/* Live arc */}
-            <path d={arcD} {...props} />
+            {stroked('path', { d: arcD })}
             {/* Tangent construction lines: BC→PI and PI→EC */}
             <line x1={drawState.x1} y1={drawState.y1} x2={ppx} y2={ppy}
               stroke="rgba(34,197,94,0.4)" strokeWidth={ps} strokeDasharray={`${4*ps},${3*ps}`}
@@ -7827,14 +7839,14 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       case 'circle': {
         const r = Math.max(0, drawState.r);
         return <>
-          <circle cx={drawState.cx} cy={drawState.cy} r={r} {...props} />
+          {stroked('circle', { cx: drawState.cx, cy: drawState.cy, r })}
           {showDims && r >= 5*ps && dimTextEl(drawState.cx, drawState.cy, 0, `R=${fmtPxAsReal(r, scaleDenom, units)}`, ps)}
         </>;
       }
       case 'rect': {
         const w = Math.max(0, drawState.w), h = Math.max(0, drawState.h);
         return <>
-          <rect x={drawState.x} y={drawState.y} width={w} height={h} {...props} />
+          {stroked('rect', { x: drawState.x, y: drawState.y, width: w, height: h })}
           {showDims && w >= 5*ps && dimTextEl(drawState.x + w/2,     drawState.y + h + OFF, 0,   fmtPxAsReal(w, scaleDenom, units), ps)}
           {showDims && h >= 5*ps && dimTextEl(drawState.x + w + OFF, drawState.y + h/2,     -90, fmtPxAsReal(h, scaleDenom, units), ps)}
         </>;
@@ -7871,7 +7883,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           `M ${ax-dx*bah*0.5+dy*bas} ${ay-dy*bah*0.5-dx*bas} L ${ax} ${ay} L ${ax-dx*bah*0.5-dy*bas} ${ay-dy*bah*0.5+dx*bas}`;
         return <>
           <circle cx={bx1} cy={by1} r={4*ps} fill="#3B82F6" opacity={0.7} />
-          <line x1={bx1} y1={by1} x2={bx2} y2={by2} {...props} />
+          {stroked('line', { x1: bx1, y1: by1, x2: bx2, y2: by2 })}
           <path d={mkBA(bx2, by2, budx, budy)}
                 stroke={STROKE} strokeWidth={1.2*ps} fill="none"
                 strokeLinecap="round" strokeLinejoin="round" opacity={0.65} />
@@ -7895,7 +7907,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           `M ${ax-dx*ah*0.5+dy*as} ${ay-dy*ah*0.5-dx*as} L ${ax} ${ay} L ${ax-dx*ah*0.5-dy*as} ${ay-dy*ah*0.5+dx*as}`;
         return <>
           <circle cx={x1} cy={y1} r={4*ps} fill="#3B82F6" opacity={0.7} />
-          <line x1={x1} y1={y1} x2={x2} y2={y2} {...props} />
+          {stroked('line', { x1, y1, x2, y2 })}
           {len > 8*ps && <>
             <line x1={x1+perpX*3*ps} y1={y1+perpY*3*ps} x2={dp1x+perpX*6*ps} y2={dp1y+perpY*6*ps}
                   stroke={STROKE} strokeWidth={1.2*ps} strokeLinecap="round" opacity={0.65} />
