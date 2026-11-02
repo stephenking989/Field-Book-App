@@ -709,6 +709,7 @@
       padding: 10px 18px max(18px, env(safe-area-inset-bottom));
       animation: sheetUp 0.22s ease-out;
     }
+    .fb-aim-dock { position: fixed; z-index: 60; max-height: 88vh; }
     .fb-map-note {
       font-family: var(--fb-font-hand); font-size: 20px; line-height: 24px; color: var(--fb-ink);
       background-image: repeating-linear-gradient(transparent 0 23px, rgb(var(--fb-rule-tan-rgb) / 0.45) 23px 24px);
@@ -806,7 +807,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.201';
+  const APP_VERSION = '1.202';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1350,19 +1351,25 @@
 
   // Day folders are derived from page order, not stored: a title page starts a
   // day and every page after it, up to the next title page, is its sub-page.
-  // Pages above the first title page form a leading group with title: null.
-  // Returns [{ title: page|null, pages: [subPages] }].
+  // Pages above the first title page form a leading group with title: null, and
+  // page.noDay ends a day: it and whatever follows it, up to the next title, have
+  // no day. Returns [{ title: page|null, pages: [subPages] }].
   function groupPages(pages) {
     const groups = [];
     let cur = null;
     for (const pg of (pages || [])) {
       if (pg.type === 'title') { cur = { title: pg, pages: [] }; groups.push(cur); }
       else {
+        if (pg.noDay && cur && cur.title) cur = null;
         if (!cur) { cur = { title: null, pages: [] }; groups.push(cur); }
         cur.pages.push(pg);
       }
     }
     return groups;
+  }
+  // What the list arrows move: a day with its sub-pages, or one page with no day.
+  function pageUnits(pages) {
+    return groupPages(pages).flatMap(g => (g.title ? [[g.title, ...g.pages]] : g.pages.map(p => [p])));
   }
 
   const DB = {
@@ -1483,6 +1490,7 @@
         shapes: (pg.shapes || []).map(s => ({ ...s, id: uid() })),
       }));
       remapPageLinks(newProj.pages, pageIds);
+      remapActivePoints(newProj, pageIds);
       // Map figures name their vertices by row id — follow the new ids.
       if (newProj.figures) newProj.figures = window.fbGeo.remapFigureRows(newProj.figures, rowIds);
       _saveProjectRaw(newProj);
@@ -1517,7 +1525,7 @@
         shapes: [],
         ...pageData,
       };
-      if (Number.isInteger(atIndex) && atIndex >= 0 && atIndex < proj.pages.length) {
+      if (Number.isInteger(atIndex) && atIndex >= 0 && atIndex <= proj.pages.length) {
         proj.pages.splice(atIndex, 0, page);
         proj.pages.forEach((g, i) => { g.pageNumber = i + 1; });
       } else {
@@ -1564,7 +1572,7 @@
       // empty day instead of taking over the original's sub-pages.
       let at = proj.pages.indexOf(src) + 1;
       if (src.type === 'title') {
-        while (at < proj.pages.length && proj.pages[at].type !== 'title') at++;
+        while (at < proj.pages.length && proj.pages[at].type !== 'title' && !proj.pages[at].noDay) at++;
       }
       proj.pages.splice(at, 0, newPage);
       proj.pages.forEach((g, i) => { g.pageNumber = i + 1; });
@@ -1581,23 +1589,24 @@
       proj.pages = pages;
       _saveProjectRaw(proj);
     },
-    // Move a title page together with its sub-pages past the neighbouring day.
+    // Move a day (with its sub-pages) or a page with no day past its neighbour.
+    // Every no-day page is marked first, or a day moved above one would take it in.
     // dir: -1 = up, 1 = down.
-    moveGroup(projectId, titlePageId, dir) {
+    moveUnit(projectId, pageId, dir) {
       const proj = _getProjectRaw(projectId);
       if (!proj || _writeBlocked(proj)) return;
-      const groups = groupPages(proj.pages);
-      const gi = groups.findIndex(g => g.title && g.title.id === titlePageId);
-      const ni = gi + dir;
-      // Loose pages above the first title page always stay at the top.
-      if (gi === -1 || ni < 0 || ni >= groups.length || !groups[ni].title) return;
-      [groups[gi], groups[ni]] = [groups[ni], groups[gi]];
-      proj.pages = groups.flatMap(g => g.title ? [g.title, ...g.pages] : g.pages);
+      const units = pageUnits(proj.pages);
+      const ui = units.findIndex(u => u[0].id === pageId);
+      const ni = ui + dir;
+      if (ui === -1 || ni < 0 || ni >= units.length) return;
+      units.forEach(u => { if (u[0].type !== 'title') u[0].noDay = true; });
+      [units[ui], units[ni]] = [units[ni], units[ui]];
+      proj.pages = units.flat();
       proj.pages.forEach((pg, i) => { pg.pageNumber = i + 1; });
       _saveProjectRaw(proj);
     },
-    // Move a page to the end of a day folder (titlePageId = null → the loose
-    // pages above the first title page).
+    // Move a page to the end of a day (titlePageId = null → the no-day pages at the
+    // top of the job, 'bottom' → the very end, with no day).
     movePageToGroup(projectId, pageId, titlePageId) {
       const proj = _getProjectRaw(projectId);
       if (!proj || _writeBlocked(proj)) return;
@@ -1605,12 +1614,19 @@
       if (!moved || moved.type === 'title') return;
       const pages = proj.pages.filter(g => g.id !== pageId);
       let at = 0;
-      if (titlePageId) {
+      if (titlePageId === 'bottom') {
+        moved.noDay = true;
+        at = pages.length;
+      } else if (titlePageId) {
         const ti = pages.findIndex(g => g.id === titlePageId);
         if (ti === -1) return;
+        delete moved.noDay;
         at = ti + 1;
+        while (at < pages.length && pages[at].type !== 'title' && !pages[at].noDay) at++;
+      } else {
+        moved.noDay = true;
+        while (at < pages.length && pages[at].type !== 'title') at++;
       }
-      while (at < pages.length && pages[at].type !== 'title') at++;
       pages.splice(at, 0, moved);
       pages.forEach((pg, i) => { pg.pageNumber = i + 1; });
       proj.pages = pages;
@@ -2659,6 +2675,7 @@
       })),
     };
     remapPageLinks(newProject.pages, pageIds);
+    remapActivePoints(newProject, pageIds);
     // Map figures name their vertices by row id — follow the new ids.
     if (newProject.figures) newProject.figures = window.fbGeo.remapFigureRows(newProject.figures, rowIds);
 
@@ -2678,6 +2695,11 @@
   // (page.gnss.sketch.linkedSketchPageId ⇄ sketch page.linkedTo). When a whole
   // project's pages are given new ids, carry those links across; a link whose
   // other page isn't in `idMap` is cleared.
+  // A project's own pointer to a page, across new page ids.
+  function remapActivePoints(project, idMap) {
+    if (project.activePointsPage && idMap[project.activePointsPage]) project.activePointsPage = idMap[project.activePointsPage];
+    else delete project.activePointsPage;
+  }
   function remapPageLinks(pages, idMap) {
     pages.forEach(pg => {
       if (pg.linkedTo) {
@@ -2722,7 +2744,7 @@
 
   // Copy one page from fromProjectId to toProjectId.
   // Returns the newly-created page.
-  DB.copyPageToProject = function(fromProjectId, pageId, toProjectId, by) {
+  DB.copyPageToProject = function(fromProjectId, pageId, toProjectId, by, keepDay) {
     const src         = DB.getPage(fromProjectId, pageId);
     const fromProject = DB.getProject(fromProjectId);
     const toProject   = DB.getProject(toProjectId);
@@ -2743,6 +2765,7 @@
     });
     cloned.pageChain = chain;
     delete cloned.pageNumber;
+    if (keepDay || cloned.type === 'title') delete cloned.noDay; else cloned.noDay = true;
     DB.addPage(toProjectId, cloned);
     return cloned;
   };
@@ -2820,6 +2843,7 @@
     delete cloned.pageNumber;
     // Move inlined photo dataUrls into photoDB.
     await extractPhotosFromImport(cloned);
+    if (cloned.type !== 'title') cloned.noDay = true;
     DB.addPage(toProjectId, cloned);
     return cloned;
   }
@@ -3004,6 +3028,24 @@
     if (Object.keys(patch).length) DB.updateProject(projectId, patch);
   }
 
+  // Where this capture will save, when the project has more than one Points page.
+  function SavesToSelect({ projectId }) {
+    const [, redraw] = useState(0);
+    const project = DB.getProject(projectId);
+    const pts = ((project && project.pages) || []).filter(p => p.type === 'points');
+    if (pts.length < 2) return null;
+    return (
+      <div className="mb-3">
+        <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5">Saves to</p>
+        <select value={activePointsPage(project).id} aria-label="Saves to"
+          onChange={e => { setActivePointsPage(projectId, e.target.value); redraw(n => n + 1); }}
+          className="w-full px-3 py-3 rounded-xl text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent">
+          {pts.map(p => <option key={p.id} value={p.id}>P.{p.pageNumber} {p.title || 'Untitled'}</option>)}
+        </select>
+      </div>
+    );
+  }
+
   // The last descriptions used in this project, under the description field.
   function RecentDescChips({ project, value, onPick }) {
     const list = (project && project.recentDescs) || [];
@@ -3032,7 +3074,7 @@
   function ensurePointsPage(projectId) {
     const project = DB.getProject(projectId);
     if (project && !project.pages.some(p => p.type === 'points')) {
-      DB.addPage(projectId, { type: 'points', title: 'Points', columns: pnezdColumns(), rows: [] });
+      DB.addPage(projectId, { type: 'points', title: 'Points', columns: pnezdColumns(), rows: [], noDay: true });
     }
   }
 
@@ -3321,6 +3363,7 @@
             </div>
           )}
           {isPoint && <RecentDescChips project={project} value={desc} onPick={setDesc} />}
+          {isPoint && symbolPicker && <SavesToSelect projectId={projectId} />}
           {isPoint && duplicate && <Notice className="mb-3">Point {numTrim} already exists in this project.</Notice>}
           {isPoint && symbolPicker && (
             <div className="mb-3">
@@ -5320,7 +5363,7 @@
     if (!drewBase) _drawPdfGrid(pdf, W, H, margin, contentY);
 
     // Linework: figures solid, code lines dashed. Black and grey only.
-    const show = mapShowOf(page.mapShow);
+    const show = mapPageShow(project, page);
     const feats = mapShownFeats(mapProjectFeats(project, local), show);
     pdf.setDrawColor(30, 30, 30); pdf.setLineWidth(0.3);
     mapProjectLines(project, local, crsId, show.hidePages).forEach(l => {
@@ -6975,6 +7018,7 @@
             </div>
           </div>
           <RecentDescChips project={project} value={desc} onPick={setDesc} />
+          <SavesToSelect projectId={project.id} />
           {dup && <Notice className="mb-3">Point {numTrim} already exists in this project.</Notice>}
           <p className={lbl}>Symbol</p>
           <div className="mb-3"><MapSymbolPicker value={mapSym} onChange={setMapSym} /></div>
@@ -7283,7 +7327,7 @@
 
   // ── Layers, grid & export ──────────────────────────────────────────────────
   function MapLayersSheet({ project, projectId, prefs, setPrefs, local, summary, visibleCount, locked,
-                            onExport, onOpenIn, onClose, onSaved, extraToggles, show, setShow, showLocked }) {
+                            onExport, onOpenIn, onClose, onSaved, extraToggles, show, setShow, scopeHidden, showLocked }) {
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
     const codes = fbGeo.symbolCodes(project);
@@ -7299,7 +7343,7 @@
       onSaved();
     }
     const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
-    const pointPages = project.pages.filter(p => p.type === 'points');
+    const pointPages = project.pages.filter(p => p.type === 'points' && (scopeHidden || []).indexOf(p.id) === -1);
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
         <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 28, maxHeight: '92vh' }}>
@@ -7555,7 +7599,13 @@
   }
   function mapShownFeats(feats, show) {
     if (!show.points) return { pts: [], stations: [] };
-    return { pts: feats.pts.filter(p => show.hidePages.indexOf(p.pageId) === -1), stations: feats.stations };
+    const on = p => show.hidePages.indexOf(p.pageId) === -1;
+    return { pts: feats.pts.filter(on), stations: feats.stations.filter(on) };
+  }
+  // What a Map page draws: its own choices, within the scope of where it sits.
+  function mapPageShow(project, page) {
+    const saved = mapShowOf(page.mapShow);
+    return { points: saved.points, hidePages: [...saved.hidePages, ...fbGeo.mapScopeHidden(project, page.id)] };
   }
 
   function mapProjectFeats(project, local) {
@@ -7634,11 +7684,13 @@
     // Everything with a position, with its map position (`ll`) and symbol.
     const feats = React.useMemo(() => mapProjectFeats(project, local), [project, local]);
     const showPage = mapPageId && project ? project.pages.find(p => p.id === mapPageId && p.type === 'map') : null;
-    const show = mapShowOf(showPage ? showPage.mapShow : prefs.mapShow);
+    const savedShow = mapShowOf(showPage ? showPage.mapShow : prefs.mapShow);
+    const scopeHidden = showPage ? fbGeo.mapScopeHidden(project, showPage.id) : [];
+    const show = { points: savedShow.points, hidePages: [...savedShow.hidePages, ...scopeHidden] };
     const hideKey = show.hidePages.join('|');
     const shown = React.useMemo(() => mapShownFeats(feats, show), [feats, show.points, hideKey]);
     function setShow(patch) {
-      const next = { ...show, ...patch };
+      const next = { ...savedShow, ...patch };
       if (!showPage) { setPrefs({ mapShow: next }); return; }
       if (locked) return;
       DB.updatePage(projectId, showPage.id, { mapShow: next });
@@ -7989,7 +8041,7 @@
         return;
       }
       if (locked) return;
-      const lls = [...feats.pts, ...feats.stations].filter(p => p.ll).map(p => p.ll);
+      const lls = [...shown.pts, ...shown.stations].filter(p => p.ll).map(p => p.ll);
       if (lls.length) map.fitBounds(L.latLngBounds(lls), { padding: [48, 48], maxZoom: local ? 3 : 19, animate: false });
       setSheet(null); setSelId(null);
       hRef.current.saveFrame(hRef.current.placeInView());
@@ -8539,7 +8591,7 @@
           <MapLayersSheet project={project} projectId={projectId} prefs={prefs} setPrefs={setPrefs} local={local}
             summary={summary} visibleCount={visibleIds().size} locked={locked} onSaved={reload}
             onExport={openExport} onOpenIn={openIn} onClose={() => setSheet(null)}
-            show={show} setShow={setShow} showLocked={!!showPage && locked}
+            show={savedShow} setShow={setShow} scopeHidden={scopeHidden} showLocked={!!showPage && locked}
             extraToggles={<>
               <MapToggleTile label="Lines & lots" on={prefs.lines} onChange={v => setPrefs({ lines: v })} />
               <MapToggleTile label="Code lines" on={prefs.codeLines} onChange={v => setPrefs({ codeLines: v })} />
@@ -8747,6 +8799,8 @@
         // The frame is placed on the map itself — the page opens there.
         pageData = { type: 'map', mapFrame: null, base: fbGeo.isGrid(fbGeo.projectCrsId(project)) ? 'osm' : 'paper' };
       }
+      // The Add Page button at the bottom: the end of the job, with no day.
+      if (addAtIndex === null && type !== 'title') pageData = { ...pageData, noDay: true };
       const page = DB.addPage(projectId, pageData, addAtIndex);
       if (page) { reload(); setAddStep(null); setAddAtIndex(null); navigate(type === 'map' ? `#/project/${projectId}/map/${page.id}` : `#/project/${projectId}/page/${page.id}`); }
     }
@@ -8763,26 +8817,26 @@
       dayTitles.forEach(t => DB.updatePage(projectId, t.id, { collapsed }));
       reload();
     }
-    // Moving a sub-page past a title page drops it into the neighbouring day —
-    // expand that day so the page doesn't disappear into a collapsed folder.
-    function movePage(idx, dir) {
-      const pages = project.pages;
-      const crossed = pages[idx + dir];
-      if (pages[idx].type !== 'title' && crossed?.type === 'title') {
-        const dest = dir > 0 ? crossed : [...pages.slice(0, idx + dir)].reverse().find(p => p.type === 'title');
-        if (dest?.collapsed) DB.updatePage(projectId, dest.id, { collapsed: false });
-      }
-      DB.reorderPages(projectId, idx, idx + dir);
-      reload();
-    }
-    function renderPageRow(pg, indent) {
+    const units = pageUnits(project.pages);
+    const unitIdx = pg => units.findIndex(u => u[0].id === pg.id);
+    const moveUnit = (pg, dir) => { DB.moveUnit(projectId, pg.id, dir); reload(); };
+    // Which Points page new points go to, once there is a choice.
+    const pointPages = project.pages.filter(p => p.type === 'points');
+    const activePoints = activePointsPage(project);
+    const setActive = pg => { setActivePointsPage(projectId, pg.id); reload(); };
+    // A sub-page moves within its day; only Move to Day takes it out. A page
+    // with no day moves past whole days.
+    function renderPageRow(pg, day) {
       const idx = project.pages.indexOf(pg);
+      const ui = unitIdx(pg), at = day ? day.pages.indexOf(pg) : -1;
       return (
-        <PageListRow key={pg.id} page={pg} projectId={projectId} indent={indent}
-          canMoveUp={idx > 0}
-          canMoveDown={idx < project.pages.length - 1}
-          onMoveUp={() => movePage(idx, -1)}
-          onMoveDown={() => movePage(idx, 1)}
+        <PageListRow key={pg.id} page={pg} projectId={projectId} indent={!!day}
+          canMoveUp={day ? at > 0 : ui > 0}
+          canMoveDown={day ? at < day.pages.length - 1 : ui < units.length - 1}
+          onMoveUp={() => { if (day) { DB.reorderPages(projectId, idx, idx - 1); reload(); } else moveUnit(pg, -1); }}
+          onMoveDown={() => { if (day) { DB.reorderPages(projectId, idx, idx + 1); reload(); } else moveUnit(pg, 1); }}
+          pointsRole={pg.type === 'points' && pointPages.length > 1 ? (activePoints && activePoints.id === pg.id ? 'active' : 'other') : null}
+          onSetActive={setActive}
           onDuplicate={() => { DB.duplicatePage(projectId, pg.id); reload(); }}
           onPageAction={pg2 => setPageActionTarget(pg2)}
           onChainBadge={pg2 => setPageChainTarget(pg2)}
@@ -8975,22 +9029,22 @@
               </div>
               <div className="space-y-1.5">
                 {groups.map((g, gi) => {
-                  if (!g.title) return g.pages.map(pg => renderPageRow(pg, false));
+                  if (!g.title) return g.pages.map(pg => renderPageRow(pg, null));
                   const t = g.title;
                   const tIdx = project.pages.indexOf(t);
                   return (
                     <React.Fragment key={t.id}>
                       <PageListRow page={t} projectId={projectId}
                         folder={{ collapsed: !!t.collapsed, count: g.pages.length, onToggle: () => setCollapsed(t.id, !t.collapsed) }}
-                        canMoveUp={gi > 0 && !!groups[gi - 1].title}
-                        canMoveDown={gi < groups.length - 1}
-                        onMoveUp={() => { DB.moveGroup(projectId, t.id, -1); reload(); }}
-                        onMoveDown={() => { DB.moveGroup(projectId, t.id, 1); reload(); }}
+                        canMoveUp={unitIdx(t) > 0}
+                        canMoveDown={unitIdx(t) < units.length - 1}
+                        onMoveUp={() => moveUnit(t, -1)}
+                        onMoveDown={() => moveUnit(t, 1)}
                         onDuplicate={() => { DB.duplicatePage(projectId, t.id); reload(); }}
                         onPageAction={pg2 => setPageActionTarget(pg2)}
                         onChainBadge={pg2 => setPageChainTarget(pg2)}
                       />
-                      {!t.collapsed && g.pages.map(pg => renderPageRow(pg, true))}
+                      {!t.collapsed && g.pages.map(pg => renderPageRow(pg, g))}
                       {!t.collapsed && (
                         <button onClick={() => { setAddAtIndex(tIdx + 1 + g.pages.length); setAddStep('type'); }}
                           className="w-full py-2 rounded-xl border border-dashed text-xs font-semibold transition-colors active:bg-white/10"
@@ -9081,7 +9135,7 @@
             onChain={pg => { setPageActionTarget(null); setPageChainTarget(pg); }}
             days={dayTitles}
             onMoveToDay={(pg, titleId) => {
-              if (titleId) DB.updatePage(projectId, titleId, { collapsed: false });
+              if (titleId && titleId !== 'bottom') DB.updatePage(projectId, titleId, { collapsed: false });
               DB.movePageToGroup(projectId, pg.id, titleId);
               setPageActionTarget(null);
               reload();
@@ -9148,7 +9202,7 @@
 
   // folder: { collapsed, count, onToggle } — set on a title page, which heads a
   // day folder. indent: true for the sub-pages listed under one.
-  function PageListRow({ page, projectId, canMoveUp, canMoveDown, onMoveUp, onMoveDown, onDuplicate, onPageAction, onChainBadge, folder, indent }) {
+  function PageListRow({ page, projectId, canMoveUp, canMoveDown, onMoveUp, onMoveDown, onDuplicate, onPageAction, onChainBadge, folder, indent, pointsRole, onSetActive }) {
     const meta = TYPE_META[page.type] || TYPE_META.data;
     const rowCount = page.rows?.length || 0;
     const displayTitle = page.title && page.title.trim() ? page.title.trim() : null;
@@ -9218,6 +9272,18 @@
               {folder ? ` · ${folder.count} sub-page${folder.count !== 1 ? 's' : ''}` : ''}
             </p>
           </div>
+          {pointsRole === 'active' && (
+            <span data-points-active title="New points go to this page"
+              className="flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-fb-accent-pale text-fb-cover-deep">
+              Active
+            </span>
+          )}
+          {pointsRole === 'other' && (
+            <button data-points-set-active onClick={e => { e.stopPropagation(); onSetActive(page); }}
+              className="flex-shrink-0 min-h-[32px] text-[11px] font-semibold px-2 rounded-lg border border-white/25 text-white/70 active:bg-white/15">
+              Set active
+            </button>
+          )}
           {page.pdfExclude && (
             <span title="Left out of PDF exports by default"
               className="flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider"
@@ -9246,7 +9312,8 @@
     const [moving, setMoving] = useState(false);
     const hasChain = (page.pageChain || []).length > 0;
     const meta = TYPE_META[page.type] || TYPE_META.data;
-    const canMove = page.type !== 'title' && (days || []).length > 0;
+    const canMove = page.type !== 'title';
+    const moveCls = 'w-full text-left px-4 py-3 rounded-xl font-medium bg-fb-page-alt active:bg-fb-page-deep';
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
         <div ref={trapRef} className="modal-sheet">
@@ -9259,18 +9326,17 @@
           {moving ? (
           <div className="space-y-2">
             <p className="text-fb-muted text-xs font-bold uppercase tracking-widest mb-1">Move to day</p>
-            {days.map(d => (
-              <button key={d.id} onClick={() => onMoveToDay(page, d.id)}
-                className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-text transition-colors active:bg-gray-100"
-                style={{ background: '#f4f4f4' }}>
+            <button onClick={() => onMoveToDay(page, null)} className={moveCls + ' text-fb-ink-muted'}>
+              Top of job (no day)
+            </button>
+            {(days || []).map(d => (
+              <button key={d.id} onClick={() => onMoveToDay(page, d.id)} className={moveCls + ' text-fb-ink'}>
                 {d.title?.trim() || 'Untitled day'}
-                <span className="text-fb-muted text-xs font-normal"> · {d.date}</span>
+                <span className="text-fb-ink-muted text-xs font-normal"> · {d.date}</span>
               </button>
             ))}
-            <button onClick={() => onMoveToDay(page, null)}
-              className="w-full text-left px-4 py-3 rounded-xl font-medium text-fb-muted transition-colors active:bg-gray-100"
-              style={{ background: '#f4f4f4' }}>
-              Top of job (no day)
+            <button onClick={() => onMoveToDay(page, 'bottom')} className={moveCls + ' text-fb-ink-muted'}>
+              Bottom of job (no day)
             </button>
           </div>
           ) : (
@@ -9676,7 +9742,10 @@
 
     function doCopy() {
       localStorage.setItem('fb_lastExportName', by.trim());
-      selected.forEach(pageId => DB.copyPageToProject(srcProject.id, pageId, toProjectId, by.trim()));
+      // A page copied along with its day stays in it; any other lands with no day.
+      const dayOf = {};
+      groupPages(srcProject.pages).forEach(g => g.pages.forEach(p => { dayOf[p.id] = g.title && g.title.id; }));
+      selected.forEach(pageId => DB.copyPageToProject(srcProject.id, pageId, toProjectId, by.trim(), selected.has(dayOf[pageId])));
       onDone();
     }
 
@@ -13663,6 +13732,22 @@
   // DATA PAGE
   // ─────────────────────────────────────────────────────────────────────────────
 
+  // On a Points page, once there is a choice: is this where new points go?
+  function ActivePointsBar({ page, projectId, onReload }) {
+    const [, redraw] = useState(0);
+    const project = DB.getProject(projectId);
+    if (!project || project.pages.filter(p => p.type === 'points').length < 2) return null;
+    const active = activePointsPage(project)?.id === page.id;
+    return (
+      <div data-active-bar className="flex items-center justify-end gap-2 px-3 py-1 bg-fb-page-alt border-b border-fb-border flex-shrink-0">
+        {active
+          ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-fb-accent-pale text-fb-cover-deep">Active</span>
+          : <button type="button" onClick={() => { setActivePointsPage(projectId, page.id); redraw(n => n + 1); onReload && onReload(); }}
+              className="h-9 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep">Set active</button>}
+      </div>
+    );
+  }
+
   function DataPage({ page, projectId, onReload, onRegisterExports }) {
     const columns = page.columns || [];
     const [rows, setRows]               = useState(page.rows || []);
@@ -15093,6 +15178,7 @@
 
         {/* ── Page header — collapsible ── */}
         {headerOpen && <PageHeaderStrip page={page} projectId={projectId} onReload={onReload} />}
+        {page.type === 'points' && <ActivePointsBar page={page} projectId={projectId} onReload={onReload} />}
         <button
           onClick={() => setHeaderOpen(o => !o)}
           style={{
@@ -16860,17 +16946,136 @@
   const GN_OBS_ANGLES = [['fromAz', 'From Az', 360], ['fromEl', 'From Elev', 90], ['toAz', 'To Az', 360], ['toEl', 'To Elev', 90]];
   const gnNewId = prefix => prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
+  // Asks for the motion sensors where the browser wants a tap for it (iOS).
+  function aimPermission() {
+    const D = window.DeviceOrientationEvent;
+    if (D && typeof D.requestPermission === 'function') return D.requestPermission().then(r => r === 'granted').catch(() => false);
+    return Promise.resolve(!!D);
+  }
+  // The phone's sight line, smoothed over half a second: { reading: { az, el }, status }.
+  // Only a north-based compass counts — never a guessed angle.
+  function useAimSensor() {
+    const [reading, setReading] = useState(null);
+    const [status, setStatus] = useState('waiting');   // 'waiting' | 'ok' | 'none'
+    useEffect(() => {
+      const buf = [];
+      let got = false, iosOffset = null, wake = null, gone = false;
+      const onOrient = e => {
+        if (e.alpha === null || e.alpha === undefined || e.beta === null || e.beta === undefined) return;
+        let off = 0;
+        if (typeof e.webkitCompassHeading === 'number') {
+          if (Math.abs(e.beta) < 60) iosOffset = e.webkitCompassHeading - (360 - e.alpha);
+          if (iosOffset === null) return;
+          off = iosOffset;
+        } else if (e.type === 'deviceorientation' && !e.absolute) return;
+        got = true;
+        buf.push({ t: Date.now(), ...fbGnss.aimFromOrientation(e.alpha, e.beta, e.gamma, off) });
+      };
+      window.addEventListener('deviceorientationabsolute', onOrient);
+      window.addEventListener('deviceorientation', onOrient);
+      const tick = setInterval(() => {
+        const cut = Date.now() - 500;
+        while (buf.length && buf[0].t < cut) buf.shift();
+        if (!buf.length) return;
+        const azs = buf.filter(b => b.az !== null).map(b => b.az);
+        setReading({ az: azs.length === buf.length ? fbGnss.circularMean(azs) : null, el: buf.reduce((a, b) => a + b.el, 0) / buf.length });
+        setStatus('ok');
+      }, 150);
+      const noneAt = setTimeout(() => { if (!got) setStatus('none'); }, 4000);
+      if (navigator.wakeLock) navigator.wakeLock.request('screen').then(l => { if (gone) l.release(); else wake = l; }).catch(() => {});
+      return () => {
+        gone = true;
+        window.removeEventListener('deviceorientationabsolute', onOrient);
+        window.removeEventListener('deviceorientation', onOrient);
+        clearInterval(tick); clearTimeout(noneAt);
+        if (wake) wake.release().catch(() => {});
+      };
+    }, []);
+    return { reading, status };
+  }
+
+  // Point, press, four times: From Az, From Elev, To Az, To Elev, sighting along
+  // the phone's top edge. Each press fills its field, so the plot draws as you go.
+  function GnAimSheet({ g, rowId, number, onSet, onNext, onClose }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const { reading, status } = useAimSensor();
+    const [step, setStep] = useState(0);
+    useEffect(() => { setStep(0); }, [rowId]);
+    const row = g.obstructions.find(o => o.id === rowId);
+    if (!row) return null;
+    const done = step >= GN_OBS_ANGLES.length;
+    const [key, label] = done ? [] : GN_OBS_ANGLES[step];
+    const isAz = !done && key.endsWith('Az');
+    const needDecl = g.bearingRef === 'true' && fbGnss.aimStoreAz(0, 'true', g.declination) === null;
+    const az = reading && reading.az !== null && !needDecl ? fbGnss.aimStoreAz(reading.az, g.bearingRef, g.declination) : null;
+    const el = reading ? Math.max(0, reading.el) : null;
+    const canSet = status === 'ok' && !done && (isAz ? az !== null : el !== null);
+    function press() {
+      if (!canSet) return;
+      onSet(key, isAz ? fbGnss.fmtAim(az) : el.toFixed(1));
+      setStep(s => s + 1);
+    }
+    const svg = fbGnss.buildSkyPlotSVG(g.obstructions, { ref: g.bearingRef, declination: g.declination, mask: g.elevMask, parse: gnAngle, highlight: rowId });
+    const read = (name, v, on) => (
+      <div className={`flex-1 rounded-xl px-3 py-2 text-center border ${on ? 'bg-fb-accent-pale border-fb-accent' : 'bg-fb-page-alt border-fb-border'}`}>
+        <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest">{name}</p>
+        <p className="font-data text-fb-ink text-[26px] leading-tight">{v === null ? '—' : v.toFixed(1) + '°'}</p>
+      </div>
+    );
+    return (
+      <section ref={trapRef} data-aim-sheet aria-label="Aim with phone" className="fb-map-dock fb-aim-dock">
+        <div tabIndex={0} className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-3 outline-none flex-shrink-0" />
+        <div className="flex items-baseline justify-between mb-3">
+          <h2 className="text-xl font-bold text-fb-ink">Obstruction {number}</h2>
+          <span className="text-xs font-semibold text-fb-ink-muted font-data">{g.bearingRef === 'true' ? 'TRUE' : 'MAGNETIC'}</span>
+        </div>
+        {status === 'none' && <Notice tone="error" className="mb-3">No compass on this device.</Notice>}
+        {needDecl && <Notice className="mb-3">Enter a declination, or set bearings to Magnetic.</Notice>}
+        <div className="flex gap-2 mb-3">
+          {read('Azimuth', az, isAz)}
+          {read('Elevation', el, !done && !isAz)}
+        </div>
+        <div className="grid grid-cols-4 gap-1.5 mb-3">
+          {GN_OBS_ANGLES.map(([k, l], i) => (
+            <div key={k} className={`rounded-lg px-1 py-1.5 text-center border ${i === step ? 'border-fb-accent bg-fb-field' : 'border-fb-border'}`}>
+              <p className="text-[10px] font-bold text-fb-ink-muted leading-tight">{l}</p>
+              <p className="font-data text-sm text-fb-ink" data-aim-value={k}>{i < step ? row[k] + '°' : '—'}</p>
+            </div>
+          ))}
+        </div>
+        <GnDrawing svg={svg} className="w-[170px] mb-3" />
+        {done ? (
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} className="py-3 px-5 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep">Done</button>
+            <button type="button" onClick={onNext} className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80">Next obstruction</button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <button type="button" onClick={() => (step ? setStep(step - 1) : onClose())}
+              className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">{step ? 'Back' : 'Cancel'}</button>
+            <button type="button" data-aim-press disabled={!canSet} onClick={press}
+              className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">Set {label}</button>
+          </div>
+        )}
+      </section>
+    );
+  }
+
   // The obstruction table and the sky plot it feeds. Tapping a wedge marks its
   // row, and working in a row marks its wedge.
   function GnObstructions({ g, update }) {
     const [hot, setHot] = useState(null);
+    const [aimId, setAimId] = useState(null);
     const rows = g.obstructions;
     const setRow = (id, patch) => update(prev => ({ ...prev, obstructions: prev.obstructions.map(o => (o.id === id ? { ...o, ...patch } : o)) }));
     const addRow = () => {
       const id = gnNewId('ob_');
       update(prev => ({ ...prev, obstructions: [...prev.obstructions, { id, name: '', desc: '', fromAz: '', fromEl: '', toAz: '', toEl: '', comments: '' }] }));
       setHot(id);
+      return id;
     };
+    const startAim = id => { aimPermission().then(() => { setHot(id); setAimId(id); }); };
     const removeRow = id => update(prev => ({ ...prev, obstructions: prev.obstructions.filter(o => o.id !== id) }));
     const angleBad = (raw, max) => {
       if (!String(raw).trim()) return false;
@@ -16932,12 +17137,23 @@
             <div className="mt-1.5 pl-11">
               <GnField label="Comments" value={o.comments} onChange={v => setRow(o.id, { comments: v })} />
             </div>
+            {window.DeviceOrientationEvent && (
+              <div className="mt-2 pl-11">
+                <button type="button" data-aim-start onClick={() => startAim(o.id)} className={GN.chip}><Ico.Pin size={14} /> Aim with phone</button>
+              </div>
+            )}
           </div>
         ))}
         <button type="button" onClick={addRow} className={GN.chip + ' mt-3'}>＋ Add obstruction</button>
 
         <p className={GN.lbl + ' mt-4 mb-1'}>Site Obstruction Diagram</p>
         <GnDrawing svg={svg} onClick={onPlotTap} className="max-w-[360px] cursor-pointer" />
+        {aimId && (
+          <GnAimSheet g={g} rowId={aimId} number={rows.findIndex(o => o.id === aimId) + 1}
+            onSet={(k, v) => setRow(aimId, { [k]: v })}
+            onNext={() => { const id = addRow(); setAimId(id); }}
+            onClose={() => setAimId(null)} />
+        )}
       </>
     );
   }
@@ -18045,15 +18261,27 @@
     return false;
   }
 
-  // Appends a new row object to the first 'points' page in the project.
+  // The Points page new points go to: the one chosen, or the first. Choosing
+  // changes where new points go and nothing else.
+  function activePointsPage(project) {
+    const pts = ((project && project.pages) || []).filter(p => p.type === 'points');
+    return pts.find(p => p.id === project.activePointsPage) || pts[0] || null;
+  }
+  function setActivePointsPage(projectId, pageId) {
+    DB.updateProject(projectId, { activePointsPage: pageId });
+  }
+
+  // Appends a new row object to the active 'points' page in the project.
+  // It is remembered on first use, so reordering pages can't change the target.
   // The caller is responsible for building the row (id, cells).
   function addPointRow(projectId, row) {
     const project = DB.getProject(projectId);
     if (!project) return null;
-    const pg = project.pages.find(p => p.type === 'points');
+    const pg = activePointsPage(project);
     if (!pg) return null;
     const updatedRows = [...(pg.rows || []), row];
     DB.updatePage(projectId, pg.id, { rows: updatedRows });
+    if (project.activePointsPage !== pg.id) setActivePointsPage(projectId, pg.id);
     return row.id;
   }
 

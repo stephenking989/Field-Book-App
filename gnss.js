@@ -836,7 +836,36 @@
     return turnPoint({ x: c.x + east * px, y: c.y - north * px }, c, oldShape._rot || 0);
   }
 
+  // ── Aiming the phone at an obstruction ──────────────────────────────────
+  // The sight line is the phone's top edge. W3C device orientation (Z-X'-Y'')
+  // turns that edge into east = -sin(a)cos(b), north = cos(a)cos(b), up = sin(b);
+  // gamma (rolling about the edge) doesn't move it. Past about 85° up there is
+  // no usable azimuth. offset corrects a compass that isn't north-based (iOS).
+  const AIM_MAX_EL = 85;
+  function aimNorm(a) { return ((a % 360) + 360) % 360; }
+  function aimFromOrientation(alpha, beta, gamma, offset) {
+    const d = Math.PI / 180, a = (alpha || 0) * d, b = (beta || 0) * d;
+    const e = -Math.sin(a) * Math.cos(b), n = Math.cos(a) * Math.cos(b), u = Math.sin(b);
+    const el = Math.asin(Math.max(-1, Math.min(1, u))) / d;
+    if (Math.abs(el) > AIM_MAX_EL) return { az: null, el };
+    return { az: aimNorm(Math.atan2(e, n) / d + (offset || 0)), el };
+  }
+  function circularMean(degs) {
+    if (!degs || !degs.length) return null;
+    let x = 0, y = 0;
+    degs.forEach(v => { x += Math.cos(v * Math.PI / 180); y += Math.sin(v * Math.PI / 180); });
+    return aimNorm(Math.atan2(y, x) * 180 / Math.PI);
+  }
+  // A phone reads magnetic. A page on True needs a declination, or null.
+  function aimStoreAz(az, ref, declination) {
+    if (ref !== 'true') return aimNorm(az);
+    const dec = api.num(declination);
+    return Number.isFinite(dec) && String(declination ?? '').trim() ? aimNorm(az + dec) : null;
+  }
+  const fmtAim = v => aimNorm(Math.round(v * 10) / 10).toFixed(1);   // rounded first: 359.96 reads 0.0
+
   const api = {
+    aimFromOrientation, circularMean, aimStoreAz, fmtAim,
     BUILTIN_ANTENNAS, DEFAULT_ANTENNA_ID, METHODS, DEFAULT_TOL,
     AERIAL_PROVIDER, AERIAL_PX, AERIAL_LAYER_ID, baseLayerId, groundResolution, aerialMeta, aerialSize, aerialFit, aerialMove, aerialTurn, turnBetween, aerialCentre,
     IMAGE_SLOTS, pageImageRefs, SAT_HOST, SAT_TILE_URL, SAT_ATTRIBUTION, SAT_ZOOM, tileXY, metresPerPixel, tilePlan, niceScale,

@@ -720,6 +720,23 @@ ${wpts}${trks ? '\n' + trks : ''}
     return { points: getProjectPoints(project), stations: gnssStations(project) };
   }
 
+  // Pages a Map page leaves out because of where it sits: inside a day it shows
+  // its own day and the no-day pages, with no day (or no page) it shows everything.
+  // Same grouping rule as groupPages in index.html.
+  function mapScopeHidden(project, mapPageId) {
+    if (!project || !mapPageId) return [];
+    const dayOf = {};
+    let day = null;
+    (project.pages || []).forEach(pg => {
+      if (pg.type === 'title') day = pg.id;
+      else if (pg.noDay) day = null;
+      dayOf[pg.id] = day;
+    });
+    const mine = dayOf[mapPageId];
+    if (!mine) return [];
+    return Object.keys(dayOf).filter(id => dayOf[id] && dayOf[id] !== mine);
+  }
+
   // Optional Points-row fields the map uses, by row id: the row's note, and
   // mapPin — a pin dropped on a Local project, which has no geo.
   // mapSym is the symbol the user picked on the map ({ kind?, glyph? }); it is
@@ -1223,7 +1240,7 @@ ${wpts}${trks ? '\n' + trks : ''}
     crsChangeSummary, applyCrsChange, datumMatchesCrs,
     parseRange, inRanges,
     toPNEZD, toKML, toGPX, qualityText, fmtWhen,
-    gnssStations, getMapFeatures, rowExtras,
+    gnssStations, getMapFeatures, mapScopeHidden, rowExtras,
     USER_SYMBOL_KINDS, MAP_GLYPHS, cleanMapSym, pointGlyph,
     DEFAULT_SYMBOL_CODES, SYMBOL_CODE_KINDS, parseCodeList, symbolCodes, pointCode, pointSymbol,
     mediaForPoint, convertGrid, gridInverse, fmtAzimuth, fmtQuadrant, fmtThin,
