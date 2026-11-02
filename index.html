@@ -807,7 +807,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.202';
+  const APP_VERSION = '1.203';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -2089,6 +2089,12 @@
       </svg>
     ),
     // A figure: three vertices joined by a line.
+    PrintArea: ({ size = 18 } = {}) => (
+      <svg width={size} height={size} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="4.5" y="2.5" width="11" height="15" rx="1" strokeDasharray="2.6 2.2"/>
+        <line x1="7.5" y1="13.5" x2="12.5" y2="13.5" strokeWidth="1.2"/>
+      </svg>
+    ),
     Figure: ({ size = 18 } = {}) => (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <polyline points="4 18 10 6 20 12"/>
@@ -3197,7 +3203,7 @@
   // mode 'position' drops the point number / description and just returns the
   // fix — used where a position is wanted but no point is created (GNSS Obs page).
   const GPS_AVG_CHOICES = [5, 10, 30, 60];
-  function GpsCaptureSheet({ projectId, source = 'gps', heading = 'GPS Point', mode = 'point', symbolPicker = false, onSave, onClose }) {
+  function GpsCaptureSheet({ projectId, source = 'gps', heading = 'GPS Point', mode = 'point', symbolPicker = false, initialNumber, initialDesc, onSave, onClose }) {
     const isPoint = mode === 'point';
     const [mapSym, setMapSym] = useState(null);   // map symbol pick; null = Auto
     const project = DB.getProject(projectId);
@@ -3209,8 +3215,8 @@
     const [remaining, setRemaining] = useState(0);
     const [count, setCount]     = useState(0);
     const [result, setResult]   = useState(null);   // averaged fix
-    const [number, setNumber]   = useState(() => String(fbGeo.nextGpsPtNum(project)));
-    const [desc, setDesc]       = useState(() => (project && project.recentDescs && project.recentDescs[0]) || '');
+    const [number, setNumber]   = useState(() => String(initialNumber || fbGeo.nextGpsPtNum(project)));
+    const [desc, setDesc]       = useState(() => (initialDesc !== undefined ? initialDesc : (project && project.recentDescs && project.recentDescs[0]) || ''));
     const samplesRef = useRef([]);
     const phaseRef   = useRef('idle');
     const fixRef     = useRef(null);
@@ -3416,7 +3422,6 @@
     const toast = useToast();
     const crsId = fbGeo.projectCrsId(project);
     const [pending, setPending] = useState(null);   // crsChangeSummary awaiting a decision
-    const [startNum, setStartNum] = useState(String(fbGeo.gpsPtStart(project)));
 
     function applyCrs(toId, reproject) {
       const fresh = DB.getProject(projectId);
@@ -3440,35 +3445,6 @@
       const sum = fbGeo.crsChangeSummary(DB.getProject(projectId), toId);
       if (sum.gps + sum.instrument === 0) applyCrs(toId, false);
       else setPending(sum);
-    }
-
-    function saveStartNum(v) {
-      const n = parseInt(v);
-      if (!isFinite(n) || n < 1) { setStartNum(String(fbGeo.gpsPtStart(project))); return; }
-      setStartNum(String(n));
-      if (n === fbGeo.gpsPtStart(project)) return;   // leaving the field unchanged must not reset the count
-      DB.updateProject(projectId, { gpsPtStart: n, lastGpsPt: null });
-      onReload();
-    }
-
-    // Z = H (orthometric, CGG2013a) for phone points — on by default. Existing
-    // phone rows follow the switch; a Z the user typed over is never cleared.
-    function toggleUseZ() {
-      const on = !fbGeo.useZ(project);
-      const fresh = DB.getProject(projectId);
-      const pages = fresh.pages.map(pg => {
-        if (pg.type !== 'points' || !pg.rows) return pg;
-        return { ...pg, rows: pg.rows.map(r => {
-          if (!r.geo || typeof r.geo.H !== 'number') return r;
-          const derived = fbGeo.fmtElev(r.geo.H);
-          const cur = String(r.cells?.col_elev ?? '').trim();
-          if (on && !cur)             return { ...r, cells: { ...r.cells, col_elev: derived } };
-          if (!on && cur === derived) return { ...r, cells: { ...r.cells, col_elev: '' } };
-          return r;
-        }) };
-      });
-      DB.updateProject(projectId, { gpsUseZ: on, pages });
-      onReload();
     }
 
     const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
@@ -3526,10 +3502,52 @@
           </div>
         )}
 
+        <GpsPointSettings project={project} projectId={projectId} onReload={onReload} />
+        <LineCodeSettings project={project} projectId={projectId} onReload={onReload} />
+      </div>
+    );
+  }
+
+  // Phone GPS Points block, in project settings and Map layers.
+  function GpsPointSettings({ project, projectId, onReload }) {
+    const [startNum, setStartNum] = useState(String(fbGeo.gpsPtStart(project)));
+    const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
+
+    function saveStartNum(v) {
+      const n = parseInt(v);
+      if (!isFinite(n) || n < 1) { setStartNum(String(fbGeo.gpsPtStart(project))); return; }
+      setStartNum(String(n));
+      if (n === fbGeo.gpsPtStart(project)) return;   // leaving the field unchanged must not reset the count
+      DB.updateProject(projectId, { gpsPtStart: n, lastGpsPt: null });
+      onReload();
+    }
+
+    // Z = H (orthometric, CGG2013a) for phone points — on by default. Existing
+    // phone rows follow the switch; a Z the user typed over is never cleared.
+    function toggleUseZ() {
+      const on = !fbGeo.useZ(project);
+      const fresh = DB.getProject(projectId);
+      const pages = fresh.pages.map(pg => {
+        if (pg.type !== 'points' || !pg.rows) return pg;
+        return { ...pg, rows: pg.rows.map(r => {
+          if (!r.geo || typeof r.geo.H !== 'number') return r;
+          const derived = fbGeo.fmtElev(r.geo.H);
+          const cur = String(r.cells?.col_elev ?? '').trim();
+          if (on && !cur)             return { ...r, cells: { ...r.cells, col_elev: derived } };
+          if (!on && cur === derived) return { ...r, cells: { ...r.cells, col_elev: '' } };
+          return r;
+        }) };
+      });
+      DB.updateProject(projectId, { gpsUseZ: on, pages });
+      onReload();
+    }
+
+    return (
+      <div data-gps-settings>
         <p className={lbl + ' mt-5'}>Phone GPS Points</p>
         <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1.5 bg-fb-page-alt border border-fb-border">
           <span className="flex-1 text-sm text-fb-ink">Number GPS points from</span>
-          <input type="text" inputMode="numeric" value={startNum}
+          <input type="text" inputMode="numeric" value={startNum} aria-label="Number GPS points from"
             onChange={e => setStartNum(e.target.value)} onBlur={e => saveStartNum(e.target.value)}
             className="w-[90px] rounded-lg px-2 py-1.5 text-base text-right font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
         </div>
@@ -3543,8 +3561,6 @@
             {fbGeo.useZ(project) ? 'ON' : 'OFF'}
           </span>
         </button>
-
-        <LineCodeSettings project={project} projectId={projectId} onReload={onReload} />
       </div>
     );
   }
@@ -3586,6 +3602,7 @@
   // project only once it is edited; until then the defaults apply.
   function LineCodeSettings({ project, projectId, onReload }) {
     const [list, setList] = useState(() => fbGeo.lineCodeTable(project));
+    const [symOpen, setSymOpen] = useState(null);   // index of the row showing its symbol choices
     const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
     function save(next) {
       setList(next);
@@ -3593,6 +3610,8 @@
         const row = { code: String(x.code || '').trim().toUpperCase(), layer: x.layer, closed: !!x.closed };
         const label = String(x.label || '').trim();
         if (label) row.label = label;
+        const symbol = fbGeo.cleanMapSym(x.symbol);
+        if (symbol) row.symbol = symbol;
         return row;
       }).filter(x => x.code);
       if (JSON.stringify(clean) === JSON.stringify(fbGeo.lineCodeTable(DB.getProject(projectId)))) return;
@@ -3605,17 +3624,30 @@
         <p className={lbl + ' mt-5'}>Linework Codes</p>
         <div className="rounded-xl bg-fb-page-alt border border-fb-border px-2.5 py-1.5 mb-1.5">
           {list.map((x, i) => (
-            <div key={i} className="flex items-center gap-2 py-1">
+            <div key={i} className="py-1">
+            <div className="flex items-center gap-1.5">
               <input type="text" value={x.code} aria-label="Code"
                 onChange={e => setList(edit(i, { code: e.target.value }))} onBlur={() => save(list)}
-                className="w-[78px] rounded-lg px-2 py-2 text-sm font-data uppercase text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
+                className="w-[62px] flex-shrink-0 rounded-lg px-2 py-2 text-sm font-data uppercase text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
               <LineNameCombo row={x} onType={label => setList(edit(i, { label }))} onDone={patch => save(edit(i, patch))} />
+              <button type="button" data-line-sym aria-label={`Map symbol for ${x.code || 'code'}`} aria-expanded={symOpen === i} onClick={() => setSymOpen(symOpen === i ? null : i)}
+                className={`w-9 h-9 flex-shrink-0 rounded-lg border inline-flex items-center justify-center text-[10px] font-bold text-fb-ink-muted ${symOpen === i ? 'bg-fb-accent-pale border-fb-accent' : 'bg-fb-field border-fb-border'}`}>
+                {x.symbol
+                  ? <span className="w-[26px] h-[26px] [&>svg]:w-full [&>svg]:h-full" dangerouslySetInnerHTML={{ __html: mapSymbolSvg(x.symbol.kind || 'topo', false, x.symbol.glyph && x.symbol.glyph !== 'dot' ? x.symbol.glyph : null) }} />
+                  : 'Auto'}
+              </button>
               <button type="button" aria-pressed={x.closed} aria-label={`${x.code || 'Code'} closes`} onClick={() => save(edit(i, { closed: !x.closed }))}
                 className={`h-9 px-2.5 rounded-lg text-xs font-bold flex-shrink-0 ${x.closed ? 'bg-fb-accent text-white' : 'bg-fb-border text-fb-ink'}`}>
                 {x.closed ? 'Closed' : 'Open'}
               </button>
               <button type="button" aria-label={`Remove ${x.code || 'code'}`} onClick={() => save(list.filter((_, j) => j !== i))}
-                className="w-9 h-9 flex items-center justify-center rounded-lg text-fb-ink-muted active:bg-fb-page-deep flex-shrink-0"><Ico.Trash /></button>
+                className="w-8 h-9 flex items-center justify-center rounded-lg text-fb-ink-muted active:bg-fb-page-deep flex-shrink-0"><Ico.Trash /></button>
+            </div>
+            {symOpen === i && (
+              <div className="mt-1.5" data-line-sym-picker>
+                <MapSymbolPicker value={x.symbol || null} onChange={symbol => save(edit(i, { symbol: symbol || undefined }))} />
+              </div>
+            )}
             </div>
           ))}
           {!list.length && <p className="text-sm text-fb-ink-muted py-2">No codes — the map draws no code lines.</p>}
@@ -5272,8 +5304,15 @@
   // Title block of a Map page's sheet: its title and the frame's scale. The
   // notes band is left off — it would change the shape of the box the frame
   // was fitted to (fbPrint.PAPER).
+  // A Map page's sheets, in frame order; [null] for a page with no frames.
+  function _pdfMapFrames(page) {
+    const list = fbPrint.sorted(fbPrint.mapFrames(page));
+    return list.length ? list : [null];
+  }
   function _pdfMapHeader(pdf, page, frame, meta, W, H, margin, F) {
-    const y = _pdfPageHeader(pdf, { ...page, title: page.title?.trim() || 'Map', notes: '' }, meta, W, H, margin, F);
+    const several = fbPrint.mapFrames(page).length > 1;
+    const title = (page.title?.trim() || 'Map') + (several && frame ? ` — Frame ${frame.label}` : '');
+    const y = _pdfPageHeader(pdf, { ...page, title, notes: '' }, meta, W, H, margin, F);
     if (frame) {
       pdf.setFontSize(8); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(30, 30, 30);
       pdf.text(`Scale ${fbPrint.scaleText(fbPrint.mapScale(frame)).replace('≈', 'approx. ')}`, W - margin - 4, margin + 7, { align: 'right' });
@@ -5334,7 +5373,7 @@
   // points drawn as vectors in black and grey, then scale bar, north arrow and
   // the imagery credit. Everything is placed from the frame, so the printed
   // scale is the frame's scale. `quiet` leaves a missing frame blank.
-  async function _pdfMapSheet(pdf, project, page, { W, H, margin, contentY, quiet }) {
+  async function _pdfMapSheet(pdf, project, page, { W, H, margin, contentY, quiet, frame }) {
     const availW = W - margin * 2, boxH = fbPrint.PAPER.h;
     const note = text => {
       if (quiet) return;
@@ -5342,7 +5381,6 @@
       pdf.text(text, W / 2, contentY + boxH / 2, { align: 'center' });
     };
     const crsId = fbGeo.projectCrsId(project), local = !fbGeo.isGrid(crsId), kind = local ? 'local' : 'geo';
-    const frame = fbPrint.normalizeMapFrame(page.mapFrame);
     if (!frame || frame.kind !== kind) { note('(No map frame set)'); return; }
     const base = local ? 'paper' : (page.base === 'aerial' ? 'aerial' : 'osm');
     const r = fbPrint.frameRect(frame);
@@ -6174,8 +6212,11 @@
           }
 
         } else if (page.type === 'map') {
-          const contentY = _pdfMapHeader(pdf, page, fbPrint.normalizeMapFrame(page.mapFrame), meta, W, H, margin, F);
-          await _pdfMapSheet(pdf, proj, page, { W, H, margin, contentY });
+          for (const [i, frame] of _pdfMapFrames(page).entries()) {
+            if (i > 0) pdf.addPage();
+            const contentY = _pdfMapHeader(pdf, page, frame, meta, W, H, margin, F);
+            await _pdfMapSheet(pdf, proj, page, { W, H, margin, contentY, frame });
+          }
 
         } else if (page.type === 'title') {
           // ── TITLE PAGE — professional cover sheet ────────────────────────────
@@ -6505,11 +6546,15 @@
       // A sketch with print areas opens on its first area (see the sketch branch).
       const areas = page.type === 'sketch' ? fbPrint.sorted(fbPrint.normalize(page.printAreas)) : [];
       const contentY = areas.length ? _pdfAreaHeader(pdf, page, areas[0], meta, W, H, margin, F)
-                     : page.type === 'map' ? _pdfMapHeader(pdf, page, fbPrint.normalizeMapFrame(page.mapFrame), meta, W, H, margin, F)
+                     : page.type === 'map' ? _pdfMapHeader(pdf, page, _pdfMapFrames(page)[0], meta, W, H, margin, F)
                                     : _pdfPageHeader(pdf, headPage, meta, W, H, margin, F);
 
       if (page.type === 'map') {
-        await _pdfMapSheet(pdf, proj, page, { W, H, margin, contentY, quiet: true });
+        for (const [i, frame] of _pdfMapFrames(page).entries()) {
+          if (i > 0) pdf.addPage();
+          const y = i > 0 ? _pdfMapHeader(pdf, page, frame, meta, W, H, margin, F) : contentY;
+          await _pdfMapSheet(pdf, proj, page, { W, H, margin, contentY: y, quiet: true, frame });
+        }
       } else if (page.type === 'sketch') {
         const _skImgIds2 = (page.shapes || []).filter(s => s.type === 'image' && s.imageId).map(s => s.imageId);
         const _skImgMap2 = _skImgIds2.length > 0 ? await photoDB.getMany(_skImgIds2) : {};
@@ -6982,11 +7027,11 @@
   }
 
   // ── Drop pin: number, description, note ───────────────────────────────────
-  function MapPinSheet({ project, where, local, crsId, onSave, onClose }) {
+  function MapPinSheet({ project, where, local, crsId, initialNumber, initialDesc, onSave, onClose }) {
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
-    const [number, setNumber] = useState(() => String(fbGeo.nextGpsPtNum(project)));
-    const [desc, setDesc] = useState(() => (project.recentDescs && project.recentDescs[0]) || '');
+    const [number, setNumber] = useState(() => String(initialNumber || fbGeo.nextGpsPtNum(project)));
+    const [desc, setDesc] = useState(() => (initialDesc !== undefined ? initialDesc : (project.recentDescs && project.recentDescs[0]) || ''));
     const [note, setNote] = useState('');
     const [mapSym, setMapSym] = useState(null);
     const numTrim = number.trim();
@@ -7327,7 +7372,7 @@
 
   // ── Layers, grid & export ──────────────────────────────────────────────────
   function MapLayersSheet({ project, projectId, prefs, setPrefs, local, summary, visibleCount, locked,
-                            onExport, onOpenIn, onClose, onSaved, extraToggles, show, setShow, scopeHidden, showLocked }) {
+                            onExport, onOpenIn, onClose, onSaved, extraToggles, show, setShow, scopeHidden, showLocked, onGpsSaved }) {
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
     const codes = fbGeo.symbolCodes(project);
@@ -7416,6 +7461,13 @@
             ))}
             <p className="text-[11px] text-fb-ink-muted">Matched against the first word of the description.</p>
           </div>
+
+          {!locked && (
+            <div className="mb-4">
+              <GpsPointSettings project={project} projectId={projectId} onReload={onGpsSaved} />
+              <LineCodeSettings project={project} projectId={projectId} onReload={onSaved} />
+            </div>
+          )}
 
           <div className="border-t border-fb-border pt-3">
             <div className="flex items-baseline justify-between mb-2">
@@ -7611,14 +7663,15 @@
   function mapProjectFeats(project, local) {
     if (!project) return { pts: [], stations: [], byId: {} };
     const f = fbGeo.getMapFeatures(project);
-    const extras = fbGeo.rowExtras(project), codes = fbGeo.symbolCodes(project);
+    const extras = fbGeo.rowExtras(project), codes = fbGeo.symbolCodes(project), table = fbGeo.lineCodeTable(project);
     const pts = f.points.map(p => {
-      const sym = fbGeo.pointSymbol(p, codes, extras[p.id]);
+      const ex = fbGeo.withCodeSymbol(p.desc, extras[p.id], table);
+      const sym = fbGeo.pointSymbol(p, codes, ex);
       return {
         ...p,
         ll: local ? (p.N !== null && p.E !== null ? [p.N, p.E] : null) : (p.lat !== null ? [p.lat, p.lon] : null),
         sym,
-        glyph: fbGeo.pointGlyph(sym, extras[p.id]),
+        glyph: fbGeo.pointGlyph(sym, ex),
         userSym: (extras[p.id] && extras[p.id].mapSym) || null,
         note: (extras[p.id] && extras[p.id].note) || '',
         isRow: p.pageType === 'points',
@@ -7709,6 +7762,18 @@
     const [exportFmt, setExportFmt] = useState(null);
     const [view, setView]         = useState(0);       // bumped on every map move
     const [exporting, setExporting] = useState(false);   // a Map page's PDF is being made
+    const [headerOpen, setHeaderOpen] = useState(false);
+    // The next point, ready ahead of the capture: the sheets start from these,
+    // and after a save they move on to the next number and the code used last.
+    const [nextNum, setNextNum]   = useState(() => (project ? String(fbGeo.nextGpsPtNum(project)) : ''));
+    const [nextDesc, setNextDesc] = useState(() => (project && project.recentDescs && project.recentDescs[0]) || '');
+    const [codeFocus, setCodeFocus] = useState(false);
+    function advanceNext() {
+      const p = DB.getProject(projectId);
+      if (!p) return;
+      setNextNum(String(fbGeo.nextGpsPtNum(p)));
+      setNextDesc((p.recentDescs && p.recentDescs[0]) || '');
+    }
     const sel = selId ? feats.byId[selId] : null;
     const navTarget = navId ? feats.byId[navId] : null;
 
@@ -7767,10 +7832,12 @@
       const allLL = [...feats.pts, ...feats.stations].filter(p => p.ll).map(p => p.ll);
       const frameLL = [];
       if (!mapPageId && project) project.pages.forEach(pg => {
-        const f = pg.type === 'map' ? window.fbPrint.normalizeMapFrame(pg.mapFrame) : null;
-        if (!f || f.kind !== (local ? 'local' : 'geo')) return;
-        const c = window.fbPrint.frameCorners(f);
-        frameLL.push([c.nw.lat, c.nw.lng], [c.se.lat, c.se.lng]);
+        if (pg.type !== 'map') return;
+        window.fbPrint.mapFrames(pg).forEach(f => {
+          if (f.kind !== (local ? 'local' : 'geo')) return;
+          const c = window.fbPrint.frameCorners(f);
+          frameLL.push([c.nw.lat, c.nw.lng], [c.se.lat, c.se.lng]);
+        });
       });
       if (focusPt && focusPt.ll) { map.setView(focusPt.ll, local ? 3 : 19); setSelId(focusPt.id); }
       else if (pagePts.length) map.fitBounds(L.latLngBounds(pagePts.map(p => p.ll)), { padding: [48, 48], maxZoom: local ? 3 : 19 });
@@ -8000,23 +8067,41 @@
     }, [sel, inv, openLine, draft, feats]);
 
     // ── Map pages: print frames ──
-    // A frame is { kind, x, y, w } in world metres (see print.js): the paper
-    // shape, fixed on the ground, so panning and zooming never change it.
+    // A frame is { id, label, kind, x, y, w } in world metres (see print.js): the
+    // paper shape, fixed on the ground, so panning and zooming never change it.
+    // A page can have several, like a sketch's print areas.
     const fbPrint = window.fbPrint;
     const frameKind = local ? 'local' : 'geo';
     const mapPages = React.useMemo(() => (project ? project.pages.filter(p => p.type === 'map') : []), [project]);
     const activePage = mapPageId ? (mapPages.find(p => p.id === mapPageId) || null) : null;
-    const storedFrame = activePage ? fbPrint.normalizeMapFrame(activePage.mapFrame) : null;
+    const storedFrames = activePage ? fbPrint.mapFrames(activePage).filter(f => f.kind === frameKind) : [];
     const [liveFrame, setLiveFrame] = useState(null);      // the frame while a finger or mouse has hold of it
-    const frame = liveFrame || (storedFrame && storedFrame.kind === frameKind ? storedFrame : null);
-    const liveRef = useRef(null), frameNow = useRef(null);
-    frameNow.current = frame;
+    const [frameSel, setFrameSel] = useState(null);        // id of the frame the tool is working on
+    const frames = storedFrames.map(f => (liveFrame && liveFrame.id === f.id ? { ...f, ...liveFrame } : f));
+    const frame = frames.find(f => f.id === frameSel) || frames[0] || null;
+    const liveRef = useRef(null), frameNow = useRef([]), frameSelNow = useRef(null);
+    frameNow.current = frames;
+    frameSelNow.current = frame ? frame.id : null;
     hRef.current.noSaveView = !!activePage;
+    function putFrames(list) {
+      DB.updatePage(projectId, activePage.id, { ...fbPrint.mapFramesPatch(list), base });
+      liveRef.current = null; setLiveFrame(null); reload();
+    }
+    hRef.current.addFrame = f => {
+      hRef.current.placeOnFix = false;
+      if (!activePage || locked) return;
+      const a = { id: fbPrint.newId(), label: fbPrint.nextLabel(frameNow.current), kind: frameKind, x: f.x, y: f.y, w: f.w };
+      putFrames([...frameNow.current, a]);
+      setFrameSel(a.id);
+    };
+    // Saves over the selected frame (or adds one if there is none); null deletes it.
     hRef.current.saveFrame = f => {
       hRef.current.placeOnFix = false;
       if (!activePage || locked) return;
-      DB.updatePage(projectId, activePage.id, { mapFrame: f ? { kind: frameKind, x: f.x, y: f.y, w: f.w } : null, base });
-      liveRef.current = null; setLiveFrame(null); reload();
+      const list = frameNow.current, id = (f && f.id) || frameSelNow.current;
+      if (!f) { putFrames(list.filter(a => a.id !== id)); setFrameSel(null); return; }
+      if (!list.some(a => a.id === id)) { hRef.current.addFrame(f); return; }
+      putFrames(list.map(a => (a.id === id ? { ...a, x: f.x, y: f.y, w: f.w } : a)));
     };
     // A frame filling most of what is on screen, at a round scale.
     function placeInView() {
@@ -8032,11 +8117,11 @@
     useEffect(() => {
       const map = mapRef.current;
       if (!mapReady || !map || !activePage) return;
-      const sf = storedFrame && storedFrame.kind === frameKind ? storedFrame : null;
-      if (sf) {
-        hRef.current.wantFix = false;   // the first GPS fix must not pull the view off the frame
-        const c = fbPrint.frameCorners(sf);
-        map.fitBounds(L.latLngBounds([[c.nw.lat, c.nw.lng], [c.se.lat, c.se.lng]]), { padding: [24, 24], animate: false });
+      if (storedFrames.length) {
+        hRef.current.wantFix = false;   // the first GPS fix must not pull the view off the frames
+        const lls = storedFrames.flatMap(f => { const c = fbPrint.frameCorners(f); return [[c.nw.lat, c.nw.lng], [c.se.lat, c.se.lng]]; });
+        map.fitBounds(L.latLngBounds(lls), { padding: [24, 24], animate: false });
+        setFrameSel(null);
         setMode(m => (m === 'frame' ? null : m));
         return;
       }
@@ -8054,24 +8139,29 @@
       if (activePage && !locked && activePage.base !== base) DB.updatePage(projectId, activePage.id, { base });
     }, [mapPageId, base]);
 
-    // Every Map page's frame, with a label chip on its corner. The open page's
-    // is solid (and has handles while the frame tool is on); the others open
-    // their page when their label is tapped.
+    // A Map page shows its own frames only, with a label chip on each corner; the
+    // selected one is solid with handles while the frame tool is on. The main map
+    // shows every page's frames, and a label there opens its page.
     useEffect(() => {
       const map = mapRef.current, lay = layersRef.current;
       if (!mapReady || !map || !lay.frames) return;
       lay.frames.clearLayers();
-      mapPages.forEach(pg => {
-        const open = pg.id === mapPageId;
-        const f = open ? frame : fbPrint.normalizeMapFrame(pg.mapFrame);
-        if (!f || f.kind !== frameKind) return;
-        const c = fbPrint.frameCorners(f), editing = open && mode === 'frame';
+      const drawn = activePage
+        ? frames.map(f => ({ f, text: f.label, pg: null }))
+        : mapPages.flatMap(pg => {
+            const list = fbPrint.mapFrames(pg);
+            return list.map(f => ({ f, pg, text: `P.${pg.pageNumber}${pg.title ? ' ' + pg.title : ''}${list.length > 1 ? ' ' + f.label : ''}` }));
+          });
+      drawn.forEach(({ f, text, pg }) => {
+        if (f.kind !== frameKind) return;
+        const open = !pg;
+        const c = fbPrint.frameCorners(f), editing = open && mode === 'frame' && !!frame && f.id === frame.id;
         L.polygon([c.nw, c.ne, c.se, c.sw].map(p => [p.lat, p.lng]), {
           renderer: lay.frameRenderer, interactive: false, color: FBC.info, weight: editing ? 2.4 : 1.8,
           dashArray: editing ? null : '7 5', opacity: open ? 1 : 0.75, fill: editing, fillColor: FBC.info, fillOpacity: 0.06,
         }).addTo(lay.frames);
         const tag = document.createElement('span');
-        tag.textContent = `P.${pg.pageNumber}${pg.title ? ' ' + pg.title : ''} · ${fbPrint.scaleText(fbPrint.mapScale(f))}`;
+        tag.textContent = `${text} · ${fbPrint.scaleText(fbPrint.mapScale(f))}`;
         const chip = L.marker([c.nw.lat, c.nw.lng], {
           icon: L.divIcon({ className: 'fb-map-frame-tag' + (open ? ' on' : ''), html: tag.outerHTML, iconSize: null, iconAnchor: [0, 0] }),
           interactive: !open, keyboard: false, zIndexOffset: 300,
@@ -8083,11 +8173,12 @@
           interactive: false, keyboard: false, zIndexOffset: 310,
         }).addTo(lay.frames));
       });
-    }, [mapReady, mapPages, mapPageId, liveFrame, mode, frameKind]);
+    }, [mapReady, mapPages, mapPageId, liveFrame, mode, frameKind, frameSel]);
 
-    // Moving and resizing the frame. Pointer-down on it (capture phase) takes
-    // the gesture from the map; a second finger hands it back so the map can
-    // pinch. Moves are kept in state; the frame is saved when the finger lifts.
+    // Selecting, moving and resizing frames. Pointer-down on one (capture phase)
+    // takes the gesture from the map, and drag on empty ground still pans; a second
+    // finger hands it back so the map can pinch. Moves are kept in state; the frame
+    // is saved when the finger lifts.
     useEffect(() => {
       const map = mapRef.current;
       if (!mapReady || !map || mode !== 'frame' || !activePage || locked) return;
@@ -8103,11 +8194,11 @@
       const down = e => {
         if (drag) { cancel(); return; }
         if (e.pointerType === 'mouse' && e.button !== 0) return;
-        const f = frameNow.current && { ...frameNow.current };
-        if (!f) return;
-        const pt = world(e), h = fbPrint.hit([{ id: 'f', ...f }], pt, 18 * perPx(), 'f');
+        const pt = world(e), h = fbPrint.hit(frameNow.current, pt, 18 * perPx(), frameSelNow.current);
         if (!h) return;
+        const f = { ...frameNow.current.find(a => a.id === h.id) };
         e.preventDefault(); e.stopPropagation();
+        setFrameSel(h.id); frameSelNow.current = h.id;
         map.dragging.disable();
         drag = { id: e.pointerId, part: h.part, start: pt, before: f, moved: false, px: perPx() };
       };
@@ -8117,7 +8208,7 @@
         if (!drag.moved && Math.hypot(dx, dy) < 4 * drag.px) return;
         drag.moved = true;
         const n = drag.part === 'body' ? fbPrint.move(drag.before, dx, dy) : fbPrint.resize(drag.before, drag.part, pt, 24 * drag.px);
-        liveRef.current = { kind: frameKind, x: n.x, y: n.y, w: n.w };
+        liveRef.current = { id: drag.before.id, kind: frameKind, x: n.x, y: n.y, w: n.w };
         setLiveFrame(liveRef.current);
       };
       const up = e => {
@@ -8255,6 +8346,7 @@
       setSheet(null); setMode(null); setPinAt(null);
       if (!row) { toast.error('Pin not saved'); return; }
       reload();
+      advanceNext();
       setSelId(row.id);
       toast.success(`Map pin ${number} saved to Points`);
     }
@@ -8333,7 +8425,7 @@
             <button type="button" aria-label="Back to project" onClick={() => navigate(`#/project/${projectId}`)}
               className="w-11 h-11 flex items-center justify-center rounded-xl active:bg-white/10 flex-shrink-0"><Ico.Back /></button>
             <div className="flex-1 min-w-0">
-              <p className="font-heading text-[11px] tracking-[0.18em] text-fb-accent-pale leading-none">MAP · {local ? 'LOCAL' : pCrs.short}</p>
+              <p className="font-heading text-[11px] tracking-[0.18em] text-fb-accent-pale leading-none whitespace-nowrap truncate">MAP · {local ? 'LOCAL' : pCrs.short}</p>
               <h1 className="font-heading text-[19px] font-medium tracking-wide truncate leading-tight">{project.name || 'Untitled project'}</h1>
             </div>
             {activePage && (() => {
@@ -8366,7 +8458,12 @@
           </div>
           {activePage && (
             <div className="-mx-2 mt-1 bg-fb-page text-fb-ink">
-              <PageHeaderStrip page={activePage} projectId={projectId} onReload={reload} noNotes />
+              {headerOpen && <PageHeaderStrip page={activePage} projectId={projectId} onReload={reload} noNotes />}
+              <button type="button" data-map-header-toggle aria-expanded={headerOpen} onClick={() => setHeaderOpen(o => !o)}
+                className="w-full h-7 flex items-center justify-between px-3 font-data text-[11px] text-fb-ink-muted border-b border-fb-border">
+                <span className="truncate">Pg {activePage.pageNumber}{activePage.title ? ' · ' + activePage.title : ''}</span>
+                <span className="flex-shrink-0 ml-2">{headerOpen ? '▴' : '▾'}</span>
+              </button>
             </div>
           )}
         </header>
@@ -8491,35 +8588,26 @@
           ) : frameMode ? (
             <div className="mb-2.5" data-map-frame-bar>
               <div className="flex items-center gap-2 mb-2">
-                <span className="font-heading text-[15px] tracking-wide uppercase text-fb-heading">Print frame</span>
+                <span className="font-heading text-[15px] tracking-wide uppercase text-fb-heading">Frame{frame ? ' ' + frame.label : ''}</span>
                 <span className="flex-1" />
                 <label className="flex items-center gap-1.5 font-data text-base text-fb-ink">
                   1:
-                  <input key={Math.round(frameDenom)} type="text" inputMode="numeric" aria-label="Print scale" defaultValue={frame ? Math.round(frameDenom) : ''}
+                  <input key={(frame ? frame.id : '') + Math.round(frameDenom)} type="text" inputMode="numeric" aria-label="Print scale" disabled={!frame} defaultValue={frame ? Math.round(frameDenom) : ''}
                     onBlur={e => applyScale(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
                     className="w-[86px] px-2.5 py-2 rounded-lg text-base font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
                 </label>
               </div>
-              <div className="flex items-center gap-2">
-                <button type="button" onClick={() => hRef.current.saveFrame(placeInView())}
-                  className="h-10 px-4 rounded-lg text-sm font-semibold bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep">Fit to view</button>
-                <button type="button" onClick={() => { hRef.current.saveFrame(null); setMode(null); }}
-                  className="h-10 px-4 rounded-lg text-sm font-semibold bg-fb-page-alt border border-fb-border text-fb-error active:bg-fb-page-deep">Delete frame</button>
-                <span className="flex-1 text-right text-xs text-fb-ink-muted">Drag to move · corners to resize</span>
+              <div className="flex items-center gap-2 overflow-x-auto">
+                <button type="button" data-frame-add onClick={() => hRef.current.addFrame(placeInView())}
+                  className="h-10 px-3 rounded-lg text-sm font-semibold flex-shrink-0 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep">＋ Frame</button>
+                <button type="button" disabled={!frame} onClick={() => hRef.current.saveFrame(placeInView())}
+                  className="h-10 px-3 rounded-lg text-sm font-semibold flex-shrink-0 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep disabled:opacity-50">Fit to view</button>
+                <button type="button" disabled={!frame} onClick={() => hRef.current.saveFrame(null)}
+                  className="h-10 px-3 rounded-lg text-sm font-semibold flex-shrink-0 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-error active:bg-fb-page-deep disabled:opacity-50">Delete frame</button>
               </div>
             </div>
-          ) : activePage && !sel ? (
-            <div className="flex items-center gap-2 min-h-[44px] mb-2.5" data-map-frame-strip>
-              <span className="flex-1 min-w-0 font-data text-[13px] text-fb-ink-muted truncate">
-                {frame ? `Page frame · ${fbPrint.scaleText(frameDenom)}` : 'No frame on this page yet'}
-              </span>
-              {!locked && (
-                <button type="button" onClick={() => { if (!frame) hRef.current.saveFrame(placeInView()); setMode('frame'); }}
-                  className="h-11 px-4 rounded-[10px] border border-fb-accent text-fb-heading text-sm font-semibold active:bg-fb-accent-pale">{frame ? 'Edit frame' : 'Place frame'}</button>
-              )}
-            </div>
           ) : sel ? (
-            <div className="flex items-center gap-2.5 min-h-[56px] mb-2.5">
+            <div className="flex items-center gap-2.5 min-h-[56px] mb-1.5">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="font-data text-[18px] font-bold text-fb-ink whitespace-nowrap truncate">{sel.source === 'gnss-station' ? sel.name : `PT ${sel.number || '—'}`}</span>
@@ -8535,7 +8623,33 @@
               <button type="button" aria-label="Clear selection" onClick={() => setSelId(null)} className="w-9 h-11 flex items-center justify-center text-fb-ink-muted rounded-lg active:bg-fb-page-deep"><Ico.Close /></button>
             </div>
           ) : null}
-          <div className="flex gap-2">
+          {!figMode && !banner && !pinMode && !frameMode && (
+            <>
+              <p data-map-frame-strip className="font-data text-[12px] text-fb-ink-muted truncate mb-1.5">
+                {local ? 'LOCAL' : pCrs.short}
+                {activePage && (frame
+                  ? `${frames.length > 1 ? ` · Frame ${frame.label}` : ''} · Frame Scale ${fbPrint.scaleText(frameDenom)}`
+                  : ' · No frame yet')}
+              </p>
+              {!locked && (
+                <div data-map-next className="mb-2">
+                  <div className="flex gap-2">
+                    <input type="text" inputMode="numeric" aria-label="Next point number" placeholder="Pt #" value={nextNum} onChange={e => setNextNum(e.target.value)}
+                      className="w-[92px] flex-shrink-0 px-2.5 py-2 rounded-lg text-base font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint" />
+                    <input type="text" aria-label="Next point code" placeholder="Code" value={nextDesc} onChange={e => setNextDesc(e.target.value)}
+                      onFocus={e => { e.target.select(); setCodeFocus(true); }} onBlur={() => setCodeFocus(false)}
+                      className="flex-1 min-w-0 px-2.5 py-2 rounded-lg text-base text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint" />
+                  </div>
+                  {codeFocus && (
+                    <div className="mt-1.5 -mb-1.5" onMouseDown={e => e.preventDefault()}>
+                      <RecentDescChips project={project} value={nextDesc} onPick={setNextDesc} />
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+          <div className={frameMode || figMode || pinMode ? 'flex gap-2' : `grid gap-2 ${activePage && !locked ? 'grid-cols-4' : 'grid-cols-3'}`}>
             {figMode ? (
               <>
                 <button type="button" onClick={cancelFigure} className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Cancel</button>
@@ -8553,17 +8667,24 @@
             ) : (
               <>
                 <button type="button" disabled={local || locked || !!mode} onClick={() => setSheet('gps')}
-                  className="flex-1 min-h-[52px] rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint inline-flex items-center justify-center gap-2">
-                  <Ico.ZoomIn /> Store GPS point
+                  className="min-h-[64px] rounded-xl text-[12px] font-semibold leading-tight text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint flex flex-col items-center justify-center gap-0.5">
+                  <Ico.ZoomIn /> Store Point
                 </button>
                 <button type="button" disabled={locked || !!mode} onClick={startPin}
-                  className="min-h-[52px] w-[74px] rounded-xl text-[12px] font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-50 flex flex-col items-center justify-center gap-0.5">
+                  className="min-h-[64px] rounded-xl text-[12px] font-semibold leading-tight text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-50 flex flex-col items-center justify-center gap-0.5">
                   <Ico.Pin size={18} /> Drop pin
                 </button>
                 <button type="button" disabled={locked || !!mode} onClick={startFigure}
-                  className="min-h-[52px] w-[74px] rounded-xl text-[12px] font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-50 flex flex-col items-center justify-center gap-0.5">
+                  className="min-h-[64px] rounded-xl text-[12px] font-semibold leading-tight text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-50 flex flex-col items-center justify-center gap-0.5">
                   <Ico.Figure /> Figure
                 </button>
+                {activePage && !locked && (
+                  <button type="button" data-frame-tool disabled={!!mode}
+                    onClick={() => { if (!frames.length) hRef.current.addFrame(placeInView()); else setFrameSel(frame.id); setSelId(null); setMode('frame'); }}
+                    className="min-h-[64px] rounded-xl text-[12px] font-semibold leading-tight text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-50 flex flex-col items-center justify-center gap-0.5">
+                    <Ico.PrintArea /> Frame
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -8592,6 +8713,7 @@
             summary={summary} visibleCount={visibleIds().size} locked={locked} onSaved={reload}
             onExport={openExport} onOpenIn={openIn} onClose={() => setSheet(null)}
             show={savedShow} setShow={setShow} scopeHidden={scopeHidden} showLocked={!!showPage && locked}
+            onGpsSaved={() => { reload(); advanceNext(); }}
             extraToggles={<>
               <MapToggleTile label="Lines & lots" on={prefs.lines} onChange={v => setPrefs({ lines: v })} />
               <MapToggleTile label="Code lines" on={prefs.codeLines} onChange={v => setPrefs({ codeLines: v })} />
@@ -8601,12 +8723,13 @@
           <ExportPointsModal projectId={projectId} initialIds={visibleIds()} initialFormat={exportFmt} linework={exportLines} onClose={() => setSheet(null)} />
         )}
         {sheet === 'gps' && (
-          <GpsCaptureSheet projectId={projectId} symbolPicker
+          <GpsCaptureSheet projectId={projectId} symbolPicker initialNumber={nextNum} initialDesc={nextDesc}
             onClose={() => setSheet(null)}
             onSave={pt => {
               const row = addGpsPointRow(projectId, pt);
               setSheet(null);
               reload();
+              advanceNext();
               if (row) setSelId(row.id);
               toast.success(`GPS point ${pt.number} saved to Points`);
             }} />
@@ -8634,7 +8757,7 @@
             }} />
         )}
         {sheet === 'pin' && pinAt && (
-          <MapPinSheet project={project} where={pinAt} local={local} crsId={crsId} onSave={savePin}
+          <MapPinSheet project={project} where={pinAt} local={local} crsId={crsId} initialNumber={nextNum} initialDesc={nextDesc} onSave={savePin}
             onClose={() => { setSheet(null); setPinAt(null); }} />
         )}
       </div>

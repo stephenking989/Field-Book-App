@@ -188,7 +188,26 @@
     return { kind: raw.kind === 'local' ? 'local' : 'geo', x: raw.x, y: raw.y, w: raw.w };
   }
 
+  // A Map page's frames: page.mapFrames, or a page saved with its one mapFrame
+  // as frame A. Each is { id, label, kind, x, y, w }.
+  function mapFrames(page) {
+    if (!page) return [];
+    if (Array.isArray(page.mapFrames)) {
+      const valid = page.mapFrames.filter(normalizeMapFrame);
+      return normalize(valid).map((a, i) => ({ ...a, kind: valid[i].kind === 'local' ? 'local' : 'geo' }));
+    }
+    const one = normalizeMapFrame(page.mapFrame);
+    return one ? [{ id: 'frame_a', label: 'A', ...one }] : [];
+  }
+  // What to save for a list of frames. mapFrame keeps the first one, so an older
+  // build still shows a frame.
+  function mapFramesPatch(frames) {
+    const first = sorted(frames)[0] || null;
+    return { mapFrames: frames, mapFrame: first ? { kind: first.kind, x: first.x, y: first.y, w: first.w } : null };
+  }
+
   const api = {
+    mapFrames, mapFramesPatch,
     PAPER, RATIO, frameRect, frameScale, widthForScale, setScale, scaleText,
     move, resize, fromDrag, fitView,
     labelAt, nextLabel, sorted, primary, hit, normalize, newId,

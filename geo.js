@@ -809,6 +809,15 @@ ${wpts}${trks ? '\n' + trks : ''}
     return SOURCE_SYMBOL[p.source] || 'topo';
   }
 
+  // A row's extras with its linework code's symbol filled in, unless the point
+  // has a symbol picked for itself. Pass the result to pointSymbol / pointGlyph.
+  function withCodeSymbol(desc, extra, table) {
+    if (extra && extra.mapSym) return extra;
+    const code = pointCode(desc);
+    const t = code ? (table || []).find(x => x.code === code && x.symbol) : null;
+    return t ? { ...(extra || {}), mapSym: t.symbol } : extra;
+  }
+
   // The photo records that belong to a Points row (its own, or linked to it).
   function mediaForPoint(project, rowId, kind) {
     const rows = rowPoints(project), out = [];
@@ -1016,6 +1025,8 @@ ${wpts}${trks ? '\n' + trks : ''}
         const row = { code: String(x.code).trim().toUpperCase(), layer: figureLayer(x.layer).id, closed: !!x.closed };
         const label = String(x.label || '').trim();
         if (label) row.label = label;   // the name typed over the layer's
+        const symbol = cleanMapSym(x.symbol);
+        if (symbol) row.symbol = symbol;   // the map symbol every point with this code gets
         return row;
       });
   }
@@ -1242,7 +1253,7 @@ ${wpts}${trks ? '\n' + trks : ''}
     toPNEZD, toKML, toGPX, qualityText, fmtWhen,
     gnssStations, getMapFeatures, mapScopeHidden, rowExtras,
     USER_SYMBOL_KINDS, MAP_GLYPHS, cleanMapSym, pointGlyph,
-    DEFAULT_SYMBOL_CODES, SYMBOL_CODE_KINDS, parseCodeList, symbolCodes, pointCode, pointSymbol,
+    DEFAULT_SYMBOL_CODES, SYMBOL_CODE_KINDS, parseCodeList, symbolCodes, pointCode, pointSymbol, withCodeSymbol,
     mediaForPoint, convertGrid, gridInverse, fmtAzimuth, fmtQuadrant, fmtThin,
     shoelaceArea, pathLength, fmtArea, GRID_STEPS, gridStep,
     FIGURE_LAYERS, figureLayer, getFigures, vertexLookup, resolveFigure, nextFigureName, figureLabelPoint,
