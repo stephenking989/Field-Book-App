@@ -806,7 +806,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.200';
+  const APP_VERSION = '1.201';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -2996,6 +2996,29 @@
     return row;
   }
 
+  // A point the user numbered and described at capture: the next one counts on
+  // from it and offers the description again. Automatic photo / voice points
+  // don't come through here.
+  function noteCapture(projectId, point) {
+    const patch = fbGeo.capturePatch(DB.getProject(projectId), point);
+    if (Object.keys(patch).length) DB.updateProject(projectId, patch);
+  }
+
+  // The last descriptions used in this project, under the description field.
+  function RecentDescChips({ project, value, onPick }) {
+    const list = (project && project.recentDescs) || [];
+    if (!list.length) return null;
+    return (
+      <div data-recent-descs className="flex gap-1.5 overflow-x-auto mb-3">
+        {list.map(d => (
+          <button key={d} type="button" onClick={() => onPick(d)}
+            className={`h-9 px-3 rounded-lg text-sm font-semibold border inline-flex items-center flex-shrink-0 whitespace-nowrap ${d === value
+              ? 'bg-fb-cover border-fb-cover text-white' : 'bg-fb-page-alt border-fb-border text-fb-heading'}`}>{d}</button>
+        ))}
+      </div>
+    );
+  }
+
   // Add a phone-GPS point to the project's Points page, creating that page if
   // the project doesn't have one yet. Returns the new row.
   function addGpsPointRow(projectId, point) {
@@ -3145,7 +3168,7 @@
     const [count, setCount]     = useState(0);
     const [result, setResult]   = useState(null);   // averaged fix
     const [number, setNumber]   = useState(() => String(fbGeo.nextGpsPtNum(project)));
-    const [desc, setDesc]       = useState('');
+    const [desc, setDesc]       = useState(() => (project && project.recentDescs && project.recentDescs[0]) || '');
     const samplesRef = useRef([]);
     const phaseRef   = useRef('idle');
     const fixRef     = useRef(null);
@@ -3219,6 +3242,7 @@
 
     function save() {
       if (!result) return;
+      if (isPoint) noteCapture(projectId, { number: numTrim, desc });
       onSave({ number: numTrim, desc: desc.trim(), geo: fbGeo.makeGeo({ ...result, ts: new Date().toISOString() }, source), ...(symbolPicker && mapSym ? { mapSym } : {}) });
     }
 
@@ -3291,11 +3315,12 @@
               </div>
               <div className="flex-1 min-w-0">
                 <p className={lbl + ' mb-1.5'}>Description</p>
-                <input type="text" value={desc} onChange={e => setDesc(e.target.value)} placeholder="IP fd, culvert, gate…"
+                <input type="text" value={desc} onChange={e => setDesc(e.target.value)} onFocus={e => e.target.select()} placeholder="IP fd, culvert, gate…"
                   className={fieldCls} />
               </div>
             </div>
           )}
+          {isPoint && <RecentDescChips project={project} value={desc} onPick={setDesc} />}
           {isPoint && duplicate && <Notice className="mb-3">Point {numTrim} already exists in this project.</Notice>}
           {isPoint && symbolPicker && (
             <div className="mb-3">
@@ -3378,7 +3403,8 @@
       const n = parseInt(v);
       if (!isFinite(n) || n < 1) { setStartNum(String(fbGeo.gpsPtStart(project))); return; }
       setStartNum(String(n));
-      DB.updateProject(projectId, { gpsPtStart: n });
+      if (n === fbGeo.gpsPtStart(project)) return;   // leaving the field unchanged must not reset the count
+      DB.updateProject(projectId, { gpsPtStart: n, lastGpsPt: null });
       onReload();
     }
 
@@ -3480,6 +3506,38 @@
     );
   }
 
+  // A code's name: the text can be typed over at any time, the arrow picks from
+  // the list. Typed text keeps the row's layer, so its line style holds.
+  function LineNameCombo({ row, onType, onDone }) {
+    const inputRef = useRef(null);
+    const text = row.label !== undefined ? row.label : fbGeo.figureLayer(row.layer).label;
+    function commit() {
+      const t = text.trim();
+      const preset = fbGeo.FIGURE_LAYERS.find(l => l.label.toUpperCase() === t.toUpperCase());
+      if (!t) onDone({ label: undefined });
+      else if (preset) onDone({ layer: preset.id, label: undefined });
+      else onDone({ label: t });
+    }
+    function pick(id) {
+      onDone({ layer: id, label: undefined });
+      if (id === 'other') setTimeout(() => { if (inputRef.current) { inputRef.current.focus(); inputRef.current.select(); } }, 0);
+    }
+    return (
+      <div data-line-name className="flex-1 min-w-0 flex rounded-lg bg-fb-field border border-fb-border focus-within:border-fb-accent overflow-hidden">
+        <input ref={inputRef} type="text" value={text} aria-label={`Name for ${row.code || 'code'}`}
+          onChange={e => onType(e.target.value)} onFocus={e => e.target.select()} onBlur={commit}
+          className="flex-1 min-w-0 px-2 py-2 text-sm text-fb-ink bg-transparent outline-none" />
+        <span className="relative w-9 flex-shrink-0 flex items-center justify-center border-l border-fb-border text-fb-ink-muted">
+          <Ico.ChevDown />
+          <select value={row.layer} aria-label={`Pick a name for ${row.code || 'code'}`} onChange={e => pick(e.target.value)}
+            className="absolute inset-0 w-full h-full opacity-0">
+            {fbGeo.FIGURE_LAYERS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+          </select>
+        </span>
+      </div>
+    );
+  }
+
   // Settings → Linework codes: which description codes draw lines on the map
   // (FN, BLDG, EP…), on which layer, and whether they close. Stored on the
   // project only once it is edited; until then the defaults apply.
@@ -3488,7 +3546,12 @@
     const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
     function save(next) {
       setList(next);
-      const clean = next.map(x => ({ code: String(x.code || '').trim().toUpperCase(), layer: x.layer, closed: !!x.closed })).filter(x => x.code);
+      const clean = next.map(x => {
+        const row = { code: String(x.code || '').trim().toUpperCase(), layer: x.layer, closed: !!x.closed };
+        const label = String(x.label || '').trim();
+        if (label) row.label = label;
+        return row;
+      }).filter(x => x.code);
       if (JSON.stringify(clean) === JSON.stringify(fbGeo.lineCodeTable(DB.getProject(projectId)))) return;
       DB.updateProject(projectId, { lineCodes: clean });
       onReload();
@@ -3503,10 +3566,7 @@
               <input type="text" value={x.code} aria-label="Code"
                 onChange={e => setList(edit(i, { code: e.target.value }))} onBlur={() => save(list)}
                 className="w-[78px] rounded-lg px-2 py-2 text-sm font-data uppercase text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
-              <select value={x.layer} aria-label={`Layer for ${x.code || 'code'}`} onChange={e => save(edit(i, { layer: e.target.value }))}
-                className="flex-1 min-w-0 rounded-lg px-2 py-2 text-sm text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent">
-                {fbGeo.FIGURE_LAYERS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
-              </select>
+              <LineNameCombo row={x} onType={label => setList(edit(i, { label }))} onDone={patch => save(edit(i, patch))} />
               <button type="button" aria-pressed={x.closed} aria-label={`${x.code || 'Code'} closes`} onClick={() => save(edit(i, { closed: !x.closed }))}
                 className={`h-9 px-2.5 rounded-lg text-xs font-bold flex-shrink-0 ${x.closed ? 'bg-fb-accent text-white' : 'bg-fb-border text-fb-ink'}`}>
                 {x.closed ? 'Closed' : 'Open'}
@@ -3791,8 +3851,8 @@
     );
   }
 
-  function ProjectSettingsModal({ project, projectId, onClose, onReload }) {
-    const [tab,        setTab]        = useState('transfer');
+  function ProjectSettingsModal({ project, projectId, onClose, onReload, initialTab }) {
+    const [tab,        setTab]        = useState(initialTab || 'transfer');
     const [showExport, setShowExport] = useState(false);
     const [showExportPts, setShowExportPts] = useState(false);
     const [lockMode,      setLockMode]      = useState(null); // null | 'lock' | 'reopen'
@@ -3974,6 +4034,8 @@
     function handleCreate(proj) {
       setShowNew(false);
       setProjects(DB.getProjects());
+      // A new project opens on its settings, to confirm them before any page is made.
+      try { sessionStorage.setItem('fb_open_settings', proj.id); } catch {}
       navigate(`#/project/${proj.id}`);
     }
 
@@ -4476,6 +4538,7 @@
         client: form.client.trim(),
         surveyor: form.surveyor.trim() || 'Surveyor',
         date: todayLocalISO(),
+        gpsPtStart: fbGeo.randomGpsPtStart(),
       });
       toast.success('Project created');
       onCreate(proj);
@@ -5257,9 +5320,10 @@
     if (!drewBase) _drawPdfGrid(pdf, W, H, margin, contentY);
 
     // Linework: figures solid, code lines dashed. Black and grey only.
-    const feats = mapProjectFeats(project, local);
+    const show = mapShowOf(page.mapShow);
+    const feats = mapShownFeats(mapProjectFeats(project, local), show);
     pdf.setDrawColor(30, 30, 30); pdf.setLineWidth(0.3);
-    mapProjectLines(project, local, crsId).forEach(l => {
+    mapProjectLines(project, local, crsId, show.hidePages).forEach(l => {
       const pts = l.lls.map(ll => toMM(ll[0], ll[1]));
       if (pts.length < 2) return;
       if (l.closed && pts.length >= 3) pts.push(pts[0]);
@@ -6879,7 +6943,7 @@
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
     const [number, setNumber] = useState(() => String(fbGeo.nextGpsPtNum(project)));
-    const [desc, setDesc] = useState('');
+    const [desc, setDesc] = useState(() => (project.recentDescs && project.recentDescs[0]) || '');
     const [note, setNote] = useState('');
     const [mapSym, setMapSym] = useState(null);
     const numTrim = number.trim();
@@ -6907,9 +6971,10 @@
             </div>
             <div className="flex-1 min-w-0">
               <p className={lbl}>Description</p>
-              <input type="text" value={desc} onChange={e => setDesc(e.target.value)} aria-label="Description" placeholder="IP fd, gate…" className={fieldCls} />
+              <input type="text" value={desc} onChange={e => setDesc(e.target.value)} aria-label="Description" onFocus={e => e.target.select()} placeholder="IP fd, gate…" className={fieldCls} />
             </div>
           </div>
+          <RecentDescChips project={project} value={desc} onPick={setDesc} />
           {dup && <Notice className="mb-3">Point {numTrim} already exists in this project.</Notice>}
           <p className={lbl}>Symbol</p>
           <div className="mb-3"><MapSymbolPicker value={mapSym} onChange={setMapSym} /></div>
@@ -6919,7 +6984,7 @@
           <div className="flex gap-2">
             <button type="button" onClick={onClose} className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Cancel</button>
             <button type="button" disabled={!numTrim || !grid}
-              onClick={() => onSave({ number: numTrim, desc: desc.trim(), note: note.trim(), lat: where.lat, lng: where.lng, grid, mapSym })}
+              onClick={() => { noteCapture(project.id, { number: numTrim, desc }); onSave({ number: numTrim, desc: desc.trim(), note: note.trim(), lat: where.lat, lng: where.lng, grid, mapSym }); }}
               className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
               {dup ? 'Save anyway' : 'Save pin'}
             </button>
@@ -7218,7 +7283,7 @@
 
   // ── Layers, grid & export ──────────────────────────────────────────────────
   function MapLayersSheet({ project, projectId, prefs, setPrefs, local, summary, visibleCount, locked,
-                            onExport, onOpenIn, onClose, onSaved, extraToggles }) {
+                            onExport, onOpenIn, onClose, onSaved, extraToggles, show, setShow, showLocked }) {
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
     const codes = fbGeo.symbolCodes(project);
@@ -7234,6 +7299,7 @@
       onSaved();
     }
     const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
+    const pointPages = project.pages.filter(p => p.type === 'points');
     return (
       <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
         <div ref={trapRef} className="modal-sheet" style={{ paddingBottom: 28, maxHeight: '92vh' }}>
@@ -7267,11 +7333,32 @@
 
           <p className={lbl}>On the map</p>
           <div className="grid grid-cols-2 gap-2 mb-4">
+            <MapToggleTile label="Point symbols" on={show.points} disabled={showLocked} onChange={v => setShow({ points: v })} />
             <MapToggleTile label="Point numbers" on={prefs.labels} onChange={v => setPrefs({ labels: v })} />
             <MapToggleTile label="Descriptions" on={prefs.descs} onChange={v => setPrefs({ descs: v })} />
             {extraToggles}
             <MapToggleTile label="Grid ticks" on={prefs.grid} onChange={v => setPrefs({ grid: v })} />
           </div>
+
+          {pointPages.length > 0 && (
+            <>
+              <p className={lbl}>Points pages</p>
+              <div data-map-point-pages className="rounded-xl border border-fb-border bg-fb-field overflow-hidden mb-4">
+                {pointPages.map((pg, i) => {
+                  const on = show.hidePages.indexOf(pg.id) === -1;
+                  return (
+                    <button key={pg.id} type="button" role="checkbox" aria-checked={on} disabled={showLocked}
+                      onClick={() => setShow({ hidePages: on ? [...show.hidePages, pg.id] : show.hidePages.filter(id => id !== pg.id) })}
+                      className={`w-full flex items-center gap-3 min-h-[46px] px-3.5 text-left disabled:opacity-45 ${i ? 'border-t border-fb-border' : ''}`}>
+                      <span className={`w-[18px] h-[18px] rounded border-2 border-fb-accent flex-shrink-0 flex items-center justify-center text-[12px] leading-none text-white ${on ? 'bg-fb-accent' : ''}`}>{on ? '✓' : ''}</span>
+                      <span className="flex-1 min-w-0 truncate text-[15px] text-fb-ink">{pg.title || 'Untitled'}</span>
+                      <span className="font-data text-[11px] text-fb-ink-muted">{(pg.rows || []).length} pts</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
 
           <p className={lbl}>Symbol codes</p>
           <div className="rounded-xl border border-fb-border bg-fb-page-alt px-3 py-2 mb-4">
@@ -7460,6 +7547,17 @@
   // What the map draws, worked out from the project alone — shared by the live
   // map and the Map page's PDF so the two can't disagree. `ll` is [lat, lng]
   // (or [N, E] on a Local project).
+  // What a map shows of the points: { points: false } hides every symbol,
+  // hidePages leaves out Points pages. A Map page keeps its own (page.mapShow,
+  // which its PDF follows too); the main map's is a device pref. Absent = everything.
+  function mapShowOf(saved) {
+    return { points: !saved || saved.points !== false, hidePages: saved && Array.isArray(saved.hidePages) ? saved.hidePages : [] };
+  }
+  function mapShownFeats(feats, show) {
+    if (!show.points) return { pts: [], stations: [] };
+    return { pts: feats.pts.filter(p => show.hidePages.indexOf(p.pageId) === -1), stations: feats.stations };
+  }
+
   function mapProjectFeats(project, local) {
     if (!project) return { pts: [], stations: [], byId: {} };
     const f = fbGeo.getMapFeatures(project);
@@ -7484,7 +7582,7 @@
   }
   // Manual figures, then the lines the description codes draw (never stored).
   // A code line already converted to a figure isn't drawn twice.
-  function mapProjectLines(project, local, crsId) {
+  function mapProjectLines(project, local, crsId, hidePages) {
     if (!project) return [];
     const lookup = fbGeo.vertexLookup(project);
     const toLL = v => (local ? [v.N, v.E] : (v.lat !== null ? [v.lat, v.lon] : null));
@@ -7505,7 +7603,7 @@
     const run = verts => verts.map(v => v.id).join('|');
     const taken = new Set();
     figs.forEach(l => { taken.add(run(l.r.verts)); taken.add(run(l.r.verts.slice().reverse())); });
-    const codes = fbGeo.codeLines(project).filter(c => !taken.has(run(c.pts))).map(c => {
+    const codes = fbGeo.codeLines(project, hidePages).filter(c => !taken.has(run(c.pts))).map(c => {
       const area = c.closed ? fbGeo.shoelaceArea(c.pts) : null;
       return {
         key: 'code:' + c.name, code: c, source: 'code', name: c.name, layer: c.layer, closed: c.closed,
@@ -7535,6 +7633,17 @@
 
     // Everything with a position, with its map position (`ll`) and symbol.
     const feats = React.useMemo(() => mapProjectFeats(project, local), [project, local]);
+    const showPage = mapPageId && project ? project.pages.find(p => p.id === mapPageId && p.type === 'map') : null;
+    const show = mapShowOf(showPage ? showPage.mapShow : prefs.mapShow);
+    const hideKey = show.hidePages.join('|');
+    const shown = React.useMemo(() => mapShownFeats(feats, show), [feats, show.points, hideKey]);
+    function setShow(patch) {
+      const next = { ...show, ...patch };
+      if (!showPage) { setPrefs({ mapShow: next }); return; }
+      if (locked) return;
+      DB.updatePage(projectId, showPage.id, { mapShow: next });
+      reload();
+    }
 
     const [selId, setSelId]       = useState(null);
     const [sheet, setSheet]       = useState(null);    // 'detail' | 'layers' | 'find' | 'gps' | 'pin' | 'export' | 'inverse' | 'figure' | 'figname'
@@ -7554,7 +7663,7 @@
     // Linework with its map positions: manual figures, then the lines the
     // description codes draw (computed each time, never stored). A code line
     // already converted to a figure isn't drawn twice.
-    const lines = React.useMemo(() => mapProjectLines(project, local, crsId), [project, local, crsId]);
+    const lines = React.useMemo(() => mapProjectLines(project, local, crsId, show.hidePages), [project, local, crsId, hideKey]);
     const openLine = lineKey ? lines.find(l => l.key === lineKey) : null;
     const exportLines = lines.filter(l => l.source === 'figure' || prefs.codeLines)
       .map(l => ({ name: l.name, layer: l.layer, closed: l.closed, source: l.source, verts: l.r.verts }));
@@ -7593,7 +7702,9 @@
       setMapReady(true);
 
       // First view: a point or page handed over from the Points page, then the
-      // saved view, then every point, then Nova Scotia until a fix arrives.
+      // Map page frames (the main map shows them all; a Map page fits its own
+      // below), then the saved view, then every point, then Nova Scotia until a
+      // fix arrives.
       let focus = null;
       try { focus = JSON.parse(sessionStorage.getItem('fb_map_focus') || 'null'); sessionStorage.removeItem('fb_map_focus'); } catch {}
       if (focus && focus.projectId !== projectId) focus = null;
@@ -7602,8 +7713,16 @@
       const focusPt = focus && focus.rowId ? feats.byId[focus.rowId] : null;
       const pagePts = focus && focus.pageId ? feats.pts.filter(p => p.ll && p.pageId === focus.pageId) : [];
       const allLL = [...feats.pts, ...feats.stations].filter(p => p.ll).map(p => p.ll);
+      const frameLL = [];
+      if (!mapPageId && project) project.pages.forEach(pg => {
+        const f = pg.type === 'map' ? window.fbPrint.normalizeMapFrame(pg.mapFrame) : null;
+        if (!f || f.kind !== (local ? 'local' : 'geo')) return;
+        const c = window.fbPrint.frameCorners(f);
+        frameLL.push([c.nw.lat, c.nw.lng], [c.se.lat, c.se.lng]);
+      });
       if (focusPt && focusPt.ll) { map.setView(focusPt.ll, local ? 3 : 19); setSelId(focusPt.id); }
       else if (pagePts.length) map.fitBounds(L.latLngBounds(pagePts.map(p => p.ll)), { padding: [48, 48], maxZoom: local ? 3 : 19 });
+      else if (frameLL.length) map.fitBounds(L.latLngBounds(frameLL), { padding: [48, 48], animate: false });
       else if (savedOk) map.setView([saved.lat, saved.lng], saved.zoom);
       else if (allLL.length) map.fitBounds(L.latLngBounds(allLL), { padding: [48, 48], maxZoom: local ? 3 : 19 });
       else if (local) map.setView([0, 0], 0);
@@ -7668,7 +7787,7 @@
           L.marker(l.labelLL, { icon: L.divIcon({ className: 'fb-map-figlabel', html: el.outerHTML, iconSize: null, iconAnchor: [0, 0] }), interactive: false, keyboard: false }).addTo(lay.lines);
         }
       });
-      feats.pts.forEach(p => {
+      shown.pts.forEach(p => {
         if (!p.ll) return;
         if (MAP_DIV_SYMBOLS.has(p.sym) || p.hasPhoto || p.glyph) {
           L.marker(p.ll, {
@@ -7683,13 +7802,13 @@
             .on('click', tap(p.id)).addTo(lay.pts);
         }
       });
-      feats.stations.forEach(s => {
+      shown.stations.forEach(s => {
         L.marker(s.ll, {
           icon: L.divIcon({ className: 'fb-map-sym', html: mapSymbolSvg('gnss'), iconSize: [26, 26], iconAnchor: [13, 13] }),
           keyboard: false, title: s.name, zIndexOffset: 200,
         }).on('click', tap(s.id)).addTo(lay.pts);
       });
-    }, [feats, lines, prefs.lines, prefs.codeLines, !!mapRef.current]);
+    }, [shown, lines, prefs.lines, prefs.codeLines, !!mapRef.current]);
 
     // Labels — only close in, and only while there aren't too many to read.
     useEffect(() => {
@@ -7699,7 +7818,7 @@
       if (!prefs.labels && !prefs.descs) return;
       if (map.getZoom() < (local ? MAP_LOCAL_LABEL_ZOOM : MAP_LABEL_ZOOM)) return;
       const b = map.getBounds();
-      const inView = [...feats.pts, ...feats.stations].filter(p => p.ll && b.contains(p.ll));
+      const inView = [...shown.pts, ...shown.stations].filter(p => p.ll && b.contains(p.ll));
       if (inView.length > MAP_LABEL_MAX) return;
       inView.forEach(p => {
         const num = p.source === 'gnss-station' ? p.name : (prefs.labels ? p.number : '');
@@ -7712,7 +7831,7 @@
           interactive: false, keyboard: false,
         }).addTo(lay.labels);
       });
-    }, [feats, prefs.labels, prefs.descs, view]);
+    }, [shown, prefs.labels, prefs.descs, view]);
 
     // Grid ticks in the display grid. Lines are densified before conversion so
     // they follow the projection's curve on the web-mercator map.
@@ -7794,7 +7913,12 @@
         L.polyline([ll, navTarget.ll], { renderer: lay.renderer, color: FBC.info, weight: 2, dashArray: '5 5', interactive: false }).addTo(lay.me);
       }
       if (follow) map.panTo(ll, { animate: true });
-      if (hRef.current.wantFix && !feats.pts.some(p => p.ll)) { hRef.current.wantFix = false; map.setView(ll, 17); }
+      if (hRef.current.wantFix && !feats.pts.some(p => p.ll)) {
+        hRef.current.wantFix = false;
+        map.setView(ll, 17, { animate: false });
+        // A new Map page with nothing to fit: its first frame goes where we are.
+        if (hRef.current.placeOnFix) hRef.current.saveFrame(hRef.current.placeInView());
+      }
     }, [fix, navTarget, follow, local]);
 
     // Selection ring, and the inverse line while its result is open.
@@ -7837,6 +7961,7 @@
     frameNow.current = frame;
     hRef.current.noSaveView = !!activePage;
     hRef.current.saveFrame = f => {
+      hRef.current.placeOnFix = false;
       if (!activePage || locked) return;
       DB.updatePage(projectId, activePage.id, { mapFrame: f ? { kind: frameKind, x: f.x, y: f.y, w: f.w } : null, base });
       liveRef.current = null; setLiveFrame(null); reload();
@@ -7857,6 +7982,7 @@
       if (!mapReady || !map || !activePage) return;
       const sf = storedFrame && storedFrame.kind === frameKind ? storedFrame : null;
       if (sf) {
+        hRef.current.wantFix = false;   // the first GPS fix must not pull the view off the frame
         const c = fbPrint.frameCorners(sf);
         map.fitBounds(L.latLngBounds([[c.nw.lat, c.nw.lng], [c.se.lat, c.se.lng]]), { padding: [24, 24], animate: false });
         setMode(m => (m === 'frame' ? null : m));
@@ -7867,6 +7993,7 @@
       if (lls.length) map.fitBounds(L.latLngBounds(lls), { padding: [48, 48], maxZoom: local ? 3 : 19, animate: false });
       setSheet(null); setSelId(null);
       hRef.current.saveFrame(hRef.current.placeInView());
+      hRef.current.placeOnFix = !lls.length && !!hRef.current.wantFix;
       setMode('frame');
     }, [mapReady, mapPageId]);
 
@@ -8412,6 +8539,7 @@
           <MapLayersSheet project={project} projectId={projectId} prefs={prefs} setPrefs={setPrefs} local={local}
             summary={summary} visibleCount={visibleIds().size} locked={locked} onSaved={reload}
             onExport={openExport} onOpenIn={openIn} onClose={() => setSheet(null)}
+            show={show} setShow={setShow} showLocked={!!showPage && locked}
             extraToggles={<>
               <MapToggleTile label="Lines & lots" on={prefs.lines} onChange={v => setPrefs({ lines: v })} />
               <MapToggleTile label="Code lines" on={prefs.codeLines} onChange={v => setPrefs({ codeLines: v })} />
@@ -8469,7 +8597,13 @@
     const [editingCover, setEditingCover] = useState(false);
     const [coverForm, setCoverForm] = useState({});
     const [exporting, setExporting] = useState(false);
-    const [showSettings,    setShowSettings]    = useState(false);
+    const [showSettings,    setShowSettings]    = useState(() => {
+      try {
+        if (sessionStorage.getItem('fb_open_settings') !== String(projectId)) return false;
+        sessionStorage.removeItem('fb_open_settings');
+        return 'settings';
+      } catch { return false; }
+    });
     const [showExportPts,   setShowExportPts]   = useState(false);
     const [pageActionTarget, setPageActionTarget] = useState(null); // page object
     const [pageExportTarget, setPageExportTarget] = useState(null); // page object
@@ -8899,6 +9033,7 @@
             projectId={projectId}
             onClose={() => setShowSettings(false)}
             onReload={reload}
+            initialTab={showSettings === 'settings' ? 'settings' : undefined}
           />
         )}
 
@@ -13457,6 +13592,51 @@
     return text.split(/[\s,;]+/).map(c => c.trim().toUpperCase()).filter(c => c && !seen.has(c) && seen.add(c));
   }
 
+  // Points page CSV import: how many file lines to leave out, with the file to look at.
+  function PointsImportSheet({ lines, onImport, onClose }) {
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+    const [skipText, setSkipText] = useState(() => String(fbGeo.guessSkipLines(lines)));
+    const parsedSkip = parseInt(skipText, 10);
+    const skip = isFinite(parsedSkip) ? Math.max(0, parsedSkip) : 0;
+    const count = fbGeo.pointsAfterSkip(lines, skip).length;
+    const end = lines.length && !lines[lines.length - 1].length ? lines.length - 1 : lines.length;   // a file's final newline isn't a line
+    const shown = lines.slice(0, Math.min(end, Math.max(6, skip + 3), 12));
+    const step = d => setSkipText(String(Math.max(0, skip + d)));
+    const stepCls = 'w-11 h-11 rounded-lg text-lg font-semibold text-fb-heading bg-fb-page-alt border border-fb-border active:bg-fb-page-deep disabled:opacity-45';
+    return (
+      <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+        <div ref={trapRef} className="modal-sheet" data-points-import>
+          <div className="w-10 h-1 bg-fb-border rounded-full mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-fb-ink mb-4">Import points</h2>
+          <p className="text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5">Lines to skip</p>
+          <div className="flex items-center gap-2 mb-3">
+            <button type="button" aria-label="Skip one line fewer" disabled={!skip} onClick={() => step(-1)} className={stepCls}>−</button>
+            <input type="text" inputMode="numeric" value={skipText} aria-label="Lines to skip" data-skip-lines
+              onChange={e => setSkipText(e.target.value.replace(/\D/g, ''))}
+              className="w-20 h-11 rounded-lg px-2 text-base text-center font-data text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
+            <button type="button" aria-label="Skip one line more" onClick={() => step(1)} className={stepCls}>＋</button>
+          </div>
+          <div className="rounded-xl px-3 py-2.5 mb-4 bg-fb-page-alt border border-fb-border overflow-x-auto" data-import-preview>
+            {shown.map((cells, i) => (
+              <p key={i} className={`font-data text-xs leading-relaxed whitespace-nowrap ${i < skip ? 'text-fb-ink-faint line-through' : 'text-fb-ink'}`}>
+                <span className="inline-block w-6 text-fb-ink-muted">{i + 1}</span>{cells.join(', ')}
+              </p>
+            ))}
+            {end > shown.length && <p className="font-data text-xs text-fb-ink-muted">…</p>}
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">Cancel</button>
+            <button type="button" disabled={!count} onClick={() => onImport(skip)}
+              className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">
+              Import {count} point{count === 1 ? '' : 's'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function DescCodesSheet({ codes, onSave, onClose }) {
     const [text, setText] = useState(codes.join(' '));
     const trapRef = useRef(null);
@@ -13497,6 +13677,7 @@
     const [openTbMenu, setOpenTbMenu]   = useState(null); // 'insert' | 'formulas' | 'view' | 'edit' | null
     const [insertSub, setInsertSub]     = useState(null); // 'rows' | 'cols' — the list open inside Insert ▾
     const [csvImportModal, setCsvImportModal] = useState(null); // null | { parsed, useHeader }
+    const [pointsImport, setPointsImport] = useState(null);     // Points page: file lines awaiting "lines to skip"
     const [gpsOpen, setGpsOpen]         = useState(false);  // GPS capture sheet (points pages)
     const [inverseOpen, setInverseOpen] = useState(null);   // { from, to } while the Inverse sheet is open
     const [forwardOpen, setForwardOpen] = useState(null);   // { from } while the Forward point sheet is open
@@ -14451,32 +14632,9 @@
         const reader = new FileReader();
         reader.onload = (ev) => {
           try {
-            const text = ev.target.result;
-            // Split into lines, remove blank lines
-            const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l);
-            if (!lines.length) { toast.error('CSV file appears to be empty'); return; }
-            // Parse each line: split on comma or tab, strip surrounding quotes
-            const parsed = lines.map(line => {
-              const sep = line.includes('\t') ? '\t' : ',';
-              return line.split(sep).map(c => c.trim().replace(/^["']|["']$/g, ''));
-            });
-            // Skip header row if first cell looks like a column name
-            const first = (parsed[0][0] || '').toLowerCase();
-            const isHeader = isNaN(Number(first)) || ['pt','point','p#','#','no','num','id'].some(h => first.startsWith(h));
-            const dataRows = isHeader ? parsed.slice(1) : parsed;
-            if (!dataRows.length) { toast.error('No data rows found after header'); return; }
-            // Map columns positionally: [ptNum, northing, easting, elev, desc]
-            const colMap = ['col_ptnum','col_north','col_east','col_elev','col_desc'];
-            const newRows = dataRows.map((cols, i) => {
-              const cells = {};
-              columns.forEach(c => { cells[c.id] = ''; });
-              colMap.forEach((cid, ci) => { if (cols[ci] != null) cells[cid] = cols[ci]; });
-              // If no pt number in CSV, auto-number based on existing + position
-              if (!cells['col_ptnum']) cells['col_ptnum'] = nextPointNum([...rows, ...newRows.slice(0, i)]);
-              return { id: 'r_' + (Date.now() + i), cells };
-            });
-            persistRows([...rows, ...newRows]);
-            toast.success(`Imported ${newRows.length} point${newRows.length !== 1 ? 's' : ''}`);
+            const parsed = fbGeo.parsePointsText(ev.target.result);
+            if (!fbGeo.pointsAfterSkip(parsed, 0).length) { toast.error('CSV file appears to be empty'); return; }
+            setPointsImport(parsed);
           } catch(err) {
             toast.error('Failed to parse CSV: ' + (err.message || 'unknown error'));
           }
@@ -14484,6 +14642,23 @@
         reader.readAsText(file);
       };
       inp.click();
+    }
+
+    function confirmPointsImport(skip) {
+      // Map columns positionally: [ptNum, northing, easting, elev, desc]
+      const colMap = ['col_ptnum','col_north','col_east','col_elev','col_desc'];
+      const newRows = [];
+      fbGeo.pointsAfterSkip(pointsImport, skip).forEach((cols, i) => {
+        const cells = {};
+        columns.forEach(c => { cells[c.id] = ''; });
+        colMap.forEach((cid, ci) => { if (cols[ci] != null) cells[cid] = cols[ci]; });
+        // If no pt number in CSV, auto-number based on existing + position
+        if (!cells['col_ptnum']) cells['col_ptnum'] = nextPointNum([...rows, ...newRows]);
+        newRows.push({ id: 'r_' + (Date.now() + i), cells });
+      });
+      persistRows([...rows, ...newRows]);
+      setPointsImport(null);
+      toast.success(`Imported ${newRows.length} point${newRows.length !== 1 ? 's' : ''}`);
     }
 
     // ── CSV Import (generic data pages) ─────────────────────────────────────
@@ -15821,6 +15996,10 @@
               setGpsOpen(false);
               toast.success(`GPS point ${pt.number} saved`);
             }} />
+        )}
+
+        {pointsImport && (
+          <PointsImportSheet lines={pointsImport} onImport={confirmPointsImport} onClose={() => setPointsImport(null)} />
         )}
 
         {/* ── CSV Import modal ── */}

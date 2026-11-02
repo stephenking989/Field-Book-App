@@ -412,11 +412,70 @@
     const n = parseInt(project && project.gpsPtStart);
     return (isFinite(n) && n > 0) ? n : DEFAULT_GPS_PT_START;
   }
+  // A new project starts on a random whole thousand, so two projects' phone
+  // points rarely share numbers.
+  function randomGpsPtStart(rand) {
+    return (1 + Math.floor((rand || Math.random)() * 99)) * 1000;
+  }
+  // Counts up from the last number used at capture (project.lastGpsPt), so a
+  // number typed over carries on from there. Changing the start setting clears it.
   function nextGpsPtNum(project) {
     const used = usedPointNumbers(project);
-    let n = gpsPtStart(project);
+    const last = parseInt(project && project.lastGpsPt);
+    let n = (isFinite(last) && last >= 0) ? last + 1 : gpsPtStart(project);
     while (used.has(String(n))) n++;
     return n;
+  }
+  // The description to carry to the next shot: without B / E / CLO, or
+  // `FN B` would start a new fence string on every point.
+  function carryDesc(desc) {
+    const toks = String(desc || '').trim().split(/\s+/).filter(Boolean);
+    return toks.filter((w, i) => i === 0 || LINE_CONTROLS.indexOf(w.toUpperCase()) === -1).join(' ');
+  }
+  // What a Drop pin / Store GPS point save changes on the project.
+  function capturePatch(project, { number, desc }) {
+    const patch = {};
+    const num = String(number || '').trim();
+    if (/^\d+$/.test(num)) patch.lastGpsPt = parseInt(num, 10);
+    const d = carryDesc(desc);
+    if (d) {
+      const prev = Array.isArray(project && project.recentDescs) ? project.recentDescs : [];
+      patch.recentDescs = [d, ...prev.filter(x => String(x).toUpperCase() !== d.toUpperCase())].slice(0, 6);
+    }
+    return patch;
+  }
+
+  // ─── Points file import ────────────────────────────────────────────────────
+  // One array of cells per file line (a blank line is []), so "lines to skip"
+  // counts what the user sees in the file. Comma or tab; double quotes respected.
+  function parsePointsText(text) {
+    return String(text || '').replace(/^﻿/, '').split(/\r?\n/).map(line => {
+      if (!line.trim()) return [];
+      const sep = line.includes('\t') ? '\t' : ',';
+      const cells = [];
+      let cur = '', inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+          else inQ = !inQ;
+        } else if (ch === sep && !inQ) {
+          cells.push(cur.trim()); cur = '';
+        } else cur += ch;
+      }
+      cells.push(cur.trim());
+      return cells;
+    });
+  }
+  // Lines before the first one whose N and E columns read as data (a number or
+  // blank). Point numbers can be text (CP1), so column 1 says nothing.
+  function guessSkipLines(rows) {
+    const ok = c => c === '' || isFinite(Number(c));
+    const i = (rows || []).findIndex(r => r.length >= 2 && ok(r[1]) && (r.length < 3 || ok(r[2])));
+    return i === -1 ? 0 : i;
+  }
+  function pointsAfterSkip(rows, skip) {
+    return (rows || []).slice(Math.max(0, skip || 0)).filter(r => r.length);
   }
 
   // ─── CRS change ────────────────────────────────────────────────────────────
@@ -835,7 +894,7 @@ ${wpts}${trks ? '\n' + trks : ''}
     { id: 'fence',    label: 'Fence' },
     { id: 'water',    label: 'Water' },
     { id: 'road',     label: 'Road' },
-    { id: 'other',    label: 'Other' },
+    { id: 'other',    label: 'Custom' },
   ];
   const figureLayer = id => FIGURE_LAYERS.find(l => l.id === id) || FIGURE_LAYERS[FIGURE_LAYERS.length - 1];
 
@@ -936,7 +995,12 @@ ${wpts}${trks ? '\n' + trks : ''}
   function lineCodeTable(project) {
     const t = Array.isArray(project && project.lineCodes) ? project.lineCodes : DEFAULT_LINE_CODES;
     return t.filter(x => x && String(x.code || '').trim())
-      .map(x => ({ code: String(x.code).trim().toUpperCase(), layer: figureLayer(x.layer).id, closed: !!x.closed }));
+      .map(x => {
+        const row = { code: String(x.code).trim().toUpperCase(), layer: figureLayer(x.layer).id, closed: !!x.closed };
+        const label = String(x.label || '').trim();
+        if (label) row.label = label;   // the name typed over the layer's
+        return row;
+      });
   }
   // points: index entries in collection order (only ones with N/E are used).
   // Returns [{ code, layer, closed, name, pts: [entry…] }] — strings of two or
@@ -957,7 +1021,7 @@ ${wpts}${trks ? '\n' + trks : ''}
       if (!t) return;
       const ctl = toks.slice(1).filter(w => LINE_CONTROLS.indexOf(w) !== -1);
       if (ctl.indexOf('B') !== -1) end(t.code);
-      if (!open[t.code]) open[t.code] = { code: t.code, layer: t.layer, closed: t.closed, pts: [], first: p };
+      if (!open[t.code]) open[t.code] = { code: t.code, label: t.label, layer: t.layer, closed: t.closed, pts: [], first: p };
       open[t.code].pts.push(p);
       if (ctl.indexOf('CLO') !== -1) { open[t.code].closed = true; end(t.code); }
       else if (ctl.indexOf('E') !== -1) end(t.code);
@@ -969,11 +1033,13 @@ ${wpts}${trks ? '\n' + trks : ''}
     const count = {};
     return done.map(s => {
       count[s.code] = (count[s.code] || 0) + 1;
-      return { code: s.code, layer: s.layer, closed: s.closed && s.pts.length >= 3, name: `${s.code} ${count[s.code]}`, pts: s.pts };
+      return { code: s.code, layer: s.layer, closed: s.closed && s.pts.length >= 3, name: `${s.label || s.code} ${count[s.code]}`, pts: s.pts };
     });
   }
-  function codeLines(project) {
-    return parseCodeLines(rowPoints(project), lineCodeTable(project));
+  // hidePages: Points page ids whose points don't draw lines (a Map page's choice).
+  function codeLines(project, hidePages) {
+    const pts = rowPoints(project);
+    return parseCodeLines(hidePages && hidePages.length ? pts.filter(p => hidePages.indexOf(p.pageId) === -1) : pts, lineCodeTable(project));
   }
 
   // Grid-line spacing for the map's grid ticks: the smallest of 10/50/100/
@@ -1152,7 +1218,8 @@ ${wpts}${trks ? '\n' + trks : ''}
     fmtGrid, fmtElev, fmtAcc, fmtLatLon, fmtPosition, geoUri,
     makeGeo, gpsCells, useZ,
     rowPoint, rowPoints, mediaRow, mediaPoint, pinText, refreshPins,
-    getProjectPoints, pointNumberCounts, usedPointNumbers, gpsPtStart, nextGpsPtNum,
+    getProjectPoints, pointNumberCounts, usedPointNumbers, gpsPtStart, nextGpsPtNum, randomGpsPtStart, carryDesc, capturePatch,
+    parsePointsText, guessSkipLines, pointsAfterSkip,
     crsChangeSummary, applyCrsChange, datumMatchesCrs,
     parseRange, inRanges,
     toPNEZD, toKML, toGPX, qualityText, fmtWhen,
