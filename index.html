@@ -807,7 +807,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.204';
+  const APP_VERSION = '1.205';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1370,6 +1370,20 @@
   // What the list arrows move: a day with its sub-pages, or one page with no day.
   function pageUnits(pages) {
     return groupPages(pages).flatMap(g => (g.title ? [[g.title, ...g.pages]] : g.pages.map(p => [p])));
+  }
+  // The day a page is for. A title page's Survey Date wins over its stored
+  // date, which older title pages left at the day they were made.
+  function pageDay(page) {
+    return (page && page.type === 'title' && page.surveyDate) || (page && page.date) || '';
+  }
+  // The title page of the day a page inserted at `index` would join, or null.
+  function dayTitleAt(pages, index) {
+    for (let i = Math.min(index, (pages || []).length) - 1; i >= 0; i--) {
+      const p = pages[i];
+      if (p.type === 'title') return p;
+      if (p.noDay) return null;
+    }
+    return null;
   }
 
   const DB = {
@@ -8924,6 +8938,12 @@
       }
       // The Add Page button at the bottom: the end of the job, with no day.
       if (addAtIndex === null && type !== 'title') pageData = { ...pageData, noDay: true };
+      // A page added to a day is dated for that day, not the day it was made.
+      const day = addAtIndex !== null && type !== 'title' ? pageDay(dayTitleAt(project.pages, addAtIndex)) : '';
+      if (day) {
+        pageData = { ...pageData, date: day };
+        if (pageData.site) pageData = { ...pageData, site: { ...pageData.site, date: day } };
+      }
       const page = DB.addPage(projectId, pageData, addAtIndex);
       if (page) { reload(); setAddStep(null); setAddAtIndex(null); navigate(type === 'map' ? `#/project/${projectId}/map/${page.id}` : `#/project/${projectId}/page/${page.id}`); }
     }
@@ -9390,7 +9410,7 @@
               </span>
             </div>
             <p className="text-white/30 text-xs mt-0.5 truncate">
-              {page.date}
+              {pageDay(page)}
               {(page.type === 'data' || page.type === 'points') && rowCount > 0 ? ` · ${rowCount} pts` : ''}
               {folder ? ` · ${folder.count} sub-page${folder.count !== 1 ? 's' : ''}` : ''}
             </p>
@@ -16433,7 +16453,8 @@
       setForm(updated);
       clearTimeout(timerRef.current);
       const save = () => {
-        DB.updatePage(projectId, page.id, updated);
+        // The Survey Date is the page's date: the card and older builds read page.date.
+        DB.updatePage(projectId, page.id, updated.surveyDate ? { ...updated, date: updated.surveyDate } : updated);
         onReload();
         setDirty(false);
       };
@@ -16501,7 +16522,7 @@
             />
           </div>
           <div className="flex-shrink-0 text-right">
-            <p className="text-xs font-data text-fb-muted">{page.date}</p>
+            <p className="text-xs font-data text-fb-muted">{form.surveyDate || page.date}</p>
             {dirty && <span className="text-[10px] text-fb-muted italic">saving...</span>}
           </div>
         </div>
