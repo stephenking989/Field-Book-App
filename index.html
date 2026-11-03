@@ -807,7 +807,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.203';
+  const APP_VERSION = '1.204';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -17075,46 +17075,116 @@
     if (D && typeof D.requestPermission === 'function') return D.requestPermission().then(r => r === 'granted').catch(() => false);
     return Promise.resolve(!!D);
   }
-  // The phone's sight line, smoothed over half a second: { reading: { az, el }, status }.
-  // Only a north-based compass counts — never a guessed angle.
+  // The phone's sight line, smoothed over half a second: { reading: { az, el }, status, diag }.
+  // Only a north-based compass gives an azimuth — never a guessed angle. Tilt
+  // needs no compass, so a relative reading still gives the elevation.
+  //   status: 'waiting' | 'ok' (azimuth + elevation) | 'tilt' (elevation only)
+  //           | 'blocked' (the browser refused the sensors) | 'none' (nothing came)
+  // Sources, best first: the Generic Sensor AbsoluteOrientationSensor (Android
+  // Chrome; a quaternion), deviceorientationabsolute / absolute events, iOS
+  // webkitCompassHeading, then relative deviceorientation for tilt.
+  const AIM_SETTLE_MS = 3000;
   function useAimSensor() {
     const [reading, setReading] = useState(null);
-    const [status, setStatus] = useState('waiting');   // 'waiting' | 'ok' | 'none'
+    const [status, setStatus] = useState('waiting');
+    const [diag, setDiag] = useState(null);
     useEffect(() => {
-      const buf = [];
-      let got = false, iosOffset = null, wake = null, gone = false;
+      const buf = [];   // { t, az, el, north }
+      const start = Date.now();
+      const d = {
+        brave: !!(navigator.brave && typeof navigator.brave.isBrave === 'function'),
+        secure: !!window.isSecureContext,
+        apis: { absEvent: 'ondeviceorientationabsolute' in window, event: !!window.DeviceOrientationEvent, sensor: typeof window.AbsoluteOrientationSensor === 'function' },
+        counts: { sensor: 0, absolute: 0, ios: 0, relative: 0, empty: 0 },
+        perms: {}, sensorError: null, last: null, source: null, samples: [],
+      };
+      let iosOffset = null, wake = null, gone = false, sensor = null, lastNorth = 0;
+      const push = (src, aim) => {
+        const t = Date.now(), north = src !== 'relative';
+        if (north) lastNorth = t;
+        // Once a compass is talking, a relative tilt sample adds nothing.
+        if (!north && t - lastNorth < 1000) return;
+        buf.push({ t, az: north ? aim.az : null, el: aim.el, north });
+        d.source = src;
+        d.samples.push({ t: t - start, src, az: aim.az === null || !north ? null : +aim.az.toFixed(1), el: +aim.el.toFixed(1) });
+        if (d.samples.length > 40) d.samples.shift();
+      };
       const onOrient = e => {
-        if (e.alpha === null || e.alpha === undefined || e.beta === null || e.beta === undefined) return;
-        let off = 0;
+        d.last = { type: e.type, absolute: !!e.absolute, alpha: e.alpha, beta: e.beta, gamma: e.gamma, heading: e.webkitCompassHeading ?? null };
+        if (e.beta === null || e.beta === undefined) { d.counts.empty++; return; }
         if (typeof e.webkitCompassHeading === 'number') {
-          if (Math.abs(e.beta) < 60) iosOffset = e.webkitCompassHeading - (360 - e.alpha);
-          if (iosOffset === null) return;
-          off = iosOffset;
-        } else if (e.type === 'deviceorientation' && !e.absolute) return;
-        got = true;
-        buf.push({ t: Date.now(), ...fbGnss.aimFromOrientation(e.alpha, e.beta, e.gamma, off) });
+          d.counts.ios++;
+          if (Math.abs(e.beta) < 60 && e.alpha !== null) iosOffset = e.webkitCompassHeading - (360 - e.alpha);
+          if (iosOffset !== null) return push('ios', fbGnss.aimFromOrientation(e.alpha, e.beta, e.gamma, iosOffset));
+          return push('relative', fbGnss.aimFromOrientation(0, e.beta, e.gamma));
+        }
+        const absolute = (e.type === 'deviceorientationabsolute' || e.absolute) && e.alpha !== null && e.alpha !== undefined;
+        if (absolute) {
+          d.counts.absolute++;
+          // The quaternion sensor, when it runs, is the better copy of the same thing.
+          if (sensor && d.counts.sensor) return;
+          return push('absolute', fbGnss.aimFromOrientation(e.alpha, e.beta, e.gamma, 0));
+        }
+        d.counts.relative++;
+        push('relative', fbGnss.aimFromOrientation(0, e.beta, e.gamma));
       };
       window.addEventListener('deviceorientationabsolute', onOrient);
       window.addEventListener('deviceorientation', onOrient);
+      if (d.apis.sensor) {
+        try {
+          sensor = new window.AbsoluteOrientationSensor({ frequency: 30 });
+          sensor.addEventListener('reading', () => {
+            const aim = fbGnss.aimFromQuaternion(sensor.quaternion);
+            if (!aim) return;
+            d.counts.sensor++;
+            push('sensor', aim);
+          });
+          sensor.addEventListener('error', ev => { d.sensorError = (ev.error && ev.error.name) || 'Error'; });
+          sensor.start();
+        } catch (err) { d.sensorError = (err && err.name) || 'Error'; sensor = null; }
+      }
+      if (navigator.permissions && navigator.permissions.query) {
+        ['accelerometer', 'gyroscope', 'magnetometer'].forEach(name => {
+          navigator.permissions.query({ name }).then(r => { d.perms[name] = r.state; }).catch(() => { d.perms[name] = 'n/a'; });
+        });
+      }
       const tick = setInterval(() => {
-        const cut = Date.now() - 500;
+        const now = Date.now(), cut = now - 500;
         while (buf.length && buf[0].t < cut) buf.shift();
-        if (!buf.length) return;
-        const azs = buf.filter(b => b.az !== null).map(b => b.az);
-        setReading({ az: azs.length === buf.length ? fbGnss.circularMean(azs) : null, el: buf.reduce((a, b) => a + b.el, 0) / buf.length });
-        setStatus('ok');
+        const settled = now - start >= AIM_SETTLE_MS;
+        if (buf.length) {
+          const azs = buf.filter(b => b.az !== null).map(b => b.az);
+          setReading({ az: azs.length && azs.length === buf.length ? fbGnss.circularMean(azs) : null, el: buf.reduce((a, b) => a + b.el, 0) / buf.length });
+        } else setReading(null);
+        const fresh = buf.length > 0, north = fresh && now - lastNorth < 1000;
+        const denied = d.sensorError === 'NotAllowedError' || Object.values(d.perms).includes('denied');
+        setStatus(north ? 'ok'
+          : fresh ? (settled ? 'tilt' : 'waiting')
+          : !settled ? 'waiting'
+          : denied ? 'blocked' : 'none');
+        setDiag({ ...d, counts: { ...d.counts }, perms: { ...d.perms }, ms: now - start });
       }, 150);
-      const noneAt = setTimeout(() => { if (!got) setStatus('none'); }, 4000);
       if (navigator.wakeLock) navigator.wakeLock.request('screen').then(l => { if (gone) l.release(); else wake = l; }).catch(() => {});
       return () => {
         gone = true;
         window.removeEventListener('deviceorientationabsolute', onOrient);
         window.removeEventListener('deviceorientation', onOrient);
-        clearInterval(tick); clearTimeout(noneAt);
+        if (sensor) try { sensor.stop(); } catch (e) {}
+        clearInterval(tick);
         if (wake) wake.release().catch(() => {});
       };
     }, []);
-    return { reading, status };
+    return { reading, status, diag };
+  }
+
+  // One line saying why the phone can't aim, and what to change.
+  function aimStatusNote(status, diag) {
+    if (status === 'ok' || status === 'waiting') return null;
+    const brave = diag && diag.brave;
+    if (diag && !diag.secure) return { tone: 'error', text: 'Motion sensors need a secure (https) page.' };
+    if (status === 'tilt') return { tone: 'warn', text: brave ? 'No compass: Brave is withholding it. Elevations only.' : 'No compass reading. Elevations only.' };
+    if (brave) return { tone: 'error', text: 'Brave is blocking motion sensors. Site settings → Motion sensors → Allow, then reopen.' };
+    return { tone: 'error', text: status === 'blocked' ? 'Motion sensors are blocked for this site.' : 'No motion sensors in this browser.' };
   }
 
   // Point, press, four times: From Az, From Elev, To Az, To Elev, sighting along
@@ -17122,8 +17192,10 @@
   function GnAimSheet({ g, rowId, number, onSet, onNext, onClose }) {
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
-    const { reading, status } = useAimSensor();
+    const { reading, status, diag } = useAimSensor();
     const [step, setStep] = useState(0);
+    const [showSensor, setShowSensor] = useState(false);
+    const [copied, setCopied] = useState(false);
     useEffect(() => { setStep(0); }, [rowId]);
     const row = g.obstructions.find(o => o.id === rowId);
     if (!row) return null;
@@ -17133,12 +17205,19 @@
     const needDecl = g.bearingRef === 'true' && fbGnss.aimStoreAz(0, 'true', g.declination) === null;
     const az = reading && reading.az !== null && !needDecl ? fbGnss.aimStoreAz(reading.az, g.bearingRef, g.declination) : null;
     const el = reading ? Math.max(0, reading.el) : null;
-    const canSet = status === 'ok' && !done && (isAz ? az !== null : el !== null);
+    const canSet = !done && (isAz ? az !== null : el !== null);
     function press() {
       if (!canSet) return;
       onSet(key, isAz ? fbGnss.fmtAim(az) : el.toFixed(1));
       setStep(s => s + 1);
     }
+    const note = aimStatusNote(status, diag);
+    async function copyLog() {
+      const log = { app: APP_VERSION, status, ua: navigator.userAgent, ...diag };
+      try { await navigator.clipboard.writeText(JSON.stringify(log, null, 1)); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+      catch (e) { setCopied(false); }
+    }
+    const fmtRaw = v => (typeof v === 'number' ? v.toFixed(1) : '—');
     const svg = fbGnss.buildSkyPlotSVG(g.obstructions, { ref: g.bearingRef, declination: g.declination, mask: g.elevMask, parse: gnAngle, highlight: rowId });
     const read = (name, v, on) => (
       <div className={`flex-1 rounded-xl px-3 py-2 text-center border ${on ? 'bg-fb-accent-pale border-fb-accent' : 'bg-fb-page-alt border-fb-border'}`}>
@@ -17153,7 +17232,7 @@
           <h2 className="text-xl font-bold text-fb-ink">Obstruction {number}</h2>
           <span className="text-xs font-semibold text-fb-ink-muted font-data">{g.bearingRef === 'true' ? 'TRUE' : 'MAGNETIC'}</span>
         </div>
-        {status === 'none' && <Notice tone="error" className="mb-3">No compass on this device.</Notice>}
+        {note && <Notice tone={note.tone} className="mb-3"><span data-aim-note={status}>{note.text}</span></Notice>}
         {needDecl && <Notice className="mb-3">Enter a declination, or set bearings to Magnetic.</Notice>}
         <div className="flex gap-2 mb-3">
           {read('Azimuth', az, isAz)}
@@ -17168,6 +17247,25 @@
           ))}
         </div>
         <GnDrawing svg={svg} className="w-[170px] mb-3" />
+        <div className="mb-3 rounded-xl border border-fb-border">
+          <button type="button" data-aim-sensor-toggle aria-expanded={showSensor} onClick={() => setShowSensor(o => !o)}
+            className="w-full h-9 flex items-center justify-between px-3 text-xs font-semibold text-fb-ink-muted">
+            <span>Sensor{diag && diag.source ? ' · ' + diag.source : ''}</span>
+            <span>{showSensor ? '▴' : '▾'}</span>
+          </button>
+          {showSensor && diag && (
+            <div data-aim-sensor className="px-3 pb-3 font-data text-[11px] text-fb-ink leading-relaxed">
+              <p>{diag.brave ? 'Brave' : 'Browser'} · {diag.secure ? 'https' : 'not secure'} · sensor API {diag.apis.sensor ? 'yes' : 'no'}{diag.sensorError ? ' (' + diag.sensorError + ')' : ''}</p>
+              <p>events: sensor {diag.counts.sensor} · absolute {diag.counts.absolute} · ios {diag.counts.ios} · relative {diag.counts.relative} · empty {diag.counts.empty}</p>
+              <p>alpha {fmtRaw(diag.last && diag.last.alpha)} · beta {fmtRaw(diag.last && diag.last.beta)} · gamma {fmtRaw(diag.last && diag.last.gamma)}</p>
+              <p>permissions: {['accelerometer', 'gyroscope', 'magnetometer'].map(n => n.slice(0, 5) + ' ' + (diag.perms[n] || '…')).join(' · ')}</p>
+              <button type="button" data-aim-copy-log onClick={copyLog}
+                className="mt-2 py-2 px-3 rounded-lg text-xs font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep">
+                {copied ? 'Copied' : 'Copy log'}
+              </button>
+            </div>
+          )}
+        </div>
         {done ? (
           <div className="flex gap-2">
             <button type="button" onClick={onClose} className="py-3 px-5 rounded-xl text-sm font-semibold text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep">Done</button>
@@ -17177,6 +17275,10 @@
           <div className="flex gap-2">
             <button type="button" onClick={() => (step ? setStep(step - 1) : onClose())}
               className="py-3 px-5 rounded-xl text-sm font-medium text-fb-ink-muted bg-black/[0.04] active:bg-fb-page-deep">{step ? 'Back' : 'Cancel'}</button>
+            {isAz && status === 'tilt' && (
+              <button type="button" data-aim-skip onClick={() => setStep(s => s + 1)}
+                className="py-3 px-4 rounded-xl text-sm font-medium text-fb-ink bg-fb-page-alt border border-fb-border active:bg-fb-page-deep">Skip</button>
+            )}
             <button type="button" data-aim-press disabled={!canSet} onClick={press}
               className="flex-1 py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80 disabled:bg-fb-ink-faint">Set {label}</button>
           </div>

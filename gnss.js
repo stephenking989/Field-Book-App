@@ -843,12 +843,25 @@
   // no usable azimuth. offset corrects a compass that isn't north-based (iOS).
   const AIM_MAX_EL = 85;
   function aimNorm(a) { return ((a % 360) + 360) % 360; }
-  function aimFromOrientation(alpha, beta, gamma, offset) {
-    const d = Math.PI / 180, a = (alpha || 0) * d, b = (beta || 0) * d;
-    const e = -Math.sin(a) * Math.cos(b), n = Math.cos(a) * Math.cos(b), u = Math.sin(b);
+  function aimFromSight(e, n, u, offset) {
+    const d = Math.PI / 180;
     const el = Math.asin(Math.max(-1, Math.min(1, u))) / d;
     if (Math.abs(el) > AIM_MAX_EL) return { az: null, el };
     return { az: aimNorm(Math.atan2(e, n) / d + (offset || 0)), el };
+  }
+  function aimFromOrientation(alpha, beta, gamma, offset) {
+    const d = Math.PI / 180, a = (alpha || 0) * d, b = (beta || 0) * d;
+    return aimFromSight(-Math.sin(a) * Math.cos(b), Math.cos(a) * Math.cos(b), Math.sin(b), offset);
+  }
+  // The same sight line from a Generic Sensor quaternion [x, y, z, w] (device →
+  // east, north, up): the device's y axis turned into the earth frame. No Euler
+  // angles, so nothing goes unstable as the phone nears vertical.
+  function aimFromQuaternion(q, offset) {
+    if (!q || q.length !== 4 || !q.every(Number.isFinite)) return null;
+    const len = Math.hypot(q[0], q[1], q[2], q[3]);
+    if (!(len > 1e-9)) return null;
+    const [x, y, z, w] = q.map(v => v / len);
+    return aimFromSight(2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x), offset);
   }
   function circularMean(degs) {
     if (!degs || !degs.length) return null;
@@ -865,7 +878,7 @@
   const fmtAim = v => aimNorm(Math.round(v * 10) / 10).toFixed(1);   // rounded first: 359.96 reads 0.0
 
   const api = {
-    aimFromOrientation, circularMean, aimStoreAz, fmtAim,
+    aimFromOrientation, aimFromQuaternion, circularMean, aimStoreAz, fmtAim,
     BUILTIN_ANTENNAS, DEFAULT_ANTENNA_ID, METHODS, DEFAULT_TOL,
     AERIAL_PROVIDER, AERIAL_PX, AERIAL_LAYER_ID, baseLayerId, groundResolution, aerialMeta, aerialSize, aerialFit, aerialMove, aerialTurn, turnBetween, aerialCentre,
     IMAGE_SLOTS, pageImageRefs, SAT_HOST, SAT_TILE_URL, SAT_ATTRIBUTION, SAT_ZOOM, tileXY, metresPerPixel, tilePlan, niceScale,
