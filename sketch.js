@@ -296,7 +296,7 @@ function getCurvePI(shape) {
   const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
   const chord = Math.hypot(x2 - x1, y2 - y1);
   const m = Math.hypot(ax - mx, ay - my);   // middle ordinate
-  if (chord < 0.5 || m < 0.5) return { px: mx, py: my };
+  if (chord < GEOM_EPS || m < GEOM_EPS) return { px: mx, py: my };
   const h = chord / 2;
   const R = (h * h + m * m) / (2 * m);
   const sinHalf = Math.min(1, h / R);
@@ -316,7 +316,7 @@ function getCurvePI(shape) {
 function computeArcFromPI(x1, y1, x2, y2, px, py) {
   const d1 = Math.hypot(px - x1, py - y1);   // BC–PI
   const d2 = Math.hypot(px - x2, py - y2);   // EC–PI
-  if (d1 < 0.5 || d2 < 0.5) return null;
+  if (d1 < GEOM_EPS || d2 < GEOM_EPS) return null;
   // Interior angle at PI between the two tangent directions
   const u1x = (x1 - px) / d1, u1y = (y1 - py) / d1;  // PI → BC
   const u2x = (x2 - px) / d2, u2y = (y2 - py) / d2;  // PI → EC
@@ -327,7 +327,7 @@ function computeArcFromPI(x1, y1, x2, y2, px, py) {
   const deltaRad = Math.PI - intAngle;       // Δ = deflection angle
   const deltaDeg = deltaRad * 180 / Math.PI;
   const chord = Math.hypot(x2 - x1, y2 - y1);
-  if (chord < 0.5) return null;
+  if (chord < GEOM_EPS) return null;
   const h = chord / 2;                       // half-chord
   const sinHalf = Math.sin(deltaRad / 2);
   if (sinHalf < 1e-6) return null;
@@ -442,10 +442,11 @@ function rdpSimplify(pts, epsilon) {
 // Fit cubic Bezier curves through a reduced set of points using Catmull-Rom
 // to Bezier conversion. Returns a nodes array suitable for a path shape.
 // smoothness: 0–1 (higher = more aggressive simplification / smoother curves).
-function fitCurveToPoints(pts, smoothness) {
+function fitCurveToPoints(pts, smoothness, unit = 1) {
   if (!pts || pts.length < 2) return [];
-  // RDP simplification: epsilon scales with smoothness
-  const eps = Math.max(0.5, smoothness * 20);
+  // RDP simplification: epsilon scales with smoothness. It is in screen px;
+  // `unit` (world px per screen px) turns it into world px at the current zoom.
+  const eps = Math.max(0.5, smoothness * 20) * unit;
   const keepIdx = rdpSimplify(pts, eps);
   const reduced = keepIdx.map(i => pts[i]);
   // Ensure at least 2 distinct points survive simplification
@@ -655,7 +656,7 @@ function applyLineLength(s, newLen) {
   const cx = (s.x1+s.x2)/2, cy = (s.y1+s.y2)/2;
   const len = Math.hypot(s.x2-s.x1, s.y2-s.y1) || 1;
   const ux = (s.x2-s.x1)/len, uy = (s.y2-s.y1)/len;
-  const half = Math.max(0.5, newLen) / 2;
+  const half = Math.max(GEOM_EPS, newLen) / 2;
   return { ...s, x1: cx-ux*half, y1: cy-uy*half, x2: cx+ux*half, y2: cy+uy*half };
 }
 
@@ -676,7 +677,7 @@ function applyArcRadius(s, newR) {
   const { x1, y1, x2, y2 } = s;
   const chord = Math.hypot(x2 - x1, y2 - y1);
   const h = chord / 2;
-  const r = Math.max(newR, h + 0.1);              // R must be >= half-chord
+  const r = Math.max(newR, h * 1.0001 + GEOM_EPS);              // R must be >= half-chord
   const { px: cpx, py: cpy } = getCurvePI(s);
   const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
   // Which side of chord BC→EC is the current PI on?
@@ -718,6 +719,10 @@ function lineIntersection(x1, y1, x2, y2, x3, y3, x4, y4) {
 // Anchor: 1000 canvas pixels = 1 metre at scale 1:1.
 // At scale 1:S → 1 canvas pixel = S/1000 metres.
 const PIXELS_PER_METER = 1000;
+
+// Smallest length the geometry helpers treat as non-zero, in world px. At 1:1000
+// (1 px = 1 m) this is 1 µm, so nothing at the mm level is ever floored away.
+const GEOM_EPS = 1e-6;
 
 const COMMON_SCALES = [1, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
 const MAX_SCALE     = COMMON_SCALES[COMMON_SCALES.length - 1];
@@ -2348,7 +2353,7 @@ function detectClosedRegionFromSegments(clickPt, shapes, snapTol) {
         const len2 = dx*dx + dy*dy;
         const dist = len2 < 1e-10 ? 0
           : Math.abs((curr.x - prev.x)*dy - (curr.y - prev.y)*dx) / Math.sqrt(len2);
-        if (dist < 0.5) { faceNodes.splice(i, 1); changed = true; }
+        if (dist < GEOM_EPS) { faceNodes.splice(i, 1); changed = true; }
       }
     }
   }
@@ -3176,6 +3181,9 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   // Keep latestViewBoxRef current after every render so native event listeners
   // can always read the latest viewBox without being captured in stale closures.
   useEffect(() => { latestViewBoxRef.current = viewBox; });
+  // Narrowest view the zoom allows: 5 cm across the screen at any scale.
+  const minViewWRef = useRef(50);
+  minViewWRef.current = realToPx(0.05, scaleDenom, units);
 
   // Persist viewBox and container size to DB after 1 s of inactivity so the user
   // returns to the same pan position and zoom level on reload.
@@ -3230,7 +3238,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const sw     = svgSizeRef.current.w || vb.w;
         const sh     = svgSizeRef.current.h || vb.h;
         const factor = 1 + dir * STEP;
-        const newW   = Math.max(20, Math.min(vb.w * factor, sw * 20));
+        const newW   = Math.max(minViewWRef.current, Math.min(vb.w * factor, sw * 20));
         const newH   = newW * (sh / sw);
         const fx     = rect.width  > 0 ? sx / rect.width  : 0.5;
         const fy     = rect.height > 0 ? sy / rect.height : 0.5;
@@ -3644,6 +3652,21 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     persist(next, undefined);
   }
 
+  // Commit the end of a live drag. While dragging, setShapes runs on every move and
+  // shapesRef follows it, so commitShapes would record the already-moved shapes as
+  // the undo step. `before` is the snapshot taken at pointer-down; it becomes the
+  // undo step instead. A drag that changed nothing adds no step.
+  function commitShapesFrom(before, next) {
+    if (!before) { commitShapes(next); return; }          // no snapshot: old behaviour
+    if (before === next) { shapesRef.current = next; return; }
+    const newHist = { past: [...shapesHistoryRef.current.past.slice(-49), before], future: [] };
+    shapesHistoryRef.current = newHist;
+    shapesRef.current = next;
+    setShapesHistory(newHist);
+    setShapes(next);
+    persist(next, undefined);
+  }
+
   // Apply a transform to every shape in the current selection, through history.
   // Used by MultiSelectCard for batch property edits (color, stroke width, symbol, etc.).
   function handleBatchUpdate(transformFn) {
@@ -4046,7 +4069,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const { p1, p2 } = shape;
         const off = shape.offset || 0;
         const len = Math.hypot(p2.x-p1.x, p2.y-p1.y);
-        if (len < 1) return [
+        if (len < GEOM_EPS) return [
           { key: 'p1', x: p1.x, y: p1.y, type: 'endpoint' },
           { key: 'p2', x: p2.x, y: p2.y, type: 'endpoint' },
         ];
@@ -4092,6 +4115,9 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       default: return [];
     }
   }
+
+  // 1 mm (or 0.001 ft) in world px at the page scale: the smallest size a handle drags a shape to.
+  function mmPx() { return realToPx(0.001, scaleDenom, units); }
 
   // Apply a node drag delta to a shape.
   // 'body' key moves all geometry + the stored _pivot together.
@@ -4192,16 +4218,19 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             ...(shape._pivot && { _pivot: { x: shape._pivot.x + wpx, y: shape._pivot.y + wpy } }),
           };
         }
-        if (nodeKey === 'r') return { ...shape, r: Math.max(4, shape.r+dx) };
+        if (nodeKey === 'r') return { ...shape, r: Math.max(mmPx(), shape.r+dx) };
         break;
       case 'rect': {
         const rot = shape._rot || 0;
         if (!rot) {
           // Unrotated: simple local-space ops — opposite corner stays fixed in world space.
-          if (nodeKey === 'tl') return { ...shape, x: shape.x+dx, y: shape.y+dy, w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h-dy) };
-          if (nodeKey === 'tr') return { ...shape,                y: shape.y+dy, w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h-dy) };
-          if (nodeKey === 'bl') return { ...shape, x: shape.x+dx,                w: Math.max(10, shape.w-dx), h: Math.max(10, shape.h+dy) };
-          if (nodeKey === 'br') return { ...shape,                                w: Math.max(10, shape.w+dx), h: Math.max(10, shape.h+dy) };
+          // Rebuilt from the opposite corner, so that corner stays put even when the 1 mm floor holds.
+          const _m = mmPx();
+          const _R = shape.x + shape.w, _B = shape.y + shape.h;
+          if (nodeKey === 'tl') { const w = Math.max(_m, shape.w-dx), h = Math.max(_m, shape.h-dy); return { ...shape, x: _R-w, y: _B-h, w, h }; }
+          if (nodeKey === 'tr') { const w = Math.max(_m, shape.w+dx), h = Math.max(_m, shape.h-dy); return { ...shape, y: _B-h, w, h }; }
+          if (nodeKey === 'bl') { const w = Math.max(_m, shape.w-dx), h = Math.max(_m, shape.h+dy); return { ...shape, x: _R-w, w, h }; }
+          if (nodeKey === 'br') { const w = Math.max(_m, shape.w+dx), h = Math.max(_m, shape.h+dy); return { ...shape, w, h }; }
         } else {
           // Rotated: dx/dy = local-space delta (caller already un-rotates world delta).
           // Strategy: work entirely in world space.
@@ -4243,8 +4272,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           const diagLx = diagWx * cos + diagWy * sin;
           const diagLy = -diagWx * sin + diagWy * cos;
           // New dimensions are the absolute components of the local diagonal
-          const nw = Math.max(10, Math.abs(diagLx));
-          const nh = Math.max(10, Math.abs(diagLy));
+          const nw = Math.max(mmPx(), Math.abs(diagLx));
+          const nh = Math.max(mmPx(), Math.abs(diagLy));
           // New top-left: new world center is also the new local center (rotation is about center)
           return { ...shape, x: Ncx - nw / 2, y: Ncy - nh / 2, w: nw, h: nh };
         }
@@ -4259,25 +4288,25 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           // the other dimension from the original aspect ratio.
           if (nodeKey === 'tl') {
             const dw = Math.abs(dx) >= Math.abs(dy) ? dx : dy * aspect;
-            const nw = Math.max(10, shape.w - dw);
+            const nw = Math.max(mmPx(), shape.w - dw);
             const nh = nw / aspect;
             return { ...shape, x: shape.x + shape.w - nw, y: shape.y + shape.h - nh, w: nw, h: nh };
           }
           if (nodeKey === 'tr') {
             const dw = Math.abs(dx) >= Math.abs(dy) ? dx : -dy * aspect;
-            const nw = Math.max(10, shape.w + dw);
+            const nw = Math.max(mmPx(), shape.w + dw);
             const nh = nw / aspect;
             return { ...shape, y: shape.y + shape.h - nh, w: nw, h: nh };
           }
           if (nodeKey === 'bl') {
             const dw = Math.abs(dx) >= Math.abs(dy) ? -dx : dy * aspect;
-            const nw = Math.max(10, shape.w - dw);
+            const nw = Math.max(mmPx(), shape.w - dw);
             const nh = nw / aspect;
             return { ...shape, x: shape.x + shape.w - nw, w: nw, h: nh };
           }
           if (nodeKey === 'br') {
             const dw = Math.abs(dx) >= Math.abs(dy) ? dx : dy * aspect;
-            const nw = Math.max(10, shape.w + dw);
+            const nw = Math.max(mmPx(), shape.w + dw);
             const nh = nw / aspect;
             return { ...shape, w: nw, h: nh };
           }
@@ -4305,8 +4334,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           const diagWx = Wdx - Wfx, diagWy = Wdy - Wfy;
           const diagLx = diagWx * cos + diagWy * sin;
           const diagLy = -diagWx * sin + diagWy * cos;
-          const nw = Math.max(10, Math.abs(diagLx));
-          const nh = Math.max(10, Math.abs(diagLy));
+          const nw = Math.max(mmPx(), Math.abs(diagLx));
+          const nh = Math.max(mmPx(), Math.abs(diagLy));
           return { ...shape, x: Ncx - nw / 2, y: Ncy - nh / 2, w: nw, h: nh };
         }
         break;
@@ -4330,7 +4359,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         if (nodeKey === 'offset') {
           // Project cursor movement onto the perpendicular of P1→P2
           const len = Math.hypot(shape.p2.x-shape.p1.x, shape.p2.y-shape.p1.y);
-          if (len < 1) return shape;
+          if (len < GEOM_EPS) return shape;
           const perpX = -(shape.p2.y-shape.p1.y)/len, perpY = (shape.p2.x-shape.p1.x)/len;
           return { ...shape, offset: (shape.offset || 0) + dx*perpX + dy*perpY };
         }
@@ -5297,7 +5326,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const sh     = svgSizeRef.current.h || vb.h;
         // Zoom: finger spread → zoom in (factor < 1 → smaller vb), spread apart → zoom out
         const factor = last.dist > 1 ? last.dist / dist : 1;
-        const newW   = Math.max(20, Math.min(vb.w * factor, sw * 20));
+        const newW   = Math.max(minViewWRef.current, Math.min(vb.w * factor, sw * 20));
         const newH   = newW * (sh / sw);
         // Keep world point under pinch midpoint stationary
         const fx     = rect.width  > 0 ? (midX - rect.left) / rect.width  : 0.5;
@@ -5911,7 +5940,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
     // Commit node drag
     if (dragNode) {
-      commitShapes(shapes);
+      commitShapesFrom(dragStart && dragStart.snapshot, shapes);
       setDragNode(null);
       setDragStart(null);
       return;
@@ -5921,7 +5950,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     if (tool === 'node' && nodeMarquee) {
       const { x, y, w, h } = nodeMarquee;
       setNodeMarquee(null);
-      if (w > 4 && h > 4 && nodeSelectedId) {
+      const _nmPs = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+      if (w > 4 * _nmPs && h > 4 * _nmPs && nodeSelectedId) {
         const _psh = shapes.find(s => s.id === nodeSelectedId);
         if (_psh && _psh.nodes) {
           const inRect = new Set();
@@ -5940,17 +5970,21 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
     // Node tool: commit drag on pointer up
     if (tool === 'node' && nodeDragRef.current) {
-      commitShapes(shapes);
+      commitShapesFrom(nodeDragRef.current.snapshot, shapes);
       nodeDragRef.current = null;
       return;
     }
 
     if (!drawState) return;
 
+    // A drag under 4 screen px is a stray tap, not a shape — measured on screen so
+    // a 1 mm shape can still be drawn once the view is zoomed in far enough.
+    const _tapPs = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+
     // Line commits on mouseup (click-drag)
     if (drawState.type === 'line') {
       const dx = drawState.x2 - drawState.x1, dy = drawState.y2 - drawState.y1;
-      if (Math.hypot(dx, dy) > 4) {
+      if (Math.hypot(dx, dy) > 4 * _tapPs) {
         const _lineId = newId();
         commitShapes([...shapes, { id: _lineId, type: 'line',
           x1: drawState.x1, y1: drawState.y1, x2: drawState.x2, y2: drawState.y2,
@@ -5966,7 +6000,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
     // Rect commits on mouseup (click-drag)
     if (drawState.type === 'rect') {
-      if (drawState.w > 4 && drawState.h > 4) {
+      if (drawState.w > 4 * _tapPs && drawState.h > 4 * _tapPs) {
         const _rctId = newId();
         commitShapes([...shapes, { id: _rctId, type: 'rect',
           x: drawState.x, y: drawState.y, w: drawState.w, h: drawState.h,
@@ -5982,7 +6016,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
     // Circle commits on mouseup (click-drag — same model as rect/line)
     if (drawState.type === 'circle') {
-      if (drawState.r > 4) {
+      if (drawState.r > 4 * _tapPs) {
         const _cirId = newId();
         commitShapes([...shapes, { id: _cirId, type: 'circle',
           cx: drawState.cx, cy: drawState.cy, r: drawState.r,
@@ -6001,7 +6035,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     if (drawState && drawState.type === 'pencil_stroke') {
       const pts = pencilSmoothedRef.current;
       if (pts.length >= 2) {
-        let nodes = fitCurveToPoints(pts, pencilSmoothness);
+        let nodes = fitCurveToPoints(pts, pencilSmoothness, viewBox.w / (svgSizeRef.current.w || viewBox.w));
         // Sanitize: clamp any non-finite handle coordinates to the node position
         nodes = nodes.map(n => ({
           ...n,
@@ -6039,7 +6073,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     // (s.w/s.h are kept as screen px so the box stays the same visual size at any zoom).
     if (drawState && drawState.type === 'text') {
       const _psUp    = viewBox.w / (svgSizeRef.current.w || viewBox.w);
-      const bigEnough = drawState.w > 10 && drawState.h > 10;
+      const bigEnough = drawState.w > 10 * _psUp && drawState.h > 10 * _psUp;
       // Store the CENTER as the world anchor, and w/h as screen pixels.
       setTextEdit({
         id: newId(),
@@ -6185,7 +6219,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const { p1, p2 } = s;
         const off = s.offset || 0;
         const len = Math.hypot(p2.x-p1.x, p2.y-p1.y);
-        if (len < 1) continue;
+        if (len < GEOM_EPS) continue;
         const perpX = -(p2.y-p1.y)/len, perpY = (p2.x-p1.x)/len;
         const dp1 = { x: p1.x + perpX*off, y: p1.y + perpY*off };
         const dp2 = { x: p2.x + perpX*off, y: p2.y + perpY*off };
@@ -7025,7 +7059,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     // Expand to match screen aspect ratio
     if (vbW / vbH > aspect) vbH = vbW / aspect;
     else                    vbW = vbH * aspect;
-    vbW = Math.max(vbW, 100); vbH = Math.max(vbH, 100 / aspect);
+    { const _minW = realToPx(0.5, scaleDenom, units); vbW = Math.max(vbW, _minW); vbH = Math.max(vbH, _minW / aspect); }
     const cx = (bb.minX + bb.maxX) / 2;
     const cy = (bb.minY + bb.maxY) / 2;
     setViewBox({ x: cx - vbW/2, y: cy - vbH/2, w: vbW, h: vbH });
@@ -7200,7 +7234,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const { p1, p2 } = s;
         const off = s.offset || 0;
         const len = Math.hypot(p2.x-p1.x, p2.y-p1.y);
-        if (len < 1) return null;
+        if (len < GEOM_EPS) return null;
         const perpX = -(p2.y-p1.y)/len, perpY = (p2.x-p1.x)/len;
         // Dim line endpoints
         const dp1x = p1.x + perpX*off, dp1y = p1.y + perpY*off;
@@ -8044,7 +8078,15 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             </button>
           </>
         ) : (
-          /* Expanded state — simple collapse button */
+          /* Expanded state — back button + collapse button */
+          <>
+          <button onClick={onBack} title="Back to project" data-sketch-back=""
+            className="text-fb-ink-muted bg-transparent border-0 cursor-pointer"
+            style={{ flexShrink: 0, height: 20, padding: '0 7px', display: 'flex', alignItems: 'center' }}>
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 1 2 5 6 9"/>
+            </svg>
+          </button>
           <button onClick={() => setHeaderOpen(o => !o)}
             style={{ flex: 1, height: 20, display: 'flex', alignItems: 'center',
               justifyContent: 'space-between', padding: '0 10px',
@@ -8058,6 +8100,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             </span>
             <svg width="9" height="7" viewBox="0 0 9 7" fill="none" stroke="rgba(60,50,30,0.4)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginLeft: 6 }}><polyline points="1 5.5 4.5 1.5 8 5.5"/></svg>
           </button>
+          </>
         )}
       </div>
 

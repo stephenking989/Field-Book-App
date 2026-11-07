@@ -839,7 +839,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.211';
+  const APP_VERSION = '1.212';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -11568,7 +11568,9 @@
 
   // One saved voice record: play/pause, title, duration, delete. The full
   // (standalone) form adds a description; `compact` is the per-photo memo row.
-  function VoiceCard({ rec, compact, onChange, onDelete, children }) {
+  // With `onToggle` the card folds: closed it is play · name · time · delete;
+  // the name field, description and `children` show only while `open`.
+  function VoiceCard({ rec, compact, onChange, onDelete, children, open, onToggle }) {
     const [playing, setPlaying] = useState(false);
     const [missing, setMissing] = useState(false);
     const audioRef = useRef(null), urlRef = useRef(null);
@@ -11595,31 +11597,76 @@
       a.play().catch(() => setMissing(true));
     }
 
+    const folds = !compact && !!onToggle;
+    const shut  = folds && !open;
     return (
-      <div className={compact ? 'py-1.5' : 'flex-shrink-0 rounded-xl p-3 bg-fb-page-alt border border-fb-border'}>
+      <div data-voice-card={compact ? undefined : rec.id}
+        className={compact ? 'py-1.5' : 'flex-shrink-0 rounded-xl p-3 bg-fb-page-alt border border-fb-border'}>
         <div className="flex items-center gap-2.5">
           <button onClick={toggle} disabled={missing} title={playing ? 'Pause' : 'Play'}
             className="w-11 h-11 rounded-full flex-shrink-0 flex items-center justify-center text-white bg-fb-accent active:opacity-80 disabled:bg-fb-border">
             {playing ? <Ico.Pause /> : <Ico.Play />}
           </button>
+          {shut ? (
+            <button data-voice-banner="" aria-expanded={false} onClick={onToggle}
+              className="flex-1 min-w-0 h-11 flex items-center gap-2 text-left rounded-lg active:bg-fb-page-deep">
+              <span className={`flex-1 min-w-0 truncate ${rec.title ? 'font-handwritten text-[17px] text-fb-ink' : 'text-xs text-fb-ink-faint'}`}>
+                {rec.title || 'Voice note'}
+              </span>
+              <span className="font-data text-[13px] text-fb-ink-muted flex-shrink-0">{fmtDur(rec.dur)}</span>
+              <span className="text-xs text-fb-ink-muted flex-shrink-0">▸</span>
+            </button>
+          ) : (<>
           <input type="text" value={rec.title || ''} onChange={e => onChange({ title: e.target.value })}
             placeholder={compact ? 'Voice memo…' : 'Voice note title…'} maxLength={80}
             className="flex-1 min-w-0 py-0.5 font-handwritten text-[17px] text-fb-ink bg-transparent border-b border-fb-border outline-none placeholder:text-fb-ink-faint" />
           <span className="font-data text-[13px] text-fb-ink-muted flex-shrink-0">{fmtDur(rec.dur)}</span>
+          {folds && (
+            <button data-voice-banner="" aria-expanded={true} onClick={onToggle} title="Fold"
+              className="w-7 h-11 flex-shrink-0 flex items-center justify-center text-xs text-fb-ink-muted rounded-lg active:bg-fb-page-deep">▾</button>
+          )}
+          </>)}
           <button onClick={onDelete} title="Delete recording"
             className="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center text-fb-error active:bg-fb-page-deep">
             <Ico.Trash />
           </button>
         </div>
         {missing && <p className="text-xs font-semibold text-fb-error mt-1">Recording not found on this device.</p>}
-        {!compact && (
-          <textarea value={rec.desc || ''} onChange={e => onChange({ desc: e.target.value })}
-            placeholder="Description…" rows={2}
-            className="w-full resize-none mt-2.5 rounded-lg px-2.5 py-2 font-handwritten text-base text-fb-ink bg-fb-page border border-fb-border outline-none placeholder:text-fb-ink-faint" />
+        {!compact && !shut && (
+          <div className={folds ? 'mt-2.5 border-t border-fb-border' : ''}>
+            <textarea value={rec.desc || ''} onChange={e => onChange({ desc: e.target.value })}
+              placeholder="Description…" rows={2}
+              className="w-full resize-none mt-2.5 rounded-lg px-2.5 py-2 font-handwritten text-base text-fb-ink bg-fb-page border border-fb-border outline-none placeholder:text-fb-ink-faint" />
+            {children}
+          </div>
         )}
-        {children}
+        {compact && children}
       </div>
     );
+  }
+
+  // Time a photo or voice note was added: its createdAt, else the ms inside
+  // its id ('ph_<ms>_…', 'vn_<ms>_…'). 0 when neither can be read.
+  function mediaTime(rec) {
+    const t = rec && rec.createdAt ? Date.parse(rec.createdAt) : NaN;
+    if (!isNaN(t)) return t;
+    const m = /^[a-z]+_(\d{10,})/.exec((rec && rec.id) || '');
+    return m ? +m[1] : 0;
+  }
+
+  // Photos and stand-alone voice notes as one list in the order they were
+  // added. Each array keeps its own order; only the interleaving uses time
+  // (an equal time puts the photo first).
+  function mergeMedia(photos, voices) {
+    const out = [];
+    let i = 0, j = 0;
+    while (i < photos.length || j < voices.length) {
+      const takePhoto = j >= voices.length ||
+        (i < photos.length && mediaTime(photos[i]) <= mediaTime(voices[j]));
+      if (takePhoto) { out.push({ kind: 'photo', rec: photos[i], i }); i++; }
+      else           { out.push({ kind: 'voice', rec: voices[j] }); j++; }
+    }
+    return out;
   }
 
   // Position + point row under a photo or voice note. A geotagged record owns
@@ -11740,7 +11787,8 @@
     const [photos, setPhotos] = useState(page.photos || []);
     const [urlMap, setUrlMap] = useState({}); // photoRef -> dataUrl, for rendering
     const [expandedId, setExpandedId] = useState(null);
-    const [openPhotos, setOpenPhotos] = useState({});   // photo id -> true while its details are showing
+    const [openPhotos, setOpenPhotos] = useState({});
+    const [openVoice, setOpenVoice] = useState({});     // voice note id -> true while unfolded (not saved)   // photo id -> true while its details are showing
     const [uploading, setUploading] = useState(false);
     const [camKey, setCamKey] = useState(0);
     const [camOpen, setCamOpen] = useState(false);   // in-app camera sheet
@@ -11879,6 +11927,7 @@
         id,
         photoRef: ref,
         note: '',
+        createdAt: new Date().toISOString(),
         ...(exifGeo && !fixP ? { geo: exifGeo } : {}),
       }];
       if (!savePhotos(next)) {
@@ -12210,9 +12259,14 @@
               Nothing here yet — tap Camera, Upload or Voice to add one.
             </div>
           )}
-          {/* Standalone voice notes */}
-          {voiceNotes.map(v => (
+          {/* Photos and standalone voice notes, in the order they were added */}
+          {mergeMedia(photos, voiceNotes).map(item => {
+            if (item.kind === 'voice') {
+              const v = item.rec;
+              return (
             <VoiceCard key={v.id} rec={v}
+              open={!!openVoice[v.id]}
+              onToggle={() => setOpenVoice(o => ({ ...o, [v.id]: !o[v.id] }))}
               onChange={patch => patchVoice(v.id, patch)}
               onDelete={() => deleteVoice(v.id)}>
               <MediaGeoRow rec={v} source="voice" project={project} locating={!!locating[v.id]}
@@ -12222,8 +12276,9 @@
                 onUnlink={() => unlink('voice', v.id)}
                 onAddPoint={() => adoptPoint('voice', v.id)} />
             </VoiceCard>
-          ))}
-          {photos.map((ph, i) => {
+              );
+            }
+            const ph = item.rec, i = item.i;
             // A card is the picture and a one-line banner. The note, position,
             // point and voice memos stay behind the banner until it is tapped.
             const open = !!openPhotos[ph.id];
