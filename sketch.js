@@ -43,6 +43,14 @@ const AERIAL_LAYER_ID = fbGnss.AERIAL_LAYER_ID;
 
 // ── Sketch tool SVG icons — 20×20 viewBox, stroke="currentColor" ──────────────
 const SketchIco = {
+  // Scale: a small box inside a larger one, with a corner arrow between them
+  Scale: () => (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2.5" y="9.5" width="8" height="8" rx="0.5"/>
+      <path d="M2.5 6V2.5H6M14 2.5h3.5V6M17.5 14v3.5H14" strokeDasharray="0" opacity="0.6"/>
+      <path d="M9 11L16.5 3.5M12 3.5h4.5V8"/>
+    </svg>
+  ),
   // Arrow cursor with a subtle tail
   Select: () => (
     <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -220,6 +228,8 @@ const SketchIco = {
 
 const TOOLS = [
   { id: 'select',    label: 'Select',    icon: <SketchIco.Select /> },
+  // Uniform scale of the selection about the corner opposite the one dragged
+  { id: 'scale',     label: 'Scale',     title: 'Scale', icon: <SketchIco.Scale /> },
   { id: 'line',      label: 'Line',      icon: <SketchIco.Line /> },
   { id: 'curve',     label: 'Curve',     icon: <SketchIco.Curve /> },
   { id: 'pencil',    label: 'Pencil',    icon: <SketchIco.Pencil /> },
@@ -1499,6 +1509,27 @@ function PrintScaleInput({ value, onCommit }) {
       onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setText(null); }}
       style={{ width: 56, height: 24, background: PT.inputBg, border: `1px solid ${PT.border}`, borderRadius: 3,
         color: PT.text, fontFamily: FBF.sketch, fontSize: 11, padding: '0 4px', outline: 'none', boxSizing: 'border-box' }} />
+  );
+}
+
+// SCALE FACTOR — the Scale tool's typed factor, applied about the middle of
+// the selection's box. "0.5" halves it, "2" doubles it.
+function ScaleFactorBar({ count, live, onApply }) {
+  const [text, setText] = useState('1.000');
+  const k = parseFloat(text);
+  const ok = count > 0 && isFinite(k) && k > 0 && k !== 1;
+  return (
+    <div data-scale-bar="" className="flex items-center gap-1 flex-shrink-0 font-data text-[11px] text-fb-ink-muted">
+      <span>{live != null ? `×${live.toFixed(3)}` : (count ? `${count} selected · ×` : 'Select shapes to scale')}</span>
+      {live == null && count > 0 && (<>
+        <input type="text" inputMode="decimal" aria-label="Scale factor" value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && ok) { onApply(k); setText('1.000'); } }}
+          className="w-14 h-6 px-1 border border-fb-border bg-fb-field text-fb-ink outline-none" />
+        <button type="button" disabled={!ok} onClick={() => { onApply(k); setText('1.000'); }}
+          className="h-6 px-2 border border-fb-border bg-fb-page-alt text-fb-ink disabled:text-fb-ink-faint">Apply</button>
+      </>)}
+    </div>
   );
 }
 
@@ -3066,6 +3097,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   const [printSel, setPrintSel] = useState(null);          // id of the frame being edited
   const [printDraft, setPrintDraft] = useState(null);      // a frame being drawn, before it is released
   const [printLand, setPrintLand] = useState(false);       // the bar's orientation for the next frame (not saved)
+  const [scaleLive, setScaleLive] = useState(null);        // { k, x, y } while a Scale corner is being dragged
   const [showPrintAreas, setShowPrintAreas] = useState(page.printAreasHidden !== true);
   const printAreasRef = useRef(printAreas);
   const printDragRef = useRef(null);                       // { mode, id, start, x, y, before, moved }
@@ -3563,7 +3595,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       // Single-key shortcuts (no modifier). Skip if text tool is actively drawing.
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         const TOOL_KEYS = {
-          v: 'select', l: 'line', c: 'curve', b: 'pencil', p: 'pen',
+          v: 'select', s: 'scale', l: 'line', c: 'curve', b: 'pencil', p: 'pen',
           a: 'node',   r: 'rect', o: 'circle', t: 'text', e: 'eraser', f: 'fill',
           m: 'dim-linear', g: 'dim-angle', k: 'dim-bearing', q: 'dim-radius',
         };
@@ -4145,6 +4177,32 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   // 1 mm (or 0.001 ft) in world px at the page scale: the smallest size a handle drags a shape to.
   function mmPx() { return realToPx(0.001, scaleDenom, units); }
 
+  // ── Scale tool ────────────────────────────────────────────────────────────
+  // What can be picked on the canvas: visible, unlocked, on a visible unlocked layer.
+  function pickable(s) {
+    if (s.visible === false || s.locked) return false;
+    const _layer = layers.find(l => l.id === (s.layerId || defLayerId));
+    return _layer?.visible !== false && !_layer?.locked;
+  }
+  // The selected shapes the Scale tool works on. The aerial image is ground
+  // truth (held at the sketch's scale) and is never scaled.
+  function scaleTargets(list, ids) { return list.filter(s => ids.includes(s.id) && pickable(s) && !s.aerial); }
+  // Their box, or null when there is nothing with a size to scale (a lone point).
+  function scaleBoxOf(list) {
+    const bb = getBoundingBox(list.filter(s => s.type !== 'dim-angle'));
+    if (!bb || (bb.maxX - bb.minX <= 0 && bb.maxY - bb.minY <= 0)) return null;
+    return bb;
+  }
+  // Smallest factor allowed: the box's diagonal never goes under 1 mm.
+  function scaleKMin(box) { return Math.max(1e-9, mmPx() / (Math.hypot(box.maxX - box.minX, box.maxY - box.minY) || 1)); }
+  // The typed factor, about the middle of the box. One undo step.
+  function applyScaleFactor(k) {
+    const targets = scaleTargets(shapes, selectedIds), box = scaleBoxOf(targets);
+    if (!box || !(k > 0)) return;
+    const kk = Math.max(k, scaleKMin(box));
+    commitShapes(fbXform.scaleShapes(shapes, targets.map(s => s.id), kk, (box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2));
+  }
+
   // Apply a node drag delta to a shape.
   // 'body' key moves all geometry + the stored _pivot together.
   function applyNodeDrag(shape, nodeKey, dx, dy) {
@@ -4373,10 +4431,10 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         const _ps3 = viewBox.w / (svgSizeRef.current.w || viewBox.w);
         const tw3  = shape.w || 180;
         const th3  = shape.h ||  80;
-        if (nodeKey === 'tl') return { ...shape, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3-dx/_ps3), h: Math.max(20, th3-dy/_ps3) };
-        if (nodeKey === 'tr') return { ...shape, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3+dx/_ps3), h: Math.max(20, th3-dy/_ps3) };
-        if (nodeKey === 'bl') return { ...shape, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3-dx/_ps3), h: Math.max(20, th3+dy/_ps3) };
-        if (nodeKey === 'br') return { ...shape, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3+dx/_ps3), h: Math.max(20, th3+dy/_ps3) };
+        if (nodeKey === 'tl') return { ...shape, wrapChars: undefined, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3-dx/_ps3), h: Math.max(20, th3-dy/_ps3) };
+        if (nodeKey === 'tr') return { ...shape, wrapChars: undefined, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3+dx/_ps3), h: Math.max(20, th3-dy/_ps3) };
+        if (nodeKey === 'bl') return { ...shape, wrapChars: undefined, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3-dx/_ps3), h: Math.max(20, th3+dy/_ps3) };
+        if (nodeKey === 'br') return { ...shape, wrapChars: undefined, x: shape.x+dx/2, y: shape.y+dy/2, w: Math.max(40, tw3+dx/_ps3), h: Math.max(20, th3+dy/_ps3) };
         break;
       }
       case 'dim-linear': {
@@ -4516,10 +4574,49 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       return;
     }
 
+    // ── Scale tool ─────────────────────────────────────────────────────────
+    // A corner of the selection's box scales everything selected about the
+    // opposite corner. Otherwise a tap selects (shift adds) like the Select
+    // tool; on empty canvas a mouse drags a marquee, and a finger pans or,
+    // held still, drags a marquee (the touch branch below).
+    if (tool === 'scale') {
+      const isTouch = e.pointerType === 'touch';
+      const targets = scaleTargets(shapes, selectedIds), box = scaleBoxOf(targets);
+      if (box) {
+        const cs = fbXform.corners(box), reach = (isTouch ? 28 : 10) * ps;
+        const corner = ['nw', 'ne', 'se', 'sw'].find(c => Math.hypot(pt.x - cs[c].x, pt.y - cs[c].y) < reach);
+        if (corner) {
+          setDragNode({ shapeId: null, nodeKey: 'scale' });
+          setDragStart({ svgX: pt.x, svgY: pt.y, snapshot: shapes, multiIds: targets.map(s => s.id), scaleBox: box, scaleCorner: corner });
+          return;
+        }
+      }
+      const hit = hitTest(pt, shapes.filter(pickable), (isTouch ? 24 : 8) * ps);
+      if (hit) {
+        if (e.shiftKey) setSelectedIds(prev => (prev.includes(hit.id) ? prev.filter(id => id !== hit.id) : [...prev, hit.id]));
+        else if (isTouch) {
+          if (pendingSelectionRef.current) clearTimeout(pendingSelectionRef.current.timeoutId);
+          const _ids = [hit.id];
+          const _tid = setTimeout(() => {
+            pendingSelectionRef.current = null;
+            if (activePtrsRef.current.size < 2 && !wasMultiTouchRef.current) setSelectedIds(_ids);
+          }, 80);
+          pendingSelectionRef.current = { ids: _ids, timeoutId: _tid };
+        } else setSelectedIds([hit.id]);
+        return;
+      }
+      if (!isTouch) {
+        if (!e.shiftKey) setSelectedIds([]);
+        setMarquee({ ox: pt.x, oy: pt.y, x: pt.x, y: pt.y, w: 0, h: 0, dir: 'right' });
+        return;
+      }
+      // touch on empty canvas: falls through to the pan / long-press marquee below
+    }
+
     // ── Single-finger pan / long-press box-select (select / node tool, touch) ─
     // Empty-canvas or locked-shape touch: node mode pans immediately; select mode
     // waits 400 ms — finger moves first → pan, stays still → box-select marquee.
-    if (e.pointerType === 'touch' && (tool === 'select' || tool === 'node') && prevTool === null) {
+    if (e.pointerType === 'touch' && (tool === 'select' || tool === 'node' || tool === 'scale') && prevTool === null) {
       const hitThreshPan = 24 * ps;
       const hit = hitTest(pt, shapes, hitThreshPan);
       const isLocked = hit && (hit.locked || layers.find(l => l.id === (hit.layerId || defLayerId))?.locked);
@@ -4573,7 +4670,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           const dblHit = hitTest(pt, shapes, hitThresh);
           if (dblHit && dblHit.type === 'text') {
             setTextEdit({ id: dblHit.id, x: dblHit.x, y: dblHit.y,
-              w: dblHit.w, h: dblHit.h || 80, content: dblHit.content, editing: true });
+              w: dblHit.w, h: dblHit.h || 80, content: dblHit.content, editing: true,
+              orig: dblHit, origIndex: shapes.indexOf(dblHit) });
             commitShapes(shapes.filter(s => s.id !== dblHit.id));
             lastTapRef.current = { time: 0, x: 0, y: 0 };
             return;
@@ -4717,7 +4815,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             if (textToolWithSelection) {
               // Text tool + click on selected text → open for editing immediately
               setTextEdit({ id: sel.id, x: sel.x, y: sel.y,
-                w: sel.w, h: sel.h || 80, content: sel.content || '', editing: true });
+                w: sel.w, h: sel.h || 80, content: sel.content || '', editing: true,
+                orig: sel, origIndex: shapes.indexOf(sel) });
               commitShapes(shapes.filter(s => s.id !== sel.id));
               return;
             }
@@ -5418,6 +5517,16 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     if (dragNode && dragStart) {
       setSnapPoint(null);
 
+      // Scale: rebuilt from the snapshot on every move, so nothing drifts.
+      if (dragNode.nodeKey === 'scale') {
+        const box = dragStart.scaleBox, c = dragStart.scaleCorner;
+        const k = fbXform.cornerFactor(box, c, rawPt, scaleKMin(box));
+        const a = fbXform.anchorFor(box, c);
+        setShapes(fbXform.scaleShapes(dragStart.snapshot, dragStart.multiIds, k, a.x, a.y));
+        setScaleLive({ k, x: rawPt.x, y: rawPt.y });
+        return;
+      }
+
       // Group rotate: rotate all selected shapes around group bounding-box centre
       if (dragNode.nodeKey === 'group-rotate') {
         const piv        = { x: dragStart.pivX, y: dragStart.pivY };
@@ -5967,6 +6076,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
     // Commit node drag
     if (dragNode) {
+      if (dragNode.nodeKey === 'scale') setScaleLive(null);
       commitShapesFrom(dragStart && dragStart.snapshot, shapes);
       setDragNode(null);
       setDragStart(null);
@@ -6927,14 +7037,22 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   function commitText() {
     if (!textEdit) return;
     if (textEdit.content.trim()) {
-      commitShapes([...shapes, { id: textEdit.id, type: 'text',
-        x: textEdit.x, y: textEdit.y,
-        w: textEdit.w || 180, h: textEdit.h || 80,
-        content: textEdit.content, stroke: activeStrokeColor,
+      // Re-editing keeps the text's own size, colour, alignment, rotation, layer
+      // and group, and its place in the stack; only the words change.
+      const base = textEdit.orig ? { ...textEdit.orig } : {
+        stroke: activeStrokeColor,
         fontSize: defaultFontSize !== 1.0 ? defaultFontSize : undefined,
         textAlign: defaultTextAlign !== 'left' ? defaultTextAlign : undefined,
         textVAlign: defaultTextVAlign !== 'top' ? defaultTextVAlign : undefined,
-        layerId: textEdit.layerId || activeLayerId }]);
+        layerId: textEdit.layerId || activeLayerId };
+      const made = { ...base, id: textEdit.id, type: 'text',
+        x: textEdit.x, y: textEdit.y,
+        w: textEdit.w || 180, h: textEdit.h || 80,
+        content: textEdit.content };
+      // (commitShapes gives a new shape with no size the Text ▾ default; an edited one keeps 1)
+      if (textEdit.orig && made.fontSize === undefined) made.fontSize = 1;
+      const at =textEdit.orig && textEdit.origIndex >= 0 ? Math.min(textEdit.origIndex, shapes.length) : shapes.length;
+      commitShapes([...shapes.slice(0, at), made, ...shapes.slice(at)]);
     }
     setTextEdit(null);
   }
@@ -6945,7 +7063,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     const ps  = viewBox.w / (svgSizeRef.current.w || viewBox.w);
     const hit = hitTest(pt, shapes, 8 * ps);
     if (hit && hit.type === 'text') {
-      setTextEdit({ id: hit.id, x: hit.x, y: hit.y, w: hit.w, h: hit.h || 80, content: hit.content, editing: true });
+      setTextEdit({ id: hit.id, x: hit.x, y: hit.y, w: hit.w, h: hit.h || 80, content: hit.content, editing: true,
+        orig: hit, origIndex: shapes.indexOf(hit) });
       commitShapes(shapes.filter(s => s.id !== hit.id));
       return;
     }
@@ -7171,7 +7290,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         // maxChars is purely screen-space (screen px / screen char width) so wrap
         // stays identical regardless of zoom level.
         const charW     = 9.5 * 0.601;              // screen px per Courier New char
-        const maxChars  = Math.max(1, Math.floor((swPx - 6) / charW));
+        const maxChars  = s.wrapChars >= 1 ? Math.floor(s.wrapChars) : Math.max(1, Math.floor((swPx - 6) / charW));
         const lines     = wrapText(s.content || '', maxChars);
         // Alignment
         const hAlign    = s.textAlign  || 'left';
@@ -7808,6 +7927,31 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     );
   }
 
+  // ── Scale tool: dashed box round the selection, a square on each corner ────
+  function renderScaleControls() {
+    const box = scaleBoxOf(scaleTargets(shapes, selectedIds));
+    if (!box) return null;
+    const ps = viewBox.w / (svgSizeRef.current.w || viewBox.w);
+    const cs = fbXform.corners(box), H = 11 * ps;
+    return (
+      <g data-scale-box="" style={{ pointerEvents: 'none' }}>
+        <rect x={box.minX} y={box.minY} width={box.maxX - box.minX} height={box.maxY - box.minY}
+          fill={fbAlpha('accent', 0.05)} stroke={FBC.accent} strokeWidth={1.4 * ps} strokeDasharray={`${6 * ps},${4 * ps}`} />
+        {Object.entries(cs).map(([c, p]) => (
+          <rect key={c} data-scale-handle={c} x={p.x - H / 2} y={p.y - H / 2} width={H} height={H}
+            fill={FBC.field} stroke={FBC.accent} strokeWidth={1.8 * ps} />
+        ))}
+        {scaleLive && (() => {
+          const tag = `×${scaleLive.k.toFixed(3)}`;
+          return (<>
+            <rect x={scaleLive.x + 12 * ps} y={scaleLive.y - 26 * ps} width={(tag.length * 7 + 10) * ps} height={18 * ps} rx={3 * ps} fill={FBC.accent} />
+            <text x={scaleLive.x + 17 * ps} y={scaleLive.y - 13 * ps} fontSize={12 * ps} fontFamily={FBF.sketch} fontWeight="700" fill={FBC.field}>{tag}</text>
+          </>);
+        })()}
+      </g>
+    );
+  }
+
   // ── Draw preview shape ─────────────────────────────────────────────────────
   function renderPreview() {
     if (!drawState) return null;
@@ -8028,7 +8172,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
   const selectedShape = shapes.find(s => s.id === selectedId);
   const cursorMap = {
-    select: 'default', line: 'crosshair', curve: 'crosshair',
+    select: 'default', scale: 'default', line: 'crosshair', curve: 'crosshair',
     pencil: 'crosshair', pen: 'crosshair', node: 'default',
     circle: 'crosshair', rect: 'crosshair', text: 'text', eraser: 'pointer', fill: 'cell',
     point: 'crosshair',
@@ -8769,6 +8913,11 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               <span style={{ letterSpacing: '0.03em' }}>Join</span>
               <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ opacity: 0.5, marginLeft: 1 }}><polyline points="1 2.5 4 5.5 7 2.5"/></svg>
             </button>
+          )}
+
+          {/* ── Scale tool: typed factor ─────────────────────────────────────── */}
+          {tool === 'scale' && (
+            <ScaleFactorBar count={scaleTargets(shapes, selectedIds).length} live={scaleLive ? scaleLive.k : null} onApply={applyScaleFactor} />
           )}
 
           {/* ── Pencil tool context controls ────────────────────────────────── */}
@@ -9586,6 +9735,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             {/* Node handles for selected shape.
                 Shows in select mode OR when prevTool is set (shape just created —
                 tool hasn't switched, but we need handles immediately). */}
+            {tool === 'scale' && renderScaleControls()}
             {/* Multi-select: group bounding box + group rotate handle + per-shape handles */}
             {(tool === 'select' || prevTool !== null) && selectedIds.length >= 2 && (() => {
               const selShapes = shapes.filter(s => selectedIds.includes(s.id));

@@ -4,7 +4,7 @@
 // Bump this string every time you deploy new code.
 // The activate handler deletes any cache with a different name, forcing
 // browsers and installed PWAs to discard stale files and re-fetch everything.
-const CACHE_NAME = 'fieldbook-v1.213';
+const CACHE_NAME = 'fieldbook-v1.214';
 
 // OpenStreetMap tiles the Map page has shown, kept for offline use. This cache
 // is NOT versioned and survives every CACHE_NAME bump. Only tiles the user
@@ -47,6 +47,7 @@ const APP_SHELL = [
   './geoid-ns.js',
   './gnss.js',
   './print.js',
+  './xform.js',
   './schedule.js',
   './manifest.json',
   './icon.svg',

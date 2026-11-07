@@ -75,6 +75,7 @@
   <script src="./gnss.js"></script>
   <!-- Sketch print areas: paper ratio, frame and print scale, labels (window.fbPrint) -->
   <script src="./print.js"></script>
+  <script src="./xform.js"></script>
   <script src="./schedule.js"></script>
 
   <style>
@@ -839,7 +840,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.213';
+  const APP_VERSION = '1.214';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -5267,7 +5268,8 @@
           const tFontSize = 9.5 * tps * fsMult;
           const tLineH = tFontSize * 1.55;
           const charW = 9.5 * 0.601;
-          const maxChars = Math.max(1, Math.floor((sw - 6) / charW));
+          // wrapChars: line breaks pinned when the text was scaled (xform.js)
+          const maxChars = s.wrapChars >= 1 ? Math.floor(s.wrapChars) : Math.max(1, Math.floor((sw - 6) / charW));
           const _wt = (utils && utils.wrapText) ? utils.wrapText : (t, n) => {
             const out = [];
             for (const para of t.split('\n')) {
