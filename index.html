@@ -839,7 +839,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.209';
+  const APP_VERSION = '1.210';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -981,6 +981,9 @@
     // Walk all projects' photo arrays and delete any IDB entries no longer
     // referenced. Called after bulk deletes (project/page removal, import).
     async function pruneOrphans(allProjects) {
+      // Only with EVERY project loaded: a partial list would make the media of
+      // the others look orphaned. (DB is defined further down; read at call time.)
+      if (typeof DB !== 'undefined' && !DB.isAllReady()) { console.warn('FieldBook: prune skipped — projects still loading'); return 0; }
       const live = new Set();
       (allProjects || []).forEach(proj => {
         (proj.pages || []).forEach(pg => {
@@ -1070,6 +1073,9 @@
     // Delete recordings no page references any more (page/project deletes,
     // failed saves). Same contract as photoDB.pruneOrphans.
     async function pruneOrphans(allProjects) {
+      // Only with EVERY project loaded: a partial list would make the media of
+      // the others look orphaned. (DB is defined further down; read at call time.)
+      if (typeof DB !== 'undefined' && !DB.isAllReady()) { console.warn('FieldBook: prune skipped — projects still loading'); return 0; }
       const live = new Set();
       (allProjects || []).forEach(proj => (proj.pages || []).forEach(pg =>
         pageVoiceRecs(pg).forEach(v => { if (v.audioRef) live.add(v.audioRef); })));
@@ -1122,13 +1128,14 @@
   // pages share refs). audioDB.pruneOrphans catches anything this misses.
   function dropAudioIfUnused(ref) {
     if (!ref) return;
-    queueMicrotask(() => {
+    // Wait for every project: another, not yet loaded, may share the recording.
+    DB.allReady().then(() => {
       try {
         const used = DB.getProjects().some(pr => (pr.pages || []).some(pg =>
           pageVoiceRecs(pg).some(v => v.audioRef === ref)));
         if (!used) audioDB.del(ref).catch(() => {});
       } catch {}
-    });
+    }, () => {});
   }
 
   // Sketch engine (sketch.js) loads async. This promise gates the ReactDOM mount
@@ -1202,7 +1209,26 @@
       });
     }
 
-    return { open, getAll, write };
+    // One record's value (a JSON string), or undefined when there is none.
+    async function get(key) {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const req = db.transaction(STORE, 'readonly').objectStore(STORE).get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    // Every record key, without reading any values.
+    async function getAllKeys() {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const req = db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    return { open, getAll, get, getAllKeys, write };
   })();
 
   const INDEX_KEY = '__index__';
@@ -1213,6 +1239,29 @@
   const _deleted = new Set(); // project ids awaiting an IDB delete
   let _flushTimer = null;
   let _flushChain = Promise.resolve();
+
+  // ── Lazy loading (v1.210) ──
+  // Boot reads the index and the project being reopened, and React mounts on
+  // that; every other project is read in the background after the first render
+  // (_loadRest), one per idle tick. `_loaded` holds each project whose WHOLE
+  // record is in _projectCache — read from storage, or made this session. A
+  // project not yet loaded is known only by its index entry (a summary).
+  // Anything that reads every project waits for DB.allReady().
+  const _loaded = new Set();
+  const _gone = new Set();          // deleted this session: a late read never brings one back
+  let _allReady = false, _allError = null, _allResolve, _allReject;
+  const _allReadyP = new Promise((res, rej) => { _allResolve = res; _allReject = rej; });
+  _allReadyP.catch(() => {});
+  function _markAllReady() {
+    if (_allReady) return;
+    _allReady = true;
+    _allResolve();
+    try { window.dispatchEvent(new Event('fb:projects-ready')); } catch {}
+  }
+  // Test switches, honoured only on a local dev host.
+  function _testFlag(k) {
+    try { return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) ? sessionStorage.getItem(k) : null; } catch { return null; }
+  }
 
   function _reportWriteError(err) {
     console.error('FieldBook: project save failed', err);
@@ -1270,17 +1319,37 @@
     try { window.dispatchEvent(new Event('fb:locked')); } catch {}
     return true;
   }
+  // The index entry of a project: what the home list shows and sorts by, so it
+  // can draw a project that isn't loaded yet. `sv` marks an entry that has
+  // the summary (older builds write only id, name, createdAt).
+  function _entryFor(proj) {
+    const e = { id: proj.id, name: proj.name || '', createdAt: proj.createdAt, sv: 1,
+      client: proj.client || '', jobNumber: proj.jobNumber || '', pageCount: (proj.pages || []).length };
+    if (proj.archived) e.archived = true;
+    if (proj.archivedAt) e.archivedAt = proj.archivedAt;
+    if (proj.lock) e.lock = { by: proj.lock.by, at: proj.lock.at };
+    return e;
+  }
   function _saveProjectRaw(proj) {
+    // Never write over a stored project with an object that wasn't read from it:
+    // before every project is loaded, a listed id must be one we have read.
+    if (!_allReady && !_loaded.has(proj.id) && _indexCache.some(e => e.id === proj.id)) {
+      _reportWriteError(new Error(`refused to save project ${proj.id}: it is not loaded yet`));
+      return false;
+    }
+    _loaded.add(proj.id); _gone.delete(proj.id);
     _projectCache[proj.id] = proj;
     if (_backend === 'idb') { _deleted.delete(proj.id); _dirty.add(proj.id); _scheduleFlush(); }
     else _lsSet('fb_project_' + proj.id, JSON.stringify(proj));
     const idx = _getIndex();
     const i = idx.findIndex(e => e.id === proj.id);
-    const entry = { id: proj.id, name: proj.name || '', createdAt: proj.createdAt };
+    const entry = _entryFor(proj);
     if (i === -1) idx.unshift(entry); else idx[i] = entry;
     _saveIndex(idx);
+    return true;
   }
   function _deleteProjectRaw(id) {
+    _gone.add(id); _loaded.delete(id);
     delete _projectCache[id];
     if (_backend === 'idb') { _dirty.delete(id); _deleted.add(id); _scheduleFlush(); }
     else localStorage.removeItem('fb_project_' + id);
@@ -1323,21 +1392,151 @@
       if (e && projects[e.id] && !seen.has(e.id)) { seen.add(e.id); out.push(e); }
     });
     Object.values(projects).forEach(p => {
-      if (!seen.has(p.id)) { seen.add(p.id); out.unshift({ id: p.id, name: p.name || '', createdAt: p.createdAt }); }
+      if (!seen.has(p.id)) { seen.add(p.id); out.unshift(_entryFor(p)); }
     });
     return out;
+  }
+
+  // Bring each loaded project's index entry up to date (older builds and older
+  // entries have no summary). Writes the index only, never a project.
+  function _backfillSummaries() {
+    let changed = false;
+    const idx = _indexCache.map(e => {
+      const p = _projectCache[e.id];
+      if (!p) return e;
+      const n = _entryFor(p);
+      if (JSON.stringify(n) === JSON.stringify(e)) return e;
+      changed = true;
+      return n;
+    });
+    if (changed) _saveIndex(idx);
+    return changed;
+  }
+
+  // A record read from storage → the cache, unless something newer is already
+  // there (a loaded copy may hold edits) or it was deleted meanwhile.
+  function _admit(str) {
+    if (str === undefined) return { r: 'missing' };
+    let p;
+    try { p = JSON.parse(str); } catch { return { r: 'bad' }; }
+    if (!p || !p.id) return { r: 'bad' };
+    if (_loaded.has(p.id) || _gone.has(p.id) || _deleted.has(p.id)) return { r: 'skip' };
+    _projectCache[p.id] = p;
+    _loaded.add(p.id);
+    return { r: 'ok', p };
+  }
+
+  // Projects to read before the first render: the route fb_lastRoute will
+  // restore, and the one in the address bar.
+  function _routeProjectIds() {
+    const ids = [];
+    const take = h => { const m = String(h || '').match(/^#\/project\/([^/?#]+)/); if (m && !ids.includes(m[1])) ids.push(m[1]); };
+    try { take(localStorage.getItem('fb_lastRoute')); } catch {}
+    take(location.hash);
+    return ids;
+  }
+
+  // Read one project ahead of the background queue (opening it from Home).
+  const _inflight = new Map();
+  function _ensureProject(id) {
+    if (_loaded.has(id) || _allReady || _backend !== 'idb') return Promise.resolve(!!_projectCache[id]);
+    if (!_inflight.has(id)) {
+      _inflight.set(id, projectDB.get(id)
+        .then(s => { _admit(s); return !!_projectCache[id]; })
+        .finally(() => _inflight.delete(id)));
+    }
+    return _inflight.get(id);
+  }
+
+  function _idle() {
+    const slow = _testFlag('fb_test_slow_load');            // tests: ms per project
+    if (slow) return new Promise(r => setTimeout(r, +slow || 300));
+    return new Promise(r => (window.requestIdleCallback ? requestIdleCallback(() => r(), { timeout: 250 }) : setTimeout(r, 0)));
+  }
+
+  // Background load: every project not read yet, one per idle tick. It only
+  // reads; its one write is the index (dropped entries, new summaries), built
+  // from the full in-memory index. If a read fails, allReady rejects and
+  // nothing that needs every project runs.
+  let _restStarted = false;
+  async function _loadRest() {
+    if (_restStarted || _allReady) return;
+    _restStarted = true;
+    const t0 = performance.now();
+    let bytes = 0, n = 0;
+    try {
+      const missing = new Set();
+      for (const e of [..._indexCache]) {
+        if (_loaded.has(e.id) || _gone.has(e.id)) continue;
+        await _idle();
+        if (_inflight.has(e.id)) await _inflight.get(e.id).catch(() => {});
+        if (_loaded.has(e.id) || _gone.has(e.id)) continue;
+        if (_testFlag('fb_test_fail_load') === e.id) throw new Error('fb_test_fail_load (test)');
+        const s = await projectDB.get(e.id);
+        if (s === undefined) { missing.add(e.id); continue; }
+        bytes += s.length; n++;
+        if (_admit(s).r === 'bad') missing.add(e.id);
+      }
+      // Records the index doesn't list are added at the top, as _buildIndex does.
+      const listed = new Set(_indexCache.map(e => e.id));
+      const extra = [];
+      for (const k of await projectDB.getAllKeys()) {
+        if (k === INDEX_KEY || listed.has(k) || _gone.has(k) || _loaded.has(k)) continue;
+        await _idle();
+        const s = await projectDB.get(k);
+        const a = _admit(s);
+        if (a.r === 'ok') { extra.push(a.p); bytes += s.length; n++; }
+      }
+      // Entries with no readable record are dropped, as _buildIndex does.
+      if (missing.size || extra.length) {
+        const idx = _indexCache.filter(e => !missing.has(e.id) || _loaded.has(e.id));
+        extra.forEach(p => { if (!idx.some(e => e.id === p.id)) idx.unshift(_entryFor(p)); });
+        _saveIndex(idx);
+      }
+      _backfillSummaries();
+      _markAllReady();
+      fbBootLog('all projects', `${_loaded.size} loaded (${n} in the background, ${(bytes / 1e6).toFixed(2)} MB, ${Math.round(performance.now() - t0)}ms)`);
+    } catch (err) {
+      _allError = err;
+      console.error('FieldBook: loading the other projects failed', err);
+      _allReject(err);
+      try { window.dispatchEvent(new Event('fb:projects-failed')); } catch {}
+    }
+    try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch {}
   }
 
   // Boot: load every project into memory and migrate any localStorage
   // projects into IndexedDB. localStorage copies are removed only after the
   // IDB transaction commits, so an interrupted migration just re-runs.
+  //
+  // v1.210: when the IDB index record exists and there is nothing to migrate,
+  // only the index and the project(s) being reopened are read here; the rest
+  // follow in the background (_loadRest, started after the first render).
+  // Otherwise — first run, migration, an unreadable index — the full load
+  // below runs exactly as before and allReady resolves at once.
   const _dataReady = (async () => {
     fbBootLog('data start');
     const ls = _readLocalStorageProjects();
-    let stored;
+    let stored = null, index = null, bytes = 0;
+    const tRead = performance.now();
     try {
-      stored = await Promise.race([
-        projectDB.getAll(),
+      if (_testFlag('fb_force_ls')) throw new Error('fb_force_ls (test)');
+      await Promise.race([
+        (async () => {
+          if (ls.keys.length === 0) {
+            const raw = await projectDB.get(INDEX_KEY);
+            try { const a = raw === undefined ? null : JSON.parse(raw); if (Array.isArray(a)) index = a; } catch {}
+          }
+          if (!index) { stored = await projectDB.getAll(); return; }
+          const seen = new Set();
+          _indexCache = index.filter(e => e && e.id && !seen.has(e.id) && (seen.add(e.id), true));
+          for (const id of _routeProjectIds()) {
+            if (!seen.has(id)) continue;
+            const s = await projectDB.get(id);
+            if (s !== undefined) bytes += s.length;
+            _admit(s);
+          }
+        })(),
         // A busy main thread (Babel compiling the page) can hold the open's reply
         // back for 20+ s; a real failure rejects at once, so this only guards a hang.
         new Promise((_, reject) => setTimeout(() => reject(new Error('IndexedDB open timed out')), 45000)),
@@ -1346,8 +1545,15 @@
       console.error('FieldBook: IndexedDB unavailable — using localStorage', err);
       _backend = 'ls';
       _projectCache = ls.projects;
+      _loaded.clear(); Object.keys(ls.projects).forEach(id => _loaded.add(id));
       _indexCache = _buildIndex(ls.index, ls.projects);
+      _markAllReady();
       fbBootLog('data ready', `localStorage fallback, ${Object.keys(ls.projects).length} projects`);
+      return;
+    }
+
+    if (index) {
+      fbBootLog('data ready', `${_loaded.size} of ${_indexCache.length} projects (the one being reopened), ${(bytes / 1e6).toFixed(2)} MB in ${Math.round(performance.now() - tRead)}ms`);
       return;
     }
 
@@ -1355,7 +1561,7 @@
     const tParse = performance.now();
     let parsedBytes = 0;
     const projects = {};
-    let index = null;
+    index = null;   // the full load: the index record is re-read from `stored`
     Object.keys(stored).forEach(k => {
       try {
         parsedBytes += (stored[k] || '').length;
@@ -1368,6 +1574,7 @@
     const migrated = Object.keys(ls.projects).filter(id => !projects[id]);
     migrated.forEach(id => { projects[id] = ls.projects[id]; });
     _projectCache = projects;
+    Object.keys(projects).forEach(id => _loaded.add(id));
     _indexCache = _buildIndex([...(index || []), ...(ls.index || [])], projects);
 
     if (ls.keys.length > 0) {
@@ -1383,6 +1590,8 @@
         Object.keys(puts).forEach(k => _dirty.add(k));
       }
     }
+    _backfillSummaries();
+    _markAllReady();
 
     // Ask the browser not to evict our data under storage pressure.
     try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch {}
@@ -1425,12 +1634,31 @@
     return null;
   }
 
+  let _warnedPartial = false;
   const DB = {
+    // Every project. Before allReady() this is only the loaded ones — anything
+    // that must see every project awaits DB.allReady() first.
     getProjects() {
+      if (!_allReady && !_warnedPartial) {
+        _warnedPartial = true;
+        console.warn('FieldBook: DB.getProjects() before every project is loaded', new Error().stack);
+      }
       return _getIndex().map(e => _getProjectRaw(e.id)).filter(Boolean);
     },
+    // The home list: each listed project, or its index summary (`_stub: true`,
+    // no pages) while it is still loading.
+    listProjects() {
+      return _getIndex().map(e => _getProjectRaw(e.id) || { ...e, _stub: true });
+    },
+    allReady() { return _allReadyP; },
+    isAllReady() { return _allReady; },
+    loadError() { return _allError; },
+    isLoaded(id) { return _allReady || _loaded.has(id); },
+    ensureProject(id) { return _ensureProject(id); },
+    _loadRest() { return _loadRest(); },
     saveProjects(p) {
       // Bulk save — used by importProjectFromFile. Deletes removed projects.
+      if (!_allReady) throw new Error('Projects are still loading');
       const keepIds = new Set(p.map(proj => proj.id));
       _getIndex().filter(e => !keepIds.has(e.id)).forEach(e => _deleteProjectRaw(e.id));
       p.forEach(proj => _saveProjectRaw(proj));
@@ -1446,7 +1674,7 @@
       const idx = [..._getIndex()];
       const i = idx.findIndex(e => e.id === id);
       if (i === -1) return;
-      const isArch = pid => !!_getProjectRaw(pid)?.archived;
+      const isArch = pid => !!(_getProjectRaw(pid) || idx.find(e => e.id === pid))?.archived;
       const mine = isArch(id);
       let j = i + dir;
       while (j >= 0 && j < idx.length && isArch(idx[j].id) !== mine) j += dir;
@@ -1715,6 +1943,22 @@
   DB.saveProject = function(proj) { _saveProjectRaw(proj); };
   // Force pending IndexedDB writes to commit (e.g. before a reload).
   DB.flush = _flush;
+
+  // For screens that list every project: true once all are loaded, false while
+  // the background load runs, 'error' if it failed.
+  function useAllProjectsReady() {
+    const [ready, setReady] = useState(() => DB.isAllReady() || (DB.loadError() ? 'error' : false));
+    useEffect(() => {
+      if (ready) return;
+      let live = true;
+      DB.allReady().then(() => live && setReady(true), () => live && setReady('error'));
+      return () => { live = false; };
+    }, []);
+    return ready;
+  }
+  function allProjectsNote(ready, none) {
+    return ready === true ? none : ready === 'error' ? "Couldn't load every project. Reopen the app." : 'Loading projects…';
+  }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // ROUTER
@@ -2333,7 +2577,7 @@
     useEffect(() => {
       (async () => {
         let lsBytes = 0;
-        try { lsBytes = JSON.stringify(DB.getProjects()).length; } catch {}
+        try { await DB.allReady(); lsBytes = JSON.stringify(DB.getProjects()).length; } catch {}
         let idbBytes = 0;
         try { idbBytes = await photoDB.getUsageBytes(); } catch {}
         let audioBytes = 0;
@@ -2359,6 +2603,12 @@
 
     async function doPrune() {
       try {
+        await DB.allReady();
+      } catch {
+        toast.error("Couldn't load every project. Reopen the app, then try again.");
+        return;
+      }
+      try {
         const n = (await photoDB.pruneOrphans(DB.getProjects())) + (await audioDB.pruneOrphans(DB.getProjects()));
         if (n > 0) toast.success(`Cleaned up ${n} orphan photo${n === 1 ? '' : 's'} / recording${n === 1 ? '' : 's'}`);
         else       toast.success('No orphan photos or recordings found');
@@ -2374,6 +2624,7 @@
     // Photos and sketch images are inlined so the backup is self-contained.
     async function exportBackup() {
       try {
+        await DB.allReady();
         const projects = await Promise.all(DB.getProjects().map(inlinePhotosForExport));
         const blob = new Blob([JSON.stringify(projects)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -2399,6 +2650,8 @@
           toast.error('Invalid backup — expected a project array');
           return;
         }
+        try { await DB.allReady(); }
+        catch { toast.error("Couldn't load every project. Reopen the app, then try again."); return; }
         if (!window.confirm(`Replace ALL existing projects with ${parsed.length} project(s) from this backup?\n\nThis cannot be undone.`)) return;
         try {
           for (const proj of parsed) await extractPhotosFromImport(proj);
@@ -4157,11 +4410,25 @@
     const importInputRef = useRef(null);
     useFocusTrap(delModalRef, !!delTarget, () => setDelTarget(null));
 
-    useEffect(() => { setProjects(DB.getProjects()); }, []);
+    useEffect(() => {
+      setProjects(DB.listProjects());
+      // Projects not yet loaded show from their index summary; redraw once all are in.
+      const refresh = () => setProjects(DB.listProjects());
+      window.addEventListener('fb:projects-ready', refresh);
+      return () => window.removeEventListener('fb:projects-ready', refresh);
+    }, []);
+    // A card action needs the whole project: wait for the background load, then
+    // act on the full copy, not the summary.
+    const whenReady = fn => (...a) => {
+      const run = () => fn(...a.map(x => (x && x._stub ? DB.getProject(x.id) || x : x)));
+      if (DB.isAllReady()) return run();
+      DB.allReady().then(() => { setProjects(DB.listProjects()); run(); },
+        () => toast.error("Couldn't load every project. Reopen the app, then try again."));
+    };
 
     function handleCreate(proj) {
       setShowNew(false);
-      setProjects(DB.getProjects());
+      setProjects(DB.listProjects());
       // A new project opens on its settings, to confirm them before any page is made.
       try { sessionStorage.setItem('fb_open_settings', proj.id); } catch {}
       navigate(`#/project/${proj.id}`);
@@ -4190,14 +4457,14 @@
 
     function handleImported(newProject) {
       setPendingImport(null);
-      setProjects(DB.getProjects());
+      setProjects(DB.listProjects());
       toast.success(`"${newProject.name}" imported`);
       navigate(`#/project/${newProject.id}`);
     }
 
     function confirmDelete() {
       DB.deleteProject(delTarget);
-      setProjects(DB.getProjects());
+      setProjects(DB.listProjects());
       setDelTarget(null);
     }
 
@@ -4206,14 +4473,14 @@
       const name = window.prompt('Rename project:', p.name);
       if (name && name.trim() && name.trim() !== p.name) {
         DB.updateProject(p.id, { name: name.trim() });
-        setProjects(DB.getProjects());
+        setProjects(DB.listProjects());
         toast.success('Project renamed');
       }
     }
 
     function handleDuplicate(p) {
       DB.duplicateProject(p.id);
-      setProjects(DB.getProjects());
+      setProjects(DB.listProjects());
       toast.success(`"${p.name}" duplicated`);
     }
 
@@ -4225,13 +4492,13 @@
       if (p.lock) { setLockTarget({ project: p, mode: 'reopen' }); return; }
       if (!p.archived) { setLockTarget({ project: p, mode: 'lock' }); return; }
       DB.setProjectArchived(p.id, false);
-      setProjects(DB.getProjects());
+      setProjects(DB.listProjects());
       toast.success(`"${p.name}" restored`);
     }
     function handleLockDone(kind) {
       const p = lockTarget?.project;
       setLockTarget(null);
-      setProjects(DB.getProjects());
+      setProjects(DB.listProjects());
       if (!p) return;
       if (kind === 'closed') toast.success(`"${p.name}" saved and closed`);
       else if (kind === 'archived') toast.success(`"${p.name}" locked, under Archived`);
@@ -4240,7 +4507,7 @@
 
     function handleMove(p, dir) {
       DB.moveProject(p.id, dir);
-      setProjects(DB.getProjects());
+      setProjects(DB.listProjects());
     }
 
     function toggleArchivedOpen() {
@@ -4256,13 +4523,13 @@
       <ProjectCard key={p.id} project={p}
         canMoveUp={i > 0}
         canMoveDown={i < list.length - 1}
-        onMoveUp={() => handleMove(p, -1)}
-        onMoveDown={() => handleMove(p, 1)}
-        onActions={() => setActionTarget(p)}
-        onDelete={() => setDelTarget(p.id)}
-        onRename={handleRename}
-        onDuplicate={handleDuplicate}
-        onArchive={handleArchive} />
+        onMoveUp={whenReady(() => handleMove(p, -1))}
+        onMoveDown={whenReady(() => handleMove(p, 1))}
+        onActions={whenReady(() => setActionTarget(DB.getProject(p.id) || p))}
+        onDelete={whenReady(() => setDelTarget(p.id))}
+        onRename={whenReady(handleRename)}
+        onDuplicate={whenReady(handleDuplicate)}
+        onArchive={whenReady(handleArchive)} />
     );
 
     return (
@@ -4406,7 +4673,9 @@
   }
 
   function ProjectCard({ project, canMoveUp, canMoveDown, onMoveUp, onMoveDown, onActions, onDelete, onRename, onDuplicate, onArchive }) {
-    const pageCount = project.pages?.length || 0;
+    // A project still loading is its index summary: pageCount, no pages (and
+    // none at all from an entry an older build wrote).
+    const pageCount = project.pages ? project.pages.length : project.pageCount;
     const [ctxMenu, setCtxMenu] = useState(null);
     const sideBtn = enabled => ({
       color: enabled ? '#7A7066' : '#D3CCBE', background: `${fbAlpha('cover', 0.08)}`,
@@ -4449,7 +4718,7 @@
                     #{project.jobNumber}
                   </span>
                 )}
-                <span className="text-xs text-fb-muted">{pageCount} page{pageCount !== 1 ? 's' : ''}</span>
+                {pageCount != null && <span className="text-xs text-fb-muted">{pageCount} page{pageCount !== 1 ? 's' : ''}</span>}
                 <span className="text-xs text-fb-muted ml-auto font-data">
                   {project.lock
                     ? `Locked by ${project.lock.by} ${new Date(project.lock.at).toLocaleDateString('en-CA')}`
@@ -9857,7 +10126,8 @@
     const trapRef = useRef(null);
     useFocusTrap(trapRef, true, onClose);
     const [by, setBy] = useState(() => localStorage.getItem('fb_lastExportName') || '');
-    const allProjects = DB.getProjects()
+    const ready = useAllProjectsReady();
+    const allProjects = (ready === true ? DB.getProjects() : [])
       .filter(p => p.id !== fromProjectId && !p.archived)
       .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     const meta = TYPE_META[page.type] || TYPE_META.data;
@@ -9887,7 +10157,7 @@
               style={{ background: '#f8f8f8' }} />
           </div>
           {allProjects.length === 0 ? (
-            <p className="text-fb-muted text-sm text-center py-6">No other projects found.</p>
+            <p className="text-fb-muted text-sm text-center py-6">{allProjectsNote(ready, 'No other projects found.')}</p>
           ) : (
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {allProjects.map(p => (
@@ -10060,7 +10330,8 @@
     const [selected, setSelected]     = useState(new Set());
     const [by, setBy]                 = useState(() => localStorage.getItem('fb_lastExportName') || '');
 
-    const allProjects = DB.getProjects()
+    const ready = useAllProjectsReady();
+    const allProjects = (ready === true ? DB.getProjects() : [])
       .filter(p => p.id !== toProjectId)
       .sort((a, b) => (!!a.archived - !!b.archived) || ((b.updatedAt || 0) - (a.updatedAt || 0)));
 
@@ -10090,7 +10361,7 @@
               <h2 className="text-xl font-bold text-fb-text mb-1">Copy from Project</h2>
               <p className="text-fb-muted text-sm mb-4">Pick a project to copy pages from:</p>
               {allProjects.length === 0 ? (
-                <p className="text-fb-muted text-sm text-center py-6">No other projects found.</p>
+                <p className="text-fb-muted text-sm text-center py-6">{allProjectsNote(ready, 'No other projects found.')}</p>
               ) : (
                 <div className="space-y-2 max-h-80 overflow-y-auto">
                   {allProjects.map(p => (
@@ -11817,7 +12088,7 @@
       if (toRemove && toRemove.photoRef) {
         // Non-blocking best-effort cleanup if the ref appears nowhere else.
         // Safe because pruneOrphans will catch anything we miss.
-        queueMicrotask(() => {
+        DB.allReady().then(() => {
           try {
             const projects = DB.getProjects();
             const stillReferenced = projects.some(pr =>
@@ -11825,7 +12096,7 @@
                 (pg.photos || []).some(ph => ph.photoRef === toRemove.photoRef)));
             if (!stillReferenced) photoDB.del(toRemove.photoRef).catch(() => {});
           } catch {}
-        });
+        }, () => {});
       }
     }
 
@@ -12784,7 +13055,8 @@
     const scrollRef = useRef(null);
     const toast = useToast();
 
-    const projects = DB.getProjects();
+    const ready = useAllProjectsReady();
+    const projects = ready === true ? DB.getProjects() : [];
     const group = groups.find(g => g.id === activeGroup) || null;
     const today = todayLocalISO();
     const data = group ? fbSchedule.portfolioFor(projects, group.projectIds, today) : fbSchedule.portfolio(projects, today);
@@ -12835,14 +13107,16 @@
               className={'px-3 py-2 rounded-lg text-sm border ' + (group?.id === g.id ? 'text-white font-semibold border-transparent' : 'text-fb-ink border-fb-border bg-fb-page-alt')}
               style={group?.id === g.id ? { background: FBC.cover } : undefined}>{g.name}</button>
           ))}
-          <button onClick={() => setShowGroups(true)} className="px-3 py-2 rounded-lg text-sm font-semibold text-fb-ink border border-fb-border bg-fb-page-alt active:opacity-80">
+          <button onClick={() => setShowGroups(true)} disabled={ready !== true} className="px-3 py-2 rounded-lg text-sm font-semibold text-fb-ink border border-fb-border bg-fb-page-alt active:opacity-80 disabled:opacity-40">
             {groups.length ? 'Edit groups' : 'Make a group'}
           </button>
           <span className="flex-1" />
           <SchZoomControls zoom={zoom} setZoom={setZoom} onToday={scrollToday} />
         </div>
 
-        {data.rows.length === 0 ? (
+        {ready !== true ? (
+          <div className="px-4 py-10 text-center text-fb-ink-muted text-sm">{allProjectsNote(ready, '')}</div>
+        ) : data.rows.length === 0 ? (
           <div className="px-4 py-10 text-center text-fb-ink-muted text-sm">
             <p className="font-semibold text-fb-ink mb-1">{group ? 'Nothing in this group yet' : 'No survey dates yet'}</p>
             {group ? 'Open Edit groups and tick the projects to add. Their survey dates will show here.'
@@ -12896,7 +13170,7 @@
           </div>
         )}
 
-        {showGroups && (
+        {showGroups && ready === true && (
           <GroupsSheet groups={groups} projects={projects} onSave={saveGroupList} onClose={() => setShowGroups(false)} />
         )}
       </div>
@@ -18736,6 +19010,21 @@
   // APP ROOT
   // ─────────────────────────────────────────────────────────────────────────────
 
+  // A project route renders once that project is loaded. At boot the reopened
+  // project is read before the first render; one opened from Home while the
+  // others are still loading is read here, ahead of the queue.
+  function ProjectGate({ projectId, children }) {
+    const [ok, setOk] = useState(() => DB.isLoaded(projectId));
+    useEffect(() => {
+      if (ok) return;
+      let live = true;
+      DB.ensureProject(projectId).catch(() => {}).then(() => { if (live) setOk(true); });
+      return () => { live = false; };
+    }, [projectId, ok]);
+    if (!ok) return <div className="flex-1 flex items-center justify-center bg-fb-dark text-fb-pale text-sm">Opening project…</div>;
+    return children;
+  }
+
   function App() {
     const hash  = useRouter();
     const route = parseRoute(hash);
@@ -18743,7 +19032,8 @@
     const [installPrompt, setInstallPrompt] = useState(null);
     const [pendingFileImport, setPendingFileImport] = useState(null);
 
-    useEffect(() => { fbBootLog('first render', route.view); }, []);
+    // First render is up: now read the other projects in the background.
+    useEffect(() => { fbBootLog('first render', route.view); DB._loadRest(); }, []);
     useEffect(() => {
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('./sw.js')
@@ -18753,6 +19043,9 @@
       // leftovers from project/page deletes and failed migrations. Safe to
       // run here because it only deletes entries not referenced anywhere.
       (async () => {
+        // Only once every project is loaded — a partial list would make the
+        // media of the others look orphaned.
+        try { await DB.allReady(); } catch { return; }
         try {
           const n = await photoDB.pruneOrphans(DB.getProjects());
           if (n > 0) console.log(`[photoDB] pruned ${n} orphan${n === 1 ? '' : 's'}`);
@@ -18813,10 +19106,10 @@
         {/* App content */}
         <div className="notebook-inner">
           {route.view === 'home'    && <HomePage installPrompt={installPrompt} onInstalled={() => setInstallPrompt(null)} />}
-          {route.view === 'project' && <ProjectView projectId={route.projectId} />}
-          {route.view === 'page'    && <PageView    projectId={route.projectId} pageId={route.pageId} />}
+          {route.view === 'project' && <ProjectGate key={route.projectId} projectId={route.projectId}><ProjectView projectId={route.projectId} /></ProjectGate>}
+          {route.view === 'page'    && <ProjectGate key={route.projectId} projectId={route.projectId}><PageView    projectId={route.projectId} pageId={route.pageId} /></ProjectGate>}
           {route.view === 'timeline' && <TimelinePage />}
-          {route.view === 'map'     && <MapErrorBoundary key={route.projectId} projectId={route.projectId}><MapView projectId={route.projectId} mapPageId={route.mapPageId} /></MapErrorBoundary>}
+          {route.view === 'map'     && <ProjectGate key={route.projectId} projectId={route.projectId}><MapErrorBoundary key={route.projectId} projectId={route.projectId}><MapView projectId={route.projectId} mapPageId={route.mapPageId} /></MapErrorBoundary></ProjectGate>}
         </div>
         {/* App-level: PWA file-open import modal */}
         {pendingFileImport && (
