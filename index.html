@@ -807,7 +807,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.205';
+  const APP_VERSION = '1.206';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -5188,6 +5188,149 @@
     }
   }
 
+  // Body of a tracker page: the same rows as the screen (survey days from the
+  // title pages, then the page's own tasks) as a task table with a Gantt beside
+  // it. Runs on to new sheets, with the header and scale repeated. Black, white
+  // and grey only.
+  function _pdfTrackerBody(pdf, page, proj, { W, H, margin, contentY }) {
+    const today = todayLocalISO();
+    const own = Array.isArray(page.schedule?.tasks) ? page.schedule.tasks : [];
+    const all = [...fbSchedule.surveyTasks(proj?.pages || [], today), ...own];
+    const R = fbSchedule.rows(all, today);
+    const todayN = fbSchedule.isoToDay(today);
+    const cols = [
+      { key: 'wbs',  label: 'WBS',    w: 11 },
+      { key: 'name', label: 'Task',   w: 50 },
+      { key: 'st',   label: 'Start',  w: 15 },
+      { key: 'fi',   label: 'Finish', w: 15 },
+      { key: 'days', label: 'Days',   w: 9, right: true },
+      { key: 'pct',  label: '%',      w: 9, right: true },
+    ];
+    const tableW = cols.reduce((a, c) => a + c.w, 0);
+    const gx0 = margin + tableW + 2, gx1 = W - margin;
+    const rowH = 6, headH = 10, bottom = H - margin - 14;
+
+    // Date range: the Monday on or before the first day to just past the last
+    const ss = R.map(r => r.s).filter(v => v != null), ff = R.map(r => r.f).filter(v => v != null);
+    let rs = ss.length ? Math.min(...ss) : todayN;
+    const re = (ff.length ? Math.max(...ff) : todayN + 13) + 1;
+    while (new Date(rs * 864e5).getUTCDay() !== 1) rs--;
+    const mm = (gx1 - gx0) / (re - rs + 1);
+    const X = n => gx0 + (n - rs) * mm;
+    const dShort = n => fbSchedule.dayToIso(n).slice(5);
+
+    const head = (y0) => {
+      pdf.setFillColor(236, 236, 236);
+      pdf.rect(margin, y0, W - 2 * margin, headH, 'F');
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.setTextColor(60, 60, 60);
+      let x = margin;
+      cols.forEach(c => {
+        pdf.text(c.label, c.right ? x + c.w - 1.2 : x + 1.2, y0 + 7.5, c.right ? { align: 'right' } : undefined);
+        x += c.w;
+      });
+      // month labels on the top half, week start dates below
+      pdf.setFontSize(6.5);
+      for (let n = rs; n <= re;) {
+        const d = new Date(n * 864e5);
+        const nm = Math.round(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) / 864e5);
+        if (Math.min(nm, re + 1) - n >= 6 || n === rs) {
+          pdf.setFont('helvetica', 'bold');
+          pdf.text(d.toLocaleString('en-CA', { month: 'short', year: 'numeric', timeZone: 'UTC' }), X(n) + 0.8, y0 + 3.8);
+        }
+        n = nm;
+      }
+      pdf.setFont('helvetica', 'normal'); pdf.setTextColor(90, 90, 90);
+      for (let n = rs; n <= re; n += 7) {
+        if (X(n) + 6 > gx1) break;
+        pdf.text(String(new Date(n * 864e5).getUTCDate()), X(n) + 0.8, y0 + 8.3);
+      }
+      return y0 + headH;
+    };
+    const grid = (y0, y1) => {
+      pdf.setLineWidth(0.15); pdf.setDrawColor(215, 215, 215);
+      for (let n = rs; n <= re + 1; n += 7) pdf.line(X(n), y0, X(n), y1);
+      if (todayN >= rs && todayN <= re) {
+        pdf.setDrawColor(30, 30, 30); pdf.setLineWidth(0.3);
+        pdf.line(X(todayN) + mm / 2, y0, X(todayN) + mm / 2, y1);
+      }
+      pdf.setDrawColor(180, 180, 180); pdf.setLineWidth(0.2);
+      pdf.line(gx0 - 1, y0 - headH, gx0 - 1, y1);
+    };
+
+    let y = head(contentY + 2), sheetTop = y;
+    if (!R.length) {
+      for (let k = 0; k < 6; k++) {
+        pdf.setDrawColor(215, 215, 215); pdf.setLineWidth(0.15);
+        pdf.line(margin, y + rowH, W - margin, y + rowH);
+        y += rowH;
+      }
+      grid(sheetTop, y);
+      return;
+    }
+    R.forEach((r, i) => {
+      if (y + rowH > bottom) {
+        grid(sheetTop, y);
+        pdf.addPage();
+        y = head(margin + 4); sheetTop = y;
+      }
+      const t = all[r.idx];
+      const cy = y + rowH / 2;
+      const cells = {
+        wbs: r.wbs,
+        name: _pdfPlain(t.name || 'Untitled task'),
+        st: r.s != null ? dShort(r.s) : '',
+        fi: r.f != null && !r.ms ? dShort(r.f) : '',
+        days: r.ms ? '' : String(r.days),
+        pct: r.pct + '',
+      };
+      pdf.setTextColor(28, 28, 28);
+      let x = margin;
+      cols.forEach(c => {
+        pdf.setFont('helvetica', c.key === 'name' && r.isSum ? 'bold' : 'normal');
+        pdf.setFontSize(c.key === 'name' ? 7.5 : 7);
+        let v = cells[c.key];
+        const ind = c.key === 'name' ? (r.lvl - 1) * 2.5 : 0;
+        const room = c.w - 2.4 - ind;
+        if (pdf.getTextWidth(v) > room) {
+          while (v.length > 1 && pdf.getTextWidth(v + '..') > room) v = v.slice(0, -1);
+          v += '..';
+        }
+        pdf.text(v, c.right ? x + c.w - 1.2 : x + 1.2 + ind, cy + 1.2, c.right ? { align: 'right' } : undefined);
+        x += c.w;
+      });
+      // bar
+      if (r.s != null) {
+        if (r.isSum) {
+          const x0 = X(r.s), x1 = X(r.f + 1);
+          pdf.setFillColor(30, 30, 30);
+          pdf.rect(x0, cy - 0.8, x1 - x0, 1.2, 'F');
+          pdf.triangle(x0, cy + 0.4, x0 + 1.2, cy + 0.4, x0, cy + 1.8, 'F');
+          pdf.triangle(x1, cy + 0.4, x1 - 1.2, cy + 0.4, x1, cy + 1.8, 'F');
+        } else if (r.ms) {
+          const mx = X(r.s) + mm / 2, d = 1.8;
+          const done = r.pct >= 100;
+          pdf.setDrawColor(30, 30, 30); pdf.setLineWidth(0.25);
+          pdf.setFillColor(done ? 30 : 255, done ? 30 : 255, done ? 30 : 255);
+          pdf.lines([[d, d], [-d, d], [-d, -d]], mx, cy - d, [1, 1], 'FD', true);
+        } else {
+          const x0 = X(r.s) + 0.2, w = Math.max(0.8, X(r.f + 1) - X(r.s) - 0.4), bh = 3;
+          pdf.setDrawColor(30, 30, 30); pdf.setLineWidth(0.25);
+          pdf.setFillColor(255, 255, 255);
+          pdf.rect(x0, cy - bh / 2, w, bh, 'FD');
+          if (r.pct > 0) {
+            pdf.setFillColor(r.pct >= 100 ? 60 : 150, r.pct >= 100 ? 60 : 150, r.pct >= 100 ? 60 : 150);
+            pdf.rect(x0, cy - bh / 2, w * r.pct / 100, bh, 'F');
+            pdf.rect(x0, cy - bh / 2, w, bh, 'S');
+          }
+        }
+      }
+      pdf.setDrawColor(225, 225, 225); pdf.setLineWidth(0.15);
+      pdf.line(margin, y + rowH, W - margin, y + rowH);
+      y += rowH;
+    });
+    grid(sheetTop, y);
+  }
+
   function _pdfPageHeader(pdf, page, meta, W, H, margin, F) {
     const _F = F || { hand: 'helvetica', handSt: 'bold', mono: 'courier', monoSt: 'normal' };
 
@@ -6330,6 +6473,11 @@
           const contentY = _pdfPageHeader(pdf, { ...page, title: displayTitle }, meta, W, H, margin, F);
           await _pdfSiteBody(pdf, page, { W, margin, F, contentY });
 
+        } else if (page.type === 'tracker') {
+          // ── TRACKER PAGE — task table and Gantt, runs on to new sheets ──
+          const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
+          _pdfTrackerBody(pdf, page, proj, { W, H, margin, contentY });
+
         } else if (page.type === 'notes') {
           // ── NOTES PAGE ──────────────────────────────────────────────────────────
           const contentY = _pdfPageHeader(pdf, page, meta, W, H, margin, F);
@@ -6653,6 +6801,8 @@
         await _pdfGnssBody(pdf, page, proj, { W, H, margin, F, meta, contentY });
       } else if (page.type === 'obstructions') {
         await _pdfSiteBody(pdf, page, { W, margin, F, contentY });
+      } else if (page.type === 'tracker') {
+        _pdfTrackerBody(pdf, page, proj, { W, H, margin, contentY });
       } else if (page.type === 'notes') {
         _pdfNotesBody(pdf, page, { W, H, margin, contentY });
       } else {
@@ -10256,7 +10406,78 @@
   // maxDim 1600 + quality 0.65 = good fieldbook quality at ~150-300KB per photo.
   // Used by PhotoPage and exposed via window._fb so sketch.js can call it.
   // ─────────────────────────────────────────────────────────────────────────────
-  function compressImage(file, maxDim = 1400, quality = 0.6) {
+  // Pixel size of a JPEG as it will show (EXIF orientation 5–8 swap the sides),
+  // read from the header so the picture itself is never decoded. null if unreadable.
+  async function jpegDisplaySize(file) {
+    try {
+      const b = new Uint8Array(await file.slice(0, 512 * 1024).arrayBuffer());
+      if (b[0] !== 0xFF || b[1] !== 0xD8) return null;
+      let i = 2, orient = 1, w = 0, h = 0;
+      while (i + 9 < b.length && b[i] === 0xFF) {
+        const mk = b[i + 1], len = (b[i + 2] << 8) | b[i + 3];
+        if (mk === 0xE1 && b[i + 4] === 0x45 && b[i + 5] === 0x78) {          // 'Exif'
+          const t = i + 10, le = b[t] === 0x49;
+          const u16 = o => le ? b[o] | (b[o + 1] << 8) : (b[o] << 8) | b[o + 1];
+          const u32 = o => le ? (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0
+                              : ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
+          const ifd = t + u32(t + 4), n = u16(ifd);
+          for (let k = 0; k < n; k++) {
+            const e = ifd + 2 + k * 12;
+            if (u16(e) === 0x0112) { orient = u16(e + 8); break; }
+          }
+        } else if (mk >= 0xC0 && mk <= 0xCF && mk !== 0xC4 && mk !== 0xC8 && mk !== 0xCC) {
+          h = (b[i + 5] << 8) | b[i + 6];
+          w = (b[i + 7] << 8) | b[i + 8];
+          break;
+        }
+        i += 2 + len;
+      }
+      if (!w || !h) return null;
+      return orient >= 5 && orient <= 8 ? { w: h, h: w } : { w, h };
+    } catch { return null; }
+  }
+
+  // Draw a decoded picture (image, bitmap or video frame) at most maxDim on its
+  // long side and return a JPEG data URL.
+  function drawToJpeg(src, sw, sh, maxDim, quality) {
+    let w = sw, h = sh;
+    if (w > maxDim || h > maxDim) {
+      if (w >= h) { h = Math.round(h * maxDim / w); w = maxDim; }
+      else        { w = Math.round(w * maxDim / h); h = maxDim; }
+    }
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(src, 0, 0, w, h);
+    const dataUrl = c.toDataURL('image/jpeg', quality);
+    c.width = 0; c.height = 0;
+    return dataUrl;
+  }
+
+  // A 50 MP phone photo is ~200 MB once decoded, which is enough to get the tab
+  // killed. Decode it already shrunk (createImageBitmap with a resize) when the
+  // browser can; check the shape came out right, else take the full decode below.
+  async function compressImage(file, maxDim = 1400, quality = 0.6) {
+    if (typeof createImageBitmap === 'function') {
+      const size = await jpegDisplaySize(file);
+      if (size && (size.w > maxDim || size.h > maxDim)) {
+        let bmp = null;
+        try {
+          const k = maxDim / Math.max(size.w, size.h);
+          const rw = Math.round(size.w * k), rh = Math.round(size.h * k);
+          bmp = await createImageBitmap(file, { imageOrientation: 'from-image', resizeWidth: rw, resizeHeight: rh, resizeQuality: 'high' });
+          if (Math.abs(bmp.width / bmp.height - size.w / size.h) < 0.02) {
+            const url = drawToJpeg(bmp, bmp.width, bmp.height, maxDim, quality);
+            bmp.close();
+            return url;
+          }
+        } catch (e) { console.warn('[compressImage] resized decode failed, using full decode', e); }
+        if (bmp) try { bmp.close(); } catch {}
+      }
+    }
+    return compressImageFull(file, maxDim, quality);
+  }
+
+  function compressImageFull(file, maxDim, quality) {
     return new Promise((resolve, reject) => {
       const url = URL.createObjectURL(file);
       const img = new Image();
@@ -10708,6 +10929,97 @@
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }
 
+  const CAM_PENDING_KEY = 'fb_cam_pending';
+
+  // In-app camera. The phone's own camera app sends the browser to the
+  // background, and Android may kill the tab there, so the picture never
+  // arrives (green boot screen, empty Photo page). This keeps the app in front:
+  // a live rear-camera view, a shutter, and each shot handed to onShot as a
+  // JPEG data URL (≤ maxDim). Stays open for the next shot until Done.
+  function CameraSheet({ onShot, onClose, onUsePhoneCamera, maxDim = 1400, quality = 0.6 }) {
+    const videoRef = useRef(null), streamRef = useRef(null);
+    const [state, setState] = useState('starting');   // 'starting' | 'live' | 'error'
+    const [err, setErr] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [count, setCount] = useState(0);
+    const [flash, setFlash] = useState(false);
+    const trapRef = useRef(null);
+    useFocusTrap(trapRef, true, onClose);
+
+    useEffect(() => {
+      let dead = false;
+      (async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } },
+          });
+          if (dead) { stream.getTracks().forEach(t => t.stop()); return; }
+          streamRef.current = stream;
+          const v = videoRef.current;
+          if (v) { v.srcObject = stream; try { await v.play(); } catch {} }
+          setState('live');
+        } catch (e) {
+          if (dead) return;
+          setErr((e && (e.name === 'NotAllowedError' || e.name === 'SecurityError'))
+            ? 'Camera permission denied. Allow the camera for this site in the browser settings.'
+            : e && e.name === 'NotFoundError' ? 'No camera found on this device.'
+            : 'Could not start the camera.');
+          setState('error');
+        }
+      })();
+      return () => {
+        dead = true;
+        if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+      };
+    }, []);
+
+    async function shoot() {
+      const v = videoRef.current;
+      if (busy || state !== 'live' || !v || !v.videoWidth) return;
+      setBusy(true);
+      setFlash(true); setTimeout(() => setFlash(false), 120);
+      try {
+        const url = drawToJpeg(v, v.videoWidth, v.videoHeight, maxDim, quality);
+        if (await onShot(url) !== false) setCount(c => c + 1);
+      } catch (e) {
+        console.error('[CameraSheet] shot failed', e);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    return (
+      <div ref={trapRef} className="fixed inset-0 z-50 flex flex-col bg-black" data-camera-sheet>
+        <div className="flex items-center gap-2 px-3 py-2 bg-fb-cover text-white">
+          <button onClick={onClose} className="p-2 rounded-xl active:opacity-70" aria-label="Close camera"><Ico.Close /></button>
+          <span className="flex-1 font-semibold">Camera</span>
+          {count > 0 && <span className="text-sm font-data text-fb-accent-pale" data-camera-count>{count} saved</span>}
+        </div>
+        <div className="relative flex-1 min-h-0">
+          <video ref={videoRef} playsInline muted autoPlay className="absolute inset-0 w-full h-full object-contain" />
+          {flash && <div className="absolute inset-0 bg-fb-field opacity-60" />}
+          {state === 'error' && (
+            <div className="absolute inset-0 flex items-center justify-center p-6">
+              <div className="modal-sheet" style={{ position: 'static', maxWidth: 360 }}>
+                <Notice tone="error" className="mb-3">{err}</Notice>
+                <button onClick={onUsePhoneCamera} className="w-full py-3.5 rounded-xl text-base font-semibold text-white bg-fb-accent active:opacity-80">
+                  Use phone camera app
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-between px-4 py-4 bg-fb-cover">
+          <button onClick={onUsePhoneCamera} className="min-h-[44px] px-3 rounded-lg text-sm text-white/80 border border-white/25 active:opacity-70">Phone camera app</button>
+          <button onClick={shoot} disabled={busy || state !== 'live'} aria-label="Take photo" data-camera-shutter
+            className="w-[72px] h-[72px] rounded-full border-4 border-white bg-white/20 active:bg-white/60 disabled:opacity-40" />
+          <button onClick={onClose} className="min-h-[44px] px-4 rounded-lg text-sm font-semibold text-white bg-fb-accent active:opacity-80">Done</button>
+        </div>
+      </div>
+    );
+  }
+
   const VOICE_MAX_SECS = 300;   // hard stop so a forgotten recorder can't fill storage
   function pickAudioMime() {
     if (typeof MediaRecorder === 'undefined') return '';
@@ -11067,6 +11379,7 @@
     const [openPhotos, setOpenPhotos] = useState({});   // photo id -> true while its details are showing
     const [uploading, setUploading] = useState(false);
     const [camKey, setCamKey] = useState(0);
+    const [camOpen, setCamOpen] = useState(false);   // in-app camera sheet
     const fileRef = useRef(null);
     const camRef  = useRef(null);
     const toast   = useToast();
@@ -11189,6 +11502,75 @@
       return null;
     }
 
+    // Save one picture (a JPEG data URL) as a new photo on this page. A photo
+    // taken now gets the phone's fix when geotagging is on; `exifP` is the GPS
+    // read from an uploaded file. Returns 'ok' or 'quota'; throws on failure.
+    async function addPhotoData(dataUrl, { exifP = null, fromCamera = false } = {}) {
+      const fixP = (fromCamera && geotag) ? getQuickFix() : null;
+      const ref = photoDB.newRef();
+      await photoDB.put(ref, dataUrl);
+      const exifGeo = exifP ? await exifP : null;
+      const id = 'ph_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+      const next = [...photosRef.current, {
+        id,
+        photoRef: ref,
+        note: '',
+        ...(exifGeo && !fixP ? { geo: exifGeo } : {}),
+      }];
+      if (!savePhotos(next)) {
+        // The page save failed (storage full), so the ref would be orphaned.
+        try { await photoDB.del(ref); } catch {}
+        return 'quota';
+      }
+      setUrlMap(m => ({ ...m, [ref]: dataUrl }));
+      if (fixP) locatePhoto(id, fixP, exifGeo);
+      else adoptPoint('photo', id);
+      return 'ok';
+    }
+
+    // A shot from the in-app camera. false tells the sheet it wasn't saved.
+    async function onCameraShot(dataUrl) {
+      try {
+        if (await addPhotoData(dataUrl, { fromCamera: true }) === 'quota') { setCamOpen(false); return false; }
+        return true;
+      } catch (err) {
+        console.error('Camera photo save failed:', err);
+        toast.error('Photo not saved.');
+        return false;
+      }
+    }
+
+    // The phone's own camera app. Mark the trip so that if Android kills the tab
+    // while it's away, the reloaded page can say what happened.
+    function openPhoneCamera() {
+      setCamOpen(false);
+      try { sessionStorage.setItem(CAM_PENDING_KEY, JSON.stringify({ pageId: page.id, ts: Date.now() })); } catch {}
+      camRef.current?.click();
+    }
+    function openCamera() {
+      if (uploading) return;
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) setCamOpen(true);
+      else openPhoneCamera();
+    }
+    useEffect(() => {
+      try {
+        const raw = sessionStorage.getItem(CAM_PENDING_KEY);
+        if (raw) {
+          sessionStorage.removeItem(CAM_PENDING_KEY);
+          const p = JSON.parse(raw);
+          if (p && p.pageId === page.id && Date.now() - p.ts < 5 * 60 * 1000) {
+            toast.error('The phone closed Field Book while the camera app was open, so the photo was lost. Use the in-app camera.');
+          }
+        }
+      } catch {}
+      // Back from the camera app with the tab still alive: the trip is over.
+      const onVis = () => {
+        if (document.visibilityState === 'visible') setTimeout(() => { try { sessionStorage.removeItem(CAM_PENDING_KEY); } catch {} }, 1500);
+      };
+      document.addEventListener('visibilitychange', onVis);
+      return () => document.removeEventListener('visibilitychange', onVis);
+    }, [page.id]);
+
     async function handleFileInput(e, fromCamera) {
       const files = Array.from(e.target.files || []);
       e.target.value = '';
@@ -11208,30 +11590,10 @@
           // photo taken now uses the phone's own fix (EXIF as a fallback); it
           // arrives after the photo is saved so the camera never waits on GPS.
           const exifP = (fromCamera && !geotag) ? null : readExifGeo(f);
-          const fixP  = (fromCamera && geotag) ? getQuickFix() : null;
           const dataUrl = await compressImage(f);
-          const ref = photoDB.newRef();
-          await photoDB.put(ref, dataUrl);
-          const exifGeo = exifP ? await exifP : null;
-          const id = 'ph_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-          const next = [...photosRef.current, {
-            id,
-            photoRef: ref,
-            note: '',
-            ...(exifGeo && !fixP ? { geo: exifGeo } : {}),
-          }];
-          if (savePhotos(next)) {
-            setUrlMap(m => ({ ...m, [ref]: dataUrl }));
-            savedCount++;
-            if (fixP) locatePhoto(id, fixP, exifGeo);
-            else adoptPoint('photo', id);
-          } else {
-            // localStorage quota hit — the page-level save failed, so the ref
-            // would be orphaned. Clean up the IDB entry we just wrote.
-            try { await photoDB.del(ref); } catch {}
-            quotaHit = true;
-            break;
-          }
+          const res = await addPhotoData(dataUrl, { exifP, fromCamera });
+          if (res === 'quota') { quotaHit = true; break; }
+          savedCount++;
         } catch (err) {
           failedCount++;
           console.error('Photo import failed:', err);
@@ -11441,10 +11803,11 @@
                onChange={handleFileInput} />
         <input key={camKey} ref={camRef} type="file" accept="image/*" capture="environment"
                style={{ position: 'fixed', top: -9999, left: -9999, width: 1, height: 1, opacity: 0 }}
-               onChange={e => { handleFileInput(e, true); setCamKey(k => k + 1); }} />
+               onChange={e => { try { sessionStorage.removeItem(CAM_PENDING_KEY); } catch {} handleFileInput(e, true); setCamKey(k => k + 1); }} />
+        {camOpen && <CameraSheet onShot={onCameraShot} onClose={() => setCamOpen(false)} onUsePhoneCamera={openPhoneCamera} />}
         {/* Add buttons */}
         <div style={{ display: 'flex', gap: 8, padding: '12px 16px 8px' }}>
-          <button onClick={() => !uploading && camRef.current?.click()}
+          <button onClick={openCamera} data-photo-camera
             disabled={uploading}
             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                      padding: '12px 0', borderRadius: 14, background: FBC.cover, color: FBC.field,
@@ -12384,7 +12747,8 @@
 
     const projects = DB.getProjects();
     const group = groups.find(g => g.id === activeGroup) || null;
-    const data = group ? fbSchedule.portfolioFor(projects, group.projectIds) : fbSchedule.portfolio(projects);
+    const today = todayLocalISO();
+    const data = group ? fbSchedule.portfolioFor(projects, group.projectIds, today) : fbSchedule.portfolio(projects, today);
     const R0 = timelineRange(data);
     const pxd = zoom === 'month' ? 5 : TL_PX;
     const leftW = 150;
@@ -12470,7 +12834,7 @@
                   <div className="sch-left" style={{ width: leftW, height: 46 }}>
                     <div className="min-w-0 w-full">
                       <div className="sch-name">{r.name || 'Untitled project'}</div>
-                      <div className="sch-wbs">{r.jobNumber ? '#' + r.jobNumber : ''}{r.status !== 'live' ? (r.jobNumber ? ' · ' : '') + r.status : ''}</div>
+                      <div className="sch-wbs">{[r.jobNumber ? '#' + r.jobNumber : '', r.status !== 'live' ? r.status : '', r.ms.length ? r.ms.length + ' milestone' + (r.ms.length === 1 ? '' : 's') : ''].filter(Boolean).join(' · ')}</div>
                     </div>
                   </div>
                   <div className="sch-tl" style={{ width: W, height: 46, ...schGridBg(pxd, zoom) }}>
@@ -12479,6 +12843,12 @@
                       <div key={d.day} className={'sch-bar ' + timelineBlockClass(r.status, d.day, R.todayN)}
                         title={`${d.iso}${d.count > 1 ? ' · ' + d.count + ' title pages' : ''}`}
                         style={{ left: X(d.day) + (pxd > 8 ? 2 : 0), width: Math.max(3, pxd - (pxd > 8 ? 4 : 1)), top: 9, height: 22 }} />
+                    ))}
+                    {r.ms.map((m, i) => (
+                      <div key={'ms' + i} data-timeline-ms={m.name}
+                        className={'sch-ms ' + (m.done ? 'sch-done' : m.day < R.todayN ? 'sch-late' : '')}
+                        title={`${m.name} · ${m.iso}`}
+                        style={{ left: X(m.day) + pxd / 2 - 7, top: 13 }} />
                     ))}
                   </div>
                 </div>
@@ -12516,6 +12886,11 @@
       const dtN = n => new Date(n * 864e5).toLocaleString('en-CA', { month: 'short', day: 'numeric', timeZone: 'UTC' });
       const todayIso = todayLocalISO();
       const dateLine = `${dtN(data.minDay)} to ${dtN(Math.max(data.maxDay, R.todayN))}`;
+      // Milestone: a diamond on the row, its name beside it
+      const diamond = (cx, cy, r, filled) => {
+        pdf.setDrawColor(30, 30, 30); pdf.setFillColor(filled ? 30 : 255, filled ? 30 : 255, filled ? 30 : 255); pdf.setLineWidth(0.25);
+        pdf.lines([[r, r], [-r, r], [-r, -r]], cx, cy - r, [1, 1], filled ? 'FD' : 'S', true);
+      };
       const heading = _pdfPlain(title || 'Survey Timeline');
 
       for (let pg = 0; pg < pages; pg++) {
@@ -12570,6 +12945,16 @@
               pdf.setFillColor(grey, grey, grey); pdf.setDrawColor(grey, grey, grey);
               pdf.rect(x, y + 2.5, w, h, 'F');
             }
+          });
+          // milestones
+          r.ms.forEach(ms => {
+            const cx = X(ms.day) + mm / 2;
+            diamond(cx, y + 4.5, 2.2, ms.done);
+            pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.5); pdf.setTextColor(60, 60, 60);
+            let label = _pdfPlain(ms.name);
+            const room = Math.max(8, x1 - cx - 3);
+            while (label.length > 1 && pdf.getTextWidth(label) > Math.min(room, 40)) label = label.slice(0, -1);
+            pdf.text(label, cx + 2.8, y + 8.3);
           });
         });
 

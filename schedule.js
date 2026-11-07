@@ -161,8 +161,25 @@
    * with a surveyDate; each survey day gets one block (count = title pages that
    * day). The span runs from the first to the last survey day. Projects with no
    * survey dates are left out. Status: 'locked' | 'archived' | 'live'.
+   * Milestones on the project's tracker pages come along as `ms`
+   * [{ day, iso, name, done }]; they widen the span, and a project with
+   * milestones but no survey dates still gets a row.
    */
-  function portfolio(projects) {
+  function trackerMilestones(pages, today) {
+    const out = [];
+    for (const pg of pages || []) {
+      if (pg.type !== 'tracker') continue;
+      const tasks = (pg.schedule && Array.isArray(pg.schedule.tasks)) ? pg.schedule.tasks : [];
+      if (!tasks.length) continue;
+      rows(tasks, today).forEach((r, i) => {
+        if (!r.ms || r.isSum || r.s == null || !/^\d{4}-\d{2}-\d{2}$/.test(tasks[i].start || '')) return;
+        out.push({ day: r.s, iso: dayToIso(r.s), name: tasks[i].name || 'Milestone', done: r.pct >= 100 });
+      });
+    }
+    return out.sort((a, b) => a.day - b.day);
+  }
+
+  function portfolio(projects, today) {
     const rows = [];
     for (const p of projects || []) {
       const byDay = new Map();
@@ -171,17 +188,20 @@
         const n = isoToDay(pg.surveyDate);
         byDay.set(n, (byDay.get(n) || 0) + 1);
       }
-      if (!byDay.size) continue;
+      const ms = trackerMilestones(p.pages, today);
+      if (!byDay.size && !ms.length) continue;
       const days = [...byDay.keys()].sort((a, b) => a - b)
         .map(n => ({ day: n, iso: dayToIso(n), count: byDay.get(n) }));
+      const all = [...days.map(d => d.day), ...ms.map(m => m.day)];
       rows.push({
         projectId: p.id,
         name: p.name || '',
         jobNumber: p.jobNumber || '',
         status: p.lock ? 'locked' : p.archived ? 'archived' : 'live',
         days,
-        s: days[0].day,
-        f: days[days.length - 1].day,
+        ms,
+        s: Math.min(...all),
+        f: Math.max(...all),
       });
     }
     rows.sort((a, b) => a.s - b.s || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -226,9 +246,9 @@
    * Only the listed projects count, in portfolio order. Ids that no longer
    * match a project (deleted here) are ignored, so a group never breaks.
    */
-  function portfolioFor(projects, projectIds) {
+  function portfolioFor(projects, projectIds, today) {
     const want = new Set(projectIds || []);
-    return portfolio((projects || []).filter(p => want.has(p.id)));
+    return portfolio((projects || []).filter(p => want.has(p.id)), today);
   }
 
   const api = {
