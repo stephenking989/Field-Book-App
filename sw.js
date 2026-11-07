@@ -4,7 +4,7 @@
 // Bump this string every time you deploy new code.
 // The activate handler deletes any cache with a different name, forcing
 // browsers and installed PWAs to discard stale files and re-fetch everything.
-const CACHE_NAME = 'fieldbook-v1.208';
+const CACHE_NAME = 'fieldbook-v1.209';
 
 // OpenStreetMap tiles the Map page has shown, kept for offline use. This cache
 // is NOT versioned and survives every CACHE_NAME bump. Only tiles the user
@@ -15,6 +15,27 @@ const TILE_HOST = 'tile.openstreetmap.org';
 const TILE_MAX = 4000;
 const TILE_TRIM = 200;
 const TILE_TRIM_EVERY = 25;   // check the size every this many stores
+
+// CDN libraries (React, Babel, jsPDF, Leaflet, fonts …). Also NOT versioned:
+// it survives CACHE_NAME bumps, so an update never has to download them again
+// and a launch with no signal never waits on the network for them.
+//  - Pinned URLs (an exact version in the path, or a hashed font file) never
+//    change, so they are served cache-first.
+//  - Unpinned ones (Tailwind's CDN script, the Google Fonts stylesheet) are
+//    served from the cache at once and refreshed in the background.
+// Anything else from another origin keeps network-first.
+const CDN_CACHE = 'fieldbook-cdn-v1';
+const CDN_HOSTS = ['unpkg.com', 'cdn.jsdelivr.net', 'cdnjs.cloudflare.com', 'cdn.tailwindcss.com',
+  'fonts.googleapis.com', 'fonts.gstatic.com'];
+function cdnPinned(url) {
+  if (url.hostname === 'fonts.gstatic.com') return true;
+  if (url.hostname === 'unpkg.com' || url.hostname === 'cdn.jsdelivr.net') return /@\d+\.\d+\.\d+\//.test(url.pathname);
+  if (url.hostname === 'cdnjs.cloudflare.com') return /^\/ajax\/libs\/[^/]+\/\d+\.\d+(\.\d+)?\//.test(url.pathname);
+  return false;
+}
+// A response worth keeping: a real 200, or an opaque one (a <script> without
+// crossorigin can't be read, but it can be stored and served).
+const keepable = (r) => r && (r.ok || r.type === 'opaque');
 
 // Core app shell files to pre-cache on install
 const APP_SHELL = [
@@ -46,10 +67,9 @@ function fetchFresh(url) {
 }
 
 // Babel is fetched by the page only when the code cache misses — that is, on
-// the first launch after an update. That launch may be offline, and the old
-// cache (which held Babel) is gone by then, so keep a copy in this version's
-// cache. Best effort: a failure here must never fail the install. Keep this
-// URL identical to FB_BABEL_URL in index.html.
+// the first launch after an update, which may be offline. Make sure the CDN
+// cache has it. Best effort: a failure here must never fail the install. Keep
+// this URL identical to FB_BABEL_URL in index.html.
 const BABEL_URL = 'https://unpkg.com/@babel/standalone@8.0.7/babel.min.js';
 
 self.addEventListener('install', (event) => {
@@ -59,9 +79,10 @@ self.addEventListener('install', (event) => {
     Promise.all(APP_SHELL.map(fetchFresh)).then((responses) => {
       return caches.open(CACHE_NAME).then((cache) => {
         return Promise.all(APP_SHELL.map((url, i) => cache.put(url, responses[i])))
-          .then(() => fetch(BABEL_URL, { mode: 'cors', cache: 'reload' })
-            .then((r) => (r.ok ? cache.put(BABEL_URL, r) : null))
-            .catch(() => {}));
+          .then(() => caches.open(CDN_CACHE))
+          .then((cdn) => cdn.match(BABEL_URL).then((hit) => hit || fetch(BABEL_URL, { mode: 'cors' })
+            .then((r) => (r.ok ? cdn.put(BABEL_URL, r) : null))))
+          .catch(() => {});
       });
     })
   );
@@ -70,14 +91,24 @@ self.addEventListener('install', (event) => {
 });
 
 // ─── Activate ────────────────────────────────────────────────────────────────
+// Old version caches are deleted. Builds before v1.209 kept CDN files in the
+// version cache, so those are moved into CDN_CACHE first — the first launch
+// after this update then has them even with no signal.
+function keepCdnCopies(oldName) {
+  return Promise.all([caches.open(oldName), caches.open(CDN_CACHE)]).then(([old, cdn]) =>
+    old.keys().then((reqs) => Promise.all(reqs.map((req) => {
+      let host;
+      try { host = new URL(req.url).hostname; } catch (e) { return null; }
+      if (!CDN_HOSTS.includes(host)) return null;
+      return cdn.match(req).then((have) => have || old.match(req).then((r) => (keepable(r) ? cdn.put(req, r) : null)));
+    })))).catch(() => {});
+}
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames
-          .filter((name) => name !== CACHE_NAME && name !== TILE_CACHE)
-          .map((name) => caches.delete(name))
-      );
+      const old = cacheNames.filter((name) => name !== CACHE_NAME && name !== TILE_CACHE && name !== CDN_CACHE);
+      return Promise.all(old.map((name) => keepCdnCopies(name).then(() => caches.delete(name))));
     })
   );
   self.clients.claim();
@@ -98,7 +129,12 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(tileFirst(request));
     return;
   }
-  // For CDN requests (React, Tailwind, etc.) — network first, fall back to cache
+  // CDN libraries — see CDN_CACHE above.
+  if (CDN_HOSTS.includes(url.hostname)) {
+    event.respondWith(cdnPinned(url) ? cdnFirst(request) : cdnStale(request, event));
+    return;
+  }
+  // Other cross-origin requests — network first, fall back to cache
   if (url.origin !== location.origin) {
     event.respondWith(
       fetch(request)
@@ -124,6 +160,38 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
+
+// ─── CDN libraries ───────────────────────────────────────────────────────────
+// A pinned file: the cached copy if there is one (this version's cache too, for
+// a copy stored before the move), else the network, kept for next time.
+function cdnFirst(request) {
+  return caches.open(CDN_CACHE).then((cdn) =>
+    cdn.match(request).then((hit) => hit || caches.match(request)).then((hit) => {
+      if (hit) return hit;
+      return fetch(request).then((response) => {
+        if (keepable(response)) cdn.put(request, response.clone()).catch(() => {});
+        return response;
+      });
+    })
+  );
+}
+// An unpinned file: the cached copy at once and a background refresh, or the
+// network when nothing is cached yet.
+function cdnStale(request, event) {
+  return caches.open(CDN_CACHE).then((cdn) =>
+    cdn.match(request).then((hit) => hit || caches.match(request)).then((hit) => {
+      const refresh = fetch(request).then((response) => {
+        if (keepable(response)) return cdn.put(request, response.clone()).then(() => response);
+        return response;
+      });
+      if (hit) {
+        event.waitUntil(refresh.catch(() => {}));
+        return hit;
+      }
+      return refresh;
+    })
+  );
+}
 
 // ─── Map tiles ───────────────────────────────────────────────────────────────
 // Cache first, then the network. Only real CORS responses are stored: an
