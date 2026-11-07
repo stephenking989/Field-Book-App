@@ -1512,6 +1512,13 @@ function PrintScaleInput({ value, onCommit }) {
   );
 }
 
+// GROUP NAMES — page.groups = [{ id, name }] as a map. Anything unreadable is skipped.
+function readGroupNames(raw) {
+  const out = {};
+  (Array.isArray(raw) ? raw : []).forEach(g => { if (g && typeof g.id === 'string' && typeof g.name === 'string') out[g.id] = g.name; });
+  return out;
+}
+
 // SCALE FACTOR — the Scale tool's typed factor, applied about the middle of
 // the selection's box. "0.5" halves it, "2" doubles it.
 function ScaleFactorBar({ count, live, onApply }) {
@@ -3098,6 +3105,10 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   const [printDraft, setPrintDraft] = useState(null);      // a frame being drawn, before it is released
   const [printLand, setPrintLand] = useState(false);       // the bar's orientation for the next frame (not saved)
   const [scaleLive, setScaleLive] = useState(null);        // { k, x, y } while a Scale corner is being dragged
+  // Groups: membership is shape.groupId (xform.js); names live in page.groups.
+  const [groupNames, setGroupNames] = useState(() => readGroupNames(page.groups));
+  const [openGroups, setOpenGroups] = useState(() => new Set());   // groups unfolded in the layers panel (not saved)
+  const soloSelectRef = useRef(false);   // the next selection is one member on its own (picked from the panel)
   const [showPrintAreas, setShowPrintAreas] = useState(page.printAreasHidden !== true);
   const printAreasRef = useRef(printAreas);
   const printDragRef = useRef(null);                       // { mode, id, start, x, y, before, moved }
@@ -3370,6 +3381,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     setPrintSel(null);
     setPrintDraft(null);
     setShowPrintAreas(page.printAreasHidden !== true);
+    setGroupNames(readGroupNames(page.groups));
+    setOpenGroups(new Set());
     setSelectedIds([]);
     setShapesHistory({ past: [], future: [] });
     setMarquee(null);
@@ -3499,6 +3512,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
         return;
       }
 
+      // ── Group / ungroup: Ctrl+G / Ctrl+Shift+G ────────────────────────────
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'g' || e.key === 'G')) {
+        e.preventDefault();
+        if (e.shiftKey ? !!selectedGroup : !selectedGroup) toggleGroup();
+        return;
+      }
+
       // ── Copy shapes: Ctrl+C / Cmd+C ───────────────────────────────────────
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
         if (selectedIds.length > 0) {
@@ -3517,7 +3537,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
             const id = 's_' + (++t) + '_' + Math.random().toString(36).slice(2, 6);
             return offsetShape({ ...s, id, aerial: undefined }, 20, 20);   // a copy of the aerial image is a plain picture
           });
-          commitShapes([...shapes, ...pasted]);
+          const regrouped = regroupCopies(pasted);
+          commitShapes([...shapes, ...regrouped]);
           setSelectedIds(pasted.map(s => s.id));
         }
         return;
@@ -3644,7 +3665,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tool, penNodes, drawState, nodeSelectedId, nodeSelectedIdx, shapes, shapesHistory, selectedIds]);
+  }, [tool, penNodes, drawState, nodeSelectedId, nodeSelectedIdx, shapes, shapesHistory, selectedIds, activeLayerId, groupNames]);
 
   // ── Coordinate conversion ──────────────────────────────────────────────────
   // screenToWorld: converts a pointer/mouse event's position from CSS screen
@@ -3696,6 +3717,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
       const prevIds = new Set(shapesRef.current.map(s => s.id));
       next = next.map(s => (!prevIds.has(s.id) && s.fontSize === undefined) ? { ...s, fontSize: defaultFontSize } : s);
     }
+    next = fbXform.tidyGroups(next);      // a group left with one shape is no group
     const newHist = { past: [...shapesHistoryRef.current.past.slice(-49), shapesRef.current], future: [] };
     shapesHistoryRef.current = newHist;
     shapesRef.current = next;
@@ -4195,6 +4217,53 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   }
   // Smallest factor allowed: the box's diagonal never goes under 1 mm.
   function scaleKMin(box) { return Math.max(1e-9, mmPx() / (Math.hypot(box.maxX - box.minX, box.maxY - box.minY) || 1)); }
+  // ── Groups ────────────────────────────────────────────────────────────────
+  // Selecting any member on the canvas selects the whole group. A member
+  // picked from the layers panel stays on its own (soloSelectRef).
+  useEffect(() => {
+    if (soloSelectRef.current) { soloSelectRef.current = false; return; }
+    const ex = fbXform.expandGroups(selectedIds, shapes, pickable);
+    if (ex.length !== selectedIds.length) setSelectedIds(ex);
+  }, [selectedIds]);
+  const groupSizes = fbXform.groupSizes(shapes);
+  const selectedGroup = fbXform.wholeGroup(selectedIds, shapes, pickable);   // pressed state of the Group button
+  const groupable = shapes.filter(s => selectedIds.includes(s.id) && !s.aerial);
+  function groupLabel(gid) {
+    if (groupNames[gid]) return groupNames[gid];
+    const order = [...new Set(shapes.filter(s => s.groupId && groupSizes[s.groupId] >= 2).map(s => s.groupId))];
+    return 'Group ' + (order.indexOf(gid) + 1);
+  }
+  function saveGroupNames(next) {
+    setGroupNames(next);
+    DB.updatePage(projectId, page.id, { groups: Object.entries(next).map(([id, name]) => ({ id, name })) });
+  }
+  // Group button: groups the selection, or ungroups when it is exactly one group.
+  function toggleGroup() {
+    if (selectedGroup) { commitShapes(fbXform.ungroup(shapes, selectedGroup)); return; }
+    if (groupable.length < 2) return;
+    const gid = fbXform.newGroupId();
+    const next = fbXform.makeGroup(shapes, groupable.map(s => s.id), gid, {
+      layerOf: s => s.layerId || defLayerId, activeLayerId,
+      fixedLayers: [POINTS_LAYER_ID, fbGnss.AERIAL_LAYER_ID],
+    });
+    commitShapes(next);
+    const live = new Set(next.filter(s => s.groupId).map(s => s.groupId));
+    const names = Object.fromEntries(Object.entries(groupNames).filter(([id]) => live.has(id)));
+    names[gid] = 'Group ' + (Object.keys(names).length + 1);
+    saveGroupNames(names);
+    setOpenGroups(prev => { const n = new Set(prev); n.delete(gid); return n; });   // a new group starts folded
+  }
+  // Copies get groups of their own, named after the originals.
+  function regroupCopies(list) {
+    const { shapes: out, map } = fbXform.remapGroups(list);
+    if (Object.keys(map).length) {
+      const names = { ...groupNames };
+      for (const [o, n] of Object.entries(map)) names[n] = (groupNames[o] || groupLabel(o)) + ' copy';
+      saveGroupNames(names);
+    }
+    return out;
+  }
+
   // The typed factor, about the middle of the box. One undo step.
   function applyScaleFactor(k) {
     const targets = scaleTargets(shapes, selectedIds), box = scaleBoxOf(targets);
@@ -6871,7 +6940,56 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   // Move selected shape(s) up (+1) or down (-1) within the layers panel.
   // "Up" in the panel = higher Z-order = higher index in the shapes array within a layer.
   // For multi-select: moves all selected shapes as a group, preserving relative order.
+  // ── Layers panel rows ─────────────────────────────────────────────────────
+  // One layer's rows, top of the stack first: a lone shape; or a group — one
+  // header row, then (while unfolded) its members. A group's points live on the
+  // Points layer but are listed under the group; in the Points layer's own list
+  // they show with a link mark. kind: 'shape' | 'group' | 'member'.
+  // pos = the row's place in the layer (0 = bottom), for drag-and-drop slots.
+  function panelRows(layerId) {
+    const ls = shapes.filter(sh => (sh.layerId || defLayerId) === layerId);
+    const rows = [], seen = new Set();
+    for (let ri = 0; ri < ls.length; ri++) {
+      const pos = ls.length - 1 - ri, sh = ls[pos];
+      const g = sh.groupId && groupSizes[sh.groupId] >= 2 ? sh.groupId : null;
+      const elsewhere = !!g && layerId === POINTS_LAYER_ID && shapes.some(m => m.groupId === g && m.type !== 'point');
+      if (!g || elsewhere) { rows.push({ kind: 'shape', s: sh, pos, num: pos + 1, linked: elsewhere }); continue; }
+      if (seen.has(g)) continue;
+      seen.add(g);
+      const here = ls.filter(m => m.groupId === g).reverse();
+      const pts = layerId !== POINTS_LAYER_ID ? shapes.filter(m => m.groupId === g && m.type === 'point') : [];
+      const members = [...here, ...pts];
+      rows.push({ kind: 'group', gid: g, s: sh, pos, members });
+      if (openGroups.has(g)) members.forEach(m => {
+        const mi = ls.indexOf(m);
+        rows.push({ kind: 'member', gid: g, s: m, pos: mi >= 0 ? mi : pos, num: mi >= 0 ? mi + 1 : null });
+      });
+    }
+    return rows;
+  }
+  // Every visible row of the panel, top to bottom, as drag-and-drop slots.
+  function panelSlots() {
+    return [...layers].reverse().flatMap(l => (collapsedLayers.has(l.id) ? [] :
+      panelRows(l.id).map(r => ({ shapeId: r.s.id, layerId: l.id, posInLayer: r.pos }))));
+  }
+  // A group's eye / lock: all members on or off together.
+  function setGroupFlag(gid, key) {
+    const mem = shapes.filter(sh => sh.groupId === gid);
+    const on = key === 'visible' ? mem.some(sh => sh.visible !== false) : mem.some(sh => !sh.locked);
+    commitShapes(shapes.map(sh => (sh.groupId !== gid ? sh
+      : key === 'visible' ? { ...sh, visible: on ? false : undefined } : { ...sh, locked: on ? true : undefined })));
+  }
+
   function moveShapeInStack(shapeId, dir) {
+    // A group member, or a lone shape, moves as one unit within its layer and
+    // passes a group whole (xform.js moveInLayer). A hand-picked multi-selection
+    // keeps the older one-step-each behaviour below.
+    const _multi = selectedIds.includes(shapeId) && selectedIds.length > 1 && !fbXform.wholeGroup(selectedIds, shapes);
+    if (!_multi) {
+      const next = fbXform.moveInLayer(shapes, shapeId, dir, s => s.layerId || defLayerId);
+      if (next !== shapes) commitShapes(next);
+      return;
+    }
     // Build the panel display order: layers reversed (top layer first), shapes within each layer reversed (highest Z first)
     const slots = [...layers].reverse().flatMap(l => {
       const ls = shapes.filter(s => (s.layerId || defLayerId) === l.id);
@@ -8889,6 +9007,19 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
           {/* Separator */}
           <div style={{ width: 1, height: 18, background: PT.border, margin: '0 2px', flexShrink: 0 }} />
 
+          {/* Group toggle — groups the selection; pressed (green) while the selection is one group, and tapping it then ungroups */}
+          {(groupable.length >= 2 || selectedGroup) && (
+            <button type="button" data-group-toggle="" aria-pressed={!!selectedGroup}
+              title={selectedGroup ? 'Ungroup (Ctrl+Shift+G)' : 'Group (Ctrl+G)'}
+              onClick={toggleGroup}
+              className={`h-[26px] px-2 flex items-center gap-1 flex-shrink-0 border font-data text-[11px] ${selectedGroup ? 'bg-fb-accent text-white border-fb-accent' : 'bg-fb-page-alt text-fb-ink-muted border-fb-border'}`}>
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
+                <rect x="1" y="1" width="12" height="12" rx="1" strokeDasharray="2 1.5"/><rect x="3.5" y="3.5" width="4" height="4"/><circle cx="9" cy="9" r="2"/>
+              </svg>
+              <span>Group</span>
+            </button>
+          )}
+
           {/* Join ▾ dropdown button — only visible when 2+ shapes selected */}
           {selectedIds.length >= 2 && (
             <button
@@ -9462,7 +9593,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               onClick={() => {
                 const sel = shapes.filter(s => selectedIds.includes(s.id));
                 let t = Date.now();
-                const duped = sel.map(s => { const id = 's_' + (++t) + '_' + Math.random().toString(36).slice(2, 6); return offsetShape({ ...s, id }, 20, 20); });
+                const duped = regroupCopies(sel.map(s => { const id = 's_' + (++t) + '_' + Math.random().toString(36).slice(2, 6); return offsetShape({ ...s, id }, 20, 20); }));
                 commitShapes([...shapes, ...duped]);
                 setSelectedIds(duped.map(s => s.id));
               }}
@@ -9491,7 +9622,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               onClick={() => {
                 if (!shapeClipRef.current || shapeClipRef.current.length === 0) return;
                 let t = Date.now();
-                const pasted = shapeClipRef.current.map(s => { const id = 's_' + (++t) + '_' + Math.random().toString(36).slice(2, 6); return offsetShape({ ...s, id, aerial: undefined }, 20, 20); });
+                const pasted = regroupCopies(shapeClipRef.current.map(s => { const id = 's_' + (++t) + '_' + Math.random().toString(36).slice(2, 6); return offsetShape({ ...s, id, aerial: undefined }, 20, 20); }));
                 commitShapes([...shapes, ...pasted]);
                 setSelectedIds(pasted.map(s => s.id));
               }}
@@ -10284,26 +10415,83 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                         </>);
                       })()}
 
-                      {/* Objects in this layer — newest first (highest Z) */}
+                      {/* Objects in this layer — newest first (highest Z). A group is one row that unfolds. */}
                       {!collapsedLayers.has(layer.id) && (()=>{
-                        const _revS=[...layerShapes].reverse();
-                        return _revS.map((s,ri)=>{
-                          // flatIdx: offset = shapes in all layers above this one in panel, plus ri within this layer.
-                          // _revS[ri] === slot[offset+ri] because both use [...layerShapes].reverse() order.
-                          const _myFlatIdx=(()=>{
-                            let fi=0;
-                            for(const _l of [...layers].reverse()){
-                              if(collapsedLayers.has(_l.id)) continue;
-                              if(_l.id===layer.id) return fi+ri;
-                              fi+=shapes.filter(_s=>(_s.layerId||defLayerId)===_l.id).length;
-                            }
-                            return fi;
-                          })();
-                          const _sDrag=panelDrag?.type==='shape'&&panelDrag.id===s.id;
+                        const _rows=panelRows(layer.id);
+                        // flatIdx: rows in the open layers above this one, plus this row's index —
+                        // the same order panelSlots() gives the drag.
+                        const _offset=(()=>{
+                          let fi=0;
+                          for(const _l of [...layers].reverse()){
+                            if(_l.id===layer.id) return fi;
+                            if(collapsedLayers.has(_l.id)) continue;
+                            fi+=panelRows(_l.id).length;
+                          }
+                          return fi;
+                        })();
+                        return _rows.map((row,ri)=>{
+                          const s=row.s;
+                          const _myFlatIdx=_offset+ri;
+                          const _sDrag=panelDrag?.type==='shape'&&panelDrag.id===s.id&&row.kind==='shape';
                           const _sDrop=panelDrag?.type==='shape'&&panelDrag.id!==s.id&&panelDrag.targetFlatIdx===_myFlatIdx;
                           const _sUp=panelDrag?panelDrag.targetFlatIdx<panelDrag.origFlatIdx:false;
+                          if(row.kind==='group'){
+                            const _gIds=row.members.map(m=>m.id);
+                            const _gSel=_gIds.every(id=>selectedIds.includes(id));
+                            const _gOpen=openGroups.has(row.gid);
+                            const _gHidden=row.members.every(m=>m.visible===false);
+                            const _gLocked=row.members.every(m=>m.locked);
+                            return (
+                            <React.Fragment key={'grp_'+row.gid}>
+                              {_sDrop&&_sUp&&<div style={{height:2,background:PT.accent,margin:'0 14px'}}/>}
+                              <div data-group-row={row.gid}
+                                onClick={()=>{
+                                  if(tool!=='scale'){setTool('select');}
+                                  setPrevTool(null);
+                                  setSelectedIds(_gIds.filter(id=>pickable(shapes.find(sh=>sh.id===id))));
+                                  setSelectedLayerForCard(null);setActiveLayerId(layer.id);
+                                }}
+                                style={{display:'flex',alignItems:'center',gap:3,padding:'2px 4px 2px 4px',
+                                  background:_gSel?PT.bgHov:'transparent',cursor:'pointer'}}>
+                                <button
+                                  onClick={ev=>{ev.stopPropagation();setOpenGroups(prev=>{const n=new Set(prev);n.has(row.gid)?n.delete(row.gid):n.add(row.gid);return n;});}}
+                                  title={_gOpen?'Fold group':'Unfold group'} aria-expanded={_gOpen}
+                                  className="text-[8px]"
+                                  style={{width:14,height:14,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',color:PT.muted,outline:'none',lineHeight:1}}
+                                >{_gOpen?'▾':'▸'}</button>
+                                <button
+                                  onClick={ev=>{ev.stopPropagation();setGroupFlag(row.gid,'visible');}}
+                                  title={_gHidden?'Show group':'Hide group'}
+                                  style={{width:16,height:16,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',color:_gHidden?PT.faint:PT.muted,outline:'none'}}
+                                ><EyeIcon off={_gHidden} /></button>
+                                <button
+                                  onClick={ev=>{ev.stopPropagation();setGroupFlag(row.gid,'locked');}}
+                                  title={_gLocked?'Unlock group':'Lock group'}
+                                  style={{width:16,height:16,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',color:_gLocked?PT.accent:PT.faint,outline:'none'}}
+                                ><LockIcon open={!_gLocked} size={9} /></button>
+                                <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke={_gSel?PT.accent:PT.muted} strokeWidth="1.3" style={{flexShrink:0}}>
+                                  <rect x="1" y="1" width="12" height="12" rx="1" strokeDasharray="2 1.5"/><rect x="3.5" y="3.5" width="4" height="4"/><circle cx="9" cy="9" r="2"/>
+                                </svg>
+                                <span className="text-[11px]" style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+                                  color:_gHidden?PT.faint:(_gSel?PT.accent:PT.text)}}>{groupLabel(row.gid)}</span>
+                                <span className="text-[9px]" style={{color:PT.muted,flexShrink:0}}>{row.members.length}</span>
+                                <div style={{display:'flex',flexDirection:'column',gap:1,flexShrink:0}}>
+                                  {[{dir:1,lbl:'▲',ttl:'Move group up'},{dir:-1,lbl:'▼',ttl:'Move group down'}].map(({dir,lbl,ttl})=>(
+                                    <button key={dir}
+                                      onClick={ev=>{ev.stopPropagation();moveShapeInStack(s.id,dir);}}
+                                      title={ttl} className="text-[8px]"
+                                      style={{width:14,height:10,display:'flex',alignItems:'center',justifyContent:'center',
+                                        background:'none',border:'none',cursor:'pointer',lineHeight:1,padding:0,color:PT.muted,outline:'none'}}
+                                    >{lbl}</button>
+                                  ))}
+                                </div>
+                              </div>
+                              {_sDrop&&!_sUp&&<div style={{height:2,background:PT.accent,margin:'0 14px'}}/>}
+                            </React.Fragment>);
+                          }
+                          const _member=row.kind==='member';
                           return (
-                          <React.Fragment key={s.id}>
+                          <React.Fragment key={row.kind+'_'+s.id}>
                             {_sDrop&&_sUp&&<div style={{height:2,background:PT.accent,margin:'0 14px'}}/>}
                             <div
                               onClick={e=>{
@@ -10331,7 +10519,9 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                                   }
                                   setSelectedLayerForCard(null);
                                 } else {
-                                  setTool('select');setSelectedIds([s.id]);setPrevTool(null);
+                                  if(tool!=='scale'){setTool('select');}
+                                  if(_member) soloSelectRef.current=true;   // one member on its own
+                                  setSelectedIds([s.id]);setPrevTool(null);
                                   setLastPanelClickId(s.id);setSelectedLayerForCard(null);
                                   setActiveLayerId(s.layerId||defLayerId);
                                 }
@@ -10341,15 +10531,12 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                                 const _startX=e.clientX,_startY=e.clientY,_pType=e.pointerType;
                                 panelRowGestureRef.current={startX:_startX,startY:_startY,shapeId:s.id,swiped:false};
                                 // Mouse-only long-press drag (150ms). Touch uses ▲▼ buttons instead.
-                                if(_pType!=='mouse')return;
+                                // Group members move with their group (▲▼ on the group row, Move to layer…).
+                                if(_pType!=='mouse'||row.kind!=='shape'||(s.groupId&&groupSizes[s.groupId]>=2))return;
                                 if(panelDragTimerRef.current)clearTimeout(panelDragTimerRef.current);
                                 panelDragTimerRef.current=setTimeout(()=>{
                                   panelDragTimerRef.current=null;
-                                  const _slots=[...layers].reverse().flatMap(_l=>{
-                                    if(collapsedLayers.has(_l.id))return[];
-                                    const _ls=shapes.filter(_s=>(_s.layerId||defLayerId)===_l.id);
-                                    return[..._ls].reverse().map((_sh,_ri)=>({shapeId:_sh.id,layerId:_l.id,posInLayer:_ls.length-1-_ri}));
-                                  });
+                                  const _slots=panelSlots();
                                   const _origFi=_slots.findIndex(sl=>sl.shapeId===s.id);
                                   if(_origFi<0)return;
                                   setPanelDrag({type:'shape',id:s.id,startY:_startY,slots:_slots,origFlatIdx:_origFi,targetFlatIdx:_origFi});
@@ -10379,7 +10566,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                                   setLastPanelClickId(s.id);
                                 }
                               }}
-                              style={{display:'flex',alignItems:'center',gap:3,padding:'2px 4px 2px 14px',
+                              data-shape-row={s.id}
+                              style={{display:'flex',alignItems:'center',gap:3,padding:_member?'2px 4px 2px 26px':'2px 4px 2px 14px',
                                 background:selectedIds.includes(s.id)?PT.bgHov:'transparent',
                                 opacity:_sDrag?0.35:1,cursor:'pointer',touchAction:'pan-y'}}
                             >
@@ -10408,10 +10596,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                               ><LockIcon open={!s.locked} size={9} /></button>
                               <span style={{flex:1,fontSize:10,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
                                 color:s.visible===false?PT.faint:(selectedIds.includes(s.id)?PT.accent:PT.muted)}}>
-                                {s.customName||(s.aerial?'Aerial image':s.type.charAt(0).toUpperCase()+s.type.slice(1)+' '+(layerShapes.length-ri))}
+                                {row.linked&&<span title={groupLabel(s.groupId)} style={{marginRight:3}}>
+                                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+                                </span>}
+                                {s.customName||(s.aerial?'Aerial image':s.type.charAt(0).toUpperCase()+s.type.slice(1)+(row.num?' '+row.num:''))}
                               </span>
-                              {/* ▲▼ shape stack order buttons */}
-                              <div style={{display:'flex',flexDirection:'column',gap:1,flexShrink:0}}>
+                              {/* ▲▼ shape stack order buttons (a group member moves with its group) */}
+                              {!_member&&<div style={{display:'flex',flexDirection:'column',gap:1,flexShrink:0}}>
                                 {[{dir:1,lbl:'▲',ttl:'Move up'},{dir:-1,lbl:'▼',ttl:'Move down'}].map(({dir,lbl,ttl})=>(
                                   <button key={dir}
                                     onClick={ev=>{ev.stopPropagation();moveShapeInStack(s.id,dir);}}
@@ -10422,7 +10613,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                                       color:PT.muted,outline:'none'}}
                                   >{lbl}</button>
                                 ))}
-                              </div>
+                              </div>}
                             </div>
                             {_sDrop&&!_sUp&&<div style={{height:2,background:PT.accent,margin:'0 14px'}}/>}
                           </React.Fragment>);
@@ -10509,6 +10700,18 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
                   <PanelSectionHeader id="info" title={selectedIds.length > 1 ? `${selectedIds.length} selected` : 'Info'}
                     open={sections.info} onToggle={() => toggleSection('info')} />
                   {sections.info && (<>
+
+                  {/* A whole group: its name */}
+                  {selectedGroup && (
+                    <div data-group-name="" className="flex items-center gap-1.5 px-2 py-1.5">
+                      <span className="text-[9px] uppercase tracking-wider" style={{ color: PT.muted }}>Group</span>
+                      <input type="text" aria-label="Group name" maxLength={60}
+                        value={groupNames[selectedGroup] ?? groupLabel(selectedGroup)}
+                        onChange={e => saveGroupNames({ ...groupNames, [selectedGroup]: e.target.value })}
+                        className="flex-1 min-w-0 h-6 px-1 text-[11px] outline-none"
+                        style={{ background: PT.inputBg, border: `1px solid ${PT.border}`, color: PT.text }} />
+                    </div>
+                  )}
 
                   {/* Multi-select */}
                   {selectedIds.length > 1 && (

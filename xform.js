@@ -117,7 +117,150 @@
     return Math.max(fin(kMin) && kMin > 0 ? kMin : 1e-9, k);
   }
 
-  const api = { scaleShape, scaleShapes, corners, anchorFor, cornerFactor, textWrapChars, TEXT_CHAR_W };
+  // ─── Groups ────────────────────────────────────────────────────────────────
+  // A group is the shapes that share a groupId ('g_…'), two or more of them.
+  // Membership lives on the shapes, so undo / redo, copy and save carry it with
+  // no extra bookkeeping; a builder that doesn't know groups simply ignores the
+  // field. Names are kept apart, on the page (page.groups = [{ id, name }]).
+  // Points stay on their own Points layer; every other member shares one layer.
+  const newGroupId = () => 'g_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+
+  // groupId → number of shapes carrying it.
+  function groupSizes(shapes) {
+    const n = {};
+    for (const s of shapes) if (s.groupId) n[s.groupId] = (n[s.groupId] || 0) + 1;
+    return n;
+  }
+  // The group a shape belongs to, or null (a lone groupId is no group).
+  function groupOf(shapes, id, sizes) {
+    const s = shapes.find(x => x.id === id);
+    if (!s || !s.groupId) return null;
+    return ((sizes || groupSizes(shapes))[s.groupId] || 0) >= 2 ? s.groupId : null;
+  }
+  function membersOf(shapes, gid) { return gid ? shapes.filter(s => s.groupId === gid) : []; }
+
+  // ids plus every other member of any group they touch. `ok(shape)` filters
+  // the members added (hidden / locked ones are left out). Order: ids as given,
+  // then the added members in stack order.
+  function expandGroups(ids, shapes, ok) {
+    const sizes = groupSizes(shapes), want = new Set(ids), gids = new Set();
+    for (const id of ids) { const g = groupOf(shapes, id, sizes); if (g) gids.add(g); }
+    if (!gids.size) return ids.slice();
+    const out = ids.slice();
+    for (const s of shapes) {
+      if (s.groupId && gids.has(s.groupId) && !want.has(s.id) && (!ok || ok(s))) { out.push(s.id); want.add(s.id); }
+    }
+    return out;
+  }
+
+  // The group id when `ids` is exactly the members of one group (of those
+  // `ok` lets through), else null — what makes the Group button read "pressed".
+  function wholeGroup(ids, shapes, ok) {
+    if (!ids.length) return null;
+    const sizes = groupSizes(shapes), g = groupOf(shapes, ids[0], sizes);
+    if (!g) return null;
+    const mem = membersOf(shapes, g).filter(s => !ok || ok(s)).map(s => s.id);
+    const set = new Set(ids);
+    return mem.length === set.size && mem.every(id => set.has(id)) ? g : null;
+  }
+
+  // Drop the groupId from any group left with fewer than 2 shapes. Returns the
+  // same array when nothing changes; never reorders.
+  function tidyGroups(shapes) {
+    const sizes = groupSizes(shapes);
+    if (!Object.values(sizes).some(n => n < 2)) return shapes;
+    return shapes.map(s => (s.groupId && sizes[s.groupId] < 2 ? stripGroup(s) : s));
+  }
+  function stripGroup(s) { const { groupId, ...rest } = s; return rest; }
+
+  // Group the shapes in `ids` as `gid`. opts: { layerOf(s) → its layer id,
+  // activeLayerId, pointsLayerId, fixedLayers (layer ids a group can't live
+  // on — Points, Aerial) }.
+  //   • Home layer: the layer all non-point members share; else the active
+  //     layer; else (active is Points / Aerial) the topmost non-point member's.
+  //   • Non-point members move to the home layer and sit together in the
+  //     stack where the topmost of them was, in their own order.
+  //   • Points keep their place on the Points layer.
+  // Shapes already in another group leave it (tidyGroups then clears a group
+  // left with one shape).
+  function makeGroup(shapes, ids, gid, opts) {
+    const o = opts || {}, layerOf = o.layerOf || (s => s.layerId);
+    const want = new Set(ids);
+    const members = shapes.filter(s => want.has(s.id));
+    if (members.length < 2) return shapes;
+    const isPt = s => s.type === 'point';
+    const lines = members.filter(s => !isPt(s));
+    let home = null;
+    if (lines.length) {
+      const ls = new Set(lines.map(layerOf));
+      const fixed = new Set(o.fixedLayers || []);
+      if (ls.size === 1) home = [...ls][0];
+      else if (o.activeLayerId && !fixed.has(o.activeLayerId)) home = o.activeLayerId;
+      else home = layerOf(lines[lines.length - 1]);
+    }
+    const tag = s => (isPt(s) ? { ...s, groupId: gid } : { ...s, groupId: gid, layerId: home });
+    const lineIds = new Set(lines.map(s => s.id));
+    const topIdx = shapes.reduce((m, s, i) => (lineIds.has(s.id) ? i : m), -1);
+    const out = [];
+    shapes.forEach((s, i) => {
+      if (lineIds.has(s.id)) { if (i === topIdx) lines.forEach(m => out.push(tag(m))); return; }
+      out.push(want.has(s.id) ? tag(s) : s);
+    });
+    return tidyGroups(out);
+  }
+  function ungroup(shapes, gid) { return shapes.map(s => (s.groupId === gid ? stripGroup(s) : s)); }
+
+  // Copies (paste / duplicate) get groups of their own: each groupId in `list`
+  // is replaced with a new one. Returns { shapes, map: { oldGid: newGid } }.
+  function remapGroups(list, makeId) {
+    const map = {}, mk = makeId || newGroupId;
+    const shapes = list.map(s => {
+      if (!s.groupId) return s;
+      if (!map[s.groupId]) map[s.groupId] = mk();
+      return { ...s, groupId: map[s.groupId] };
+    });
+    return { shapes, map };
+  }
+
+  // ─── Stack order inside a layer ────────────────────────────────────────────
+  // A layer's shapes in stack order (bottom first) as units: a run of members
+  // of one group is one unit, any other shape is a unit of its own.
+  function stackUnits(layerShapes, sizes) {
+    const units = [];
+    for (const s of layerShapes) {
+      const g = s.groupId && (sizes[s.groupId] || 0) >= 2 ? s.groupId : null;
+      const last = units[units.length - 1];
+      if (g && last && last.gid === g) last.ids.push(s.id);
+      else units.push({ gid: g, ids: [s.id] });
+    }
+    return units;
+  }
+  // Move the unit holding `id` one step up (dir +1, towards the top) or down
+  // within its layer, past the next unit whole — so a shape jumps a group
+  // rather than landing inside it. Shapes of other layers keep their places.
+  function moveInLayer(shapes, id, dir, layerOf) {
+    const lo = layerOf || (s => s.layerId);
+    const me = shapes.find(s => s.id === id);
+    if (!me) return shapes;
+    const lid = lo(me), idx = [];
+    shapes.forEach((s, i) => { if (lo(s) === lid) idx.push(i); });
+    const layerShapes = idx.map(i => shapes[i]);
+    const units = stackUnits(layerShapes, groupSizes(shapes));
+    const u = units.findIndex(x => x.ids.includes(id)), t = u + (dir > 0 ? 1 : -1);
+    if (u < 0 || t < 0 || t >= units.length) return shapes;
+    [units[u], units[t]] = [units[t], units[u]];
+    const byId = Object.fromEntries(layerShapes.map(s => [s.id, s]));
+    const order = units.flatMap(x => x.ids).map(i => byId[i]);
+    const out = shapes.slice();
+    idx.forEach((i, k) => { out[i] = order[k]; });
+    return out;
+  }
+
+  const api = {
+    scaleShape, scaleShapes, corners, anchorFor, cornerFactor, textWrapChars, TEXT_CHAR_W,
+    newGroupId, groupSizes, groupOf, membersOf, expandGroups, wholeGroup, tidyGroups, makeGroup, ungroup,
+    remapGroups, stackUnits, moveInLayer,
+  };
   root.fbXform = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
