@@ -8383,13 +8383,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
 
               {/* Line type */}
               {(() => {
-                const DASH_TYPES = [
-                  { value: '',           label: 'Solid',      d: 'M4,8 H52' },
-                  { value: '8,5',        label: 'Dashed',     d: 'M4,8 H52' },
-                  { value: '20,5,5,5',   label: 'Centreline', d: 'M4,8 H52' },
-                  { value: '2,6',        label: 'Dotted',     d: 'M4,8 H52' },
-                  { value: '12,5,2,5',   label: 'Dash-dot',   d: 'M4,8 H52' },
-                ];
+                // One list for the sketch and the map's linework codes (geo.js).
+                const DASH_TYPES = window.fbGeo.LINE_TYPES.map(t => ({ value: t.dash, label: t.label }));
                 const selIds = selectedIds.length > 0 ? selectedIds : [];
                 const selShapes = selIds.length > 0
                   ? shapes.filter(s => selIds.includes(s.id))

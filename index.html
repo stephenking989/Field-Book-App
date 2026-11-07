@@ -839,7 +839,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.210';
+  const APP_VERSION = '1.211';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -3871,44 +3871,59 @@
     );
   }
 
-  // A code's name: the text can be typed over at any time, the arrow picks from
-  // the list. Typed text keeps the row's layer, so its line style holds.
-  function LineNameCombo({ row, onType, onDone }) {
-    const inputRef = useRef(null);
-    const text = row.label !== undefined ? row.label : fbGeo.figureLayer(row.layer).label;
-    function commit() {
-      const t = text.trim();
-      const preset = fbGeo.FIGURE_LAYERS.find(l => l.label.toUpperCase() === t.toUpperCase());
-      if (!t) onDone({ label: undefined });
-      else if (preset) onDone({ layer: preset.id, label: undefined });
-      else onDone({ label: t });
-    }
-    function pick(id) {
-      onDone({ layer: id, label: undefined });
-      if (id === 'other') setTimeout(() => { if (inputRef.current) { inputRef.current.focus(); inputRef.current.select(); } }, 0);
-    }
+  // A line type drawn as a short sample (the sketch page's dash list).
+  function LineTypeSvg({ id, w = 22, scale = 0.6 }) {
+    const t = fbGeo.lineType(id) || fbGeo.LINE_TYPES[0];
     return (
-      <div data-line-name className="flex-1 min-w-0 flex rounded-lg bg-fb-field border border-fb-border focus-within:border-fb-accent overflow-hidden">
-        <input ref={inputRef} type="text" value={text} aria-label={`Name for ${row.code || 'code'}`}
-          onChange={e => onType(e.target.value)} onFocus={e => e.target.select()} onBlur={commit}
-          className="flex-1 min-w-0 px-2 py-2 text-sm text-fb-ink bg-transparent outline-none" />
-        <span className="relative w-9 flex-shrink-0 flex items-center justify-center border-l border-fb-border text-fb-ink-muted">
-          <Ico.ChevDown />
-          <select value={row.layer} aria-label={`Pick a name for ${row.code || 'code'}`} onChange={e => pick(e.target.value)}
-            className="absolute inset-0 w-full h-full opacity-0">
-            {fbGeo.FIGURE_LAYERS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
-          </select>
-        </span>
+      <svg width={w} height="12" viewBox={`0 0 ${w} 12`} aria-hidden="true" className="flex-shrink-0">
+        <line x1="2" y1="6" x2={w - 2} y2="6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"
+          strokeDasharray={t.dash ? t.dash.split(',').map(n => +n * scale).join(' ') : undefined} />
+      </svg>
+    );
+  }
+  // Line type choice: a scrolling row like the symbol picker's marks.
+  function LineTypePicker({ value, onChange }) {
+    return (
+      <div role="group" aria-label="Line type" className="flex flex-wrap gap-1.5">
+        {fbGeo.LINE_TYPES.map(t => (
+          <button key={t.id} type="button" aria-pressed={value === t.id} onClick={() => onChange(t.id)}
+            className={`h-10 px-2.5 rounded-lg border inline-flex items-center gap-2 flex-shrink-0 whitespace-nowrap text-sm font-semibold text-fb-heading ${value === t.id ? 'bg-fb-accent-pale border-fb-accent' : 'bg-fb-page-alt border-fb-border'}`}>
+            <LineTypeSvg id={t.id} w={36} scale={1} />{t.label}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  // The project's linework codes as a row of selectable chips (the Figure tool
+  // and the figure sheet): code, its name, a sample of its line.
+  function LineCodeChips({ table, value, onPick, disabled }) {
+    if (!table.length) return <p className="text-sm text-fb-ink-muted py-1">No linework codes. Add them in Map layers.</p>;
+    return (
+      <div role="group" aria-label="Linework code" className="flex gap-1.5 overflow-x-auto pb-0.5">
+        {table.map(row => {
+          const on = value === row.code;
+          return (
+            <button key={row.code} type="button" disabled={disabled} aria-pressed={on} onClick={() => onPick(row)}
+              className={`h-9 px-3 rounded-lg text-sm font-semibold border inline-flex items-center gap-1.5 flex-shrink-0 whitespace-nowrap disabled:opacity-60 ${on
+                ? 'bg-fb-cover border-fb-cover text-white' : 'bg-fb-page-alt border-fb-border text-fb-heading'}`}>
+              <LineTypeSvg id={row.line || fbGeo.layerLineType(row.layer)} w={18} scale={0.5} />
+              <span className="font-data">{row.code}</span>
+              {row.label && <span className="font-medium opacity-80">{row.label}</span>}
+            </button>
+          );
+        })}
       </div>
     );
   }
 
   // Settings → Linework codes: which description codes draw lines on the map
-  // (FN, BLDG, EP…), on which layer, and whether they close. Stored on the
-  // project only once it is edited; until then the defaults apply.
+  // (FN, BLDG, EP…), their name, map symbol, line type and whether they close.
+  // Stored on the project only once it is edited; until then the defaults
+  // apply. `layer` is no longer picked here: a code keeps the one it has (it
+  // sets the colour, and older builds read it); new codes are 'other'.
   function LineCodeSettings({ project, projectId, onReload }) {
     const [list, setList] = useState(() => fbGeo.lineCodeTable(project));
-    const [symOpen, setSymOpen] = useState(null);   // index of the row showing its symbol choices
+    const [open, setOpen] = useState(null);   // { i, what: 'sym' | 'line' } — the choices shown under a row
     const lbl = 'text-[10px] font-bold text-fb-ink-muted uppercase tracking-widest mb-1.5';
     function save(next) {
       setList(next);
@@ -3918,6 +3933,7 @@
         if (label) row.label = label;
         const symbol = fbGeo.cleanMapSym(x.symbol);
         if (symbol) row.symbol = symbol;
+        if (fbGeo.lineType(x.line)) row.line = x.line;
         return row;
       }).filter(x => x.code);
       if (JSON.stringify(clean) === JSON.stringify(fbGeo.lineCodeTable(DB.getProject(projectId)))) return;
@@ -3925,43 +3941,64 @@
       onReload();
     }
     const edit = (i, patch) => list.map((x, j) => (j === i ? { ...x, ...patch } : x));
+    const toggle = (i, what) => setOpen(open && open.i === i && open.what === what ? null : { i, what });
+    const isOpen = (i, what) => !!(open && open.i === i && open.what === what);
+    // The three row buttons share one look; a button whose choices are open is highlighted.
+    const btn = on => `w-9 h-9 flex-shrink-0 rounded-lg border inline-flex items-center justify-center text-fb-ink ${on ? 'bg-fb-accent-pale border-fb-accent' : 'bg-fb-field border-fb-border'}`;
     return (
       <div data-line-codes>
         <p className={lbl + ' mt-5'}>Linework Codes</p>
         <div className="rounded-xl bg-fb-page-alt border border-fb-border px-2.5 py-1.5 mb-1.5">
-          {list.map((x, i) => (
+          {list.map((x, i) => {
+            const line = x.line || fbGeo.layerLineType(x.layer);
+            return (
             <div key={i} className="py-1">
             <div className="flex items-center gap-1.5">
               <input type="text" value={x.code} aria-label="Code"
                 onChange={e => setList(edit(i, { code: e.target.value }))} onBlur={() => save(list)}
-                className="w-[62px] flex-shrink-0 rounded-lg px-2 py-2 text-sm font-data uppercase text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
-              <LineNameCombo row={x} onType={label => setList(edit(i, { label }))} onDone={patch => save(edit(i, patch))} />
-              <button type="button" data-line-sym aria-label={`Map symbol for ${x.code || 'code'}`} aria-expanded={symOpen === i} onClick={() => setSymOpen(symOpen === i ? null : i)}
-                className={`w-9 h-9 flex-shrink-0 rounded-lg border inline-flex items-center justify-center text-[10px] font-bold text-fb-ink-muted ${symOpen === i ? 'bg-fb-accent-pale border-fb-accent' : 'bg-fb-field border-fb-border'}`}>
-                {x.symbol
-                  ? <span className="w-[26px] h-[26px] [&>svg]:w-full [&>svg]:h-full" dangerouslySetInnerHTML={{ __html: mapSymbolSvg(x.symbol.kind || 'topo', false, x.symbol.glyph && x.symbol.glyph !== 'dot' ? x.symbol.glyph : null) }} />
-                  : 'Auto'}
+                className="w-[58px] flex-shrink-0 rounded-lg px-2 py-2 text-sm font-data uppercase text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent" />
+              <input type="text" data-line-name value={x.label || ''} aria-label={`Name for ${x.code || 'code'}`}
+                placeholder={x.layer && x.layer !== 'other' ? fbGeo.figureLayer(x.layer).label : 'Name'}
+                onChange={e => setList(edit(i, { label: e.target.value }))} onBlur={() => save(list)}
+                className="flex-1 min-w-0 rounded-lg px-2 py-2 text-sm text-fb-ink bg-fb-field border border-fb-border outline-none focus:border-fb-accent placeholder:text-fb-ink-faint" />
+              <button type="button" data-line-sym aria-label={`Map symbol for ${x.code || 'code'}: ${x.symbol ? (MAP_SYMBOL_LABEL[x.symbol.kind] || 'Point') : 'Auto'}`}
+                aria-expanded={isOpen(i, 'sym')} onClick={() => toggle(i, 'sym')} className={btn(isOpen(i, 'sym'))}>
+                <span className="w-[24px] h-[24px] [&>svg]:w-full [&>svg]:h-full" dangerouslySetInnerHTML={{ __html: x.symbol
+                  ? mapSymbolSvg(x.symbol.kind || 'topo', false, x.symbol.glyph && x.symbol.glyph !== 'dot' ? x.symbol.glyph : null)
+                  : mapSymbolSvg('topo', false, null) }} />
               </button>
-              <button type="button" aria-pressed={x.closed} aria-label={`${x.code || 'Code'} closes`} onClick={() => save(edit(i, { closed: !x.closed }))}
-                className={`h-9 px-2.5 rounded-lg text-xs font-bold flex-shrink-0 ${x.closed ? 'bg-fb-accent text-white' : 'bg-fb-border text-fb-ink'}`}>
-                {x.closed ? 'Closed' : 'Open'}
+              <button type="button" data-line-type aria-label={`Line type for ${x.code || 'code'}: ${(fbGeo.lineType(line) || {}).label}`}
+                aria-expanded={isOpen(i, 'line')} onClick={() => toggle(i, 'line')} className={btn(isOpen(i, 'line'))}>
+                <LineTypeSvg id={line} />
               </button>
-              <button type="button" aria-label={`Remove ${x.code || 'code'}`} onClick={() => save(list.filter((_, j) => j !== i))}
+              <button type="button" data-line-closed aria-pressed={x.closed} aria-label={`${x.code || 'Code'}: ${x.closed ? 'closed' : 'open'} line`}
+                onClick={() => save(edit(i, { closed: !x.closed }))} className={btn(false)}>
+                {x.closed
+                  ? <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true"><path d="M5 17 8 6l11 3-2 9z" /></svg>
+                  : <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" aria-hidden="true"><path d="M4 18 9 7l6 8 5-10" /></svg>}
+              </button>
+              <button type="button" aria-label={`Remove ${x.code || 'code'}`} onClick={() => { setOpen(null); save(list.filter((_, j) => j !== i)); }}
                 className="w-8 h-9 flex items-center justify-center rounded-lg text-fb-ink-muted active:bg-fb-page-deep flex-shrink-0"><Ico.Trash /></button>
             </div>
-            {symOpen === i && (
+            {isOpen(i, 'sym') && (
               <div className="mt-1.5" data-line-sym-picker>
                 <MapSymbolPicker value={x.symbol || null} onChange={symbol => save(edit(i, { symbol: symbol || undefined }))} />
               </div>
             )}
+            {isOpen(i, 'line') && (
+              <div className="mt-1.5" data-line-type-picker>
+                <LineTypePicker value={line} onChange={id => save(edit(i, { line: id }))} />
+              </div>
+            )}
             </div>
-          ))}
+            );
+          })}
           {!list.length && <p className="text-sm text-fb-ink-muted py-2">No codes — the map draws no code lines.</p>}
         </div>
         <div className="flex gap-2">
           <button type="button" onClick={() => setList([...list, { code: '', layer: 'other', closed: false }])}
             className="h-9 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep">Add code</button>
-          <button type="button" onClick={() => save(fbGeo.DEFAULT_LINE_CODES.map(x => ({ ...x })))}
+          <button type="button" onClick={() => { setOpen(null); save(fbGeo.DEFAULT_LINE_CODES.map(x => ({ ...x }))); }}
             className="h-9 px-3 rounded-lg text-[13px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep">Reset to defaults</button>
         </div>
         <p className="text-xs text-fb-ink-muted mt-1.5 leading-snug">First word of the description. B begins, E ends, CLO closes.</p>
@@ -5873,7 +5910,8 @@
       const pts = l.lls.map(ll => toMM(ll[0], ll[1]));
       if (pts.length < 2) return;
       if (l.closed && pts.length >= 3) pts.push(pts[0]);
-      pdf.setLineDashPattern(l.source === 'code' ? [1.4, 1] : [], 0);
+      const lt = l.line ? fbGeo.lineType(l.line) : null;
+      pdf.setLineDashPattern(lt ? (lt.dash ? lt.dash.split(',').map(n => +n * 0.25) : []) : (l.source === 'code' ? [1.4, 1] : []), 0);
       for (let i = 1; i < pts.length; i++) {
         const s = _clipSeg(pts[i - 1], pts[i], x0, y0, x1, y1);
         if (s) pdf.line(s[0][0], s[0][1], s[1][0], s[1][1]);
@@ -7378,7 +7416,17 @@
       <div>
         <div role="group" aria-label="Point symbol" className="flex gap-1.5 overflow-x-auto pb-0.5">
           {MAP_KIND_CHOICES.map(([k, label]) => (
-            <button key={label} type="button" aria-pressed={kind === k} onClick={() => set(k, glyph)} className={chip(kind === k)}>{label}</button>
+            <button key={label} type="button" aria-pressed={kind === k} onClick={() => set(k, glyph)} className={chip(kind === k)}>
+              {k === null && (
+                // Auto: the dot, or the photo / voice / note symbol a point earns
+                <span className="inline-flex -space-x-1 mr-1.5" aria-hidden="true">
+                  {['topo', 'photo', 'voice', 'notes-pin'].map(s => (
+                    <span key={s} className="w-[18px] h-[18px] [&>svg]:w-full [&>svg]:h-full" dangerouslySetInnerHTML={{ __html: mapSymbolSvg(s, false, null) }} />
+                  ))}
+                </span>
+              )}
+              {label}
+            </button>
           ))}
         </div>
         {kind === 'topo' && (
@@ -7995,6 +8043,13 @@
     }[layer] || { color: FBC.ink, weight: 1.6 };
     return { ...st, fill: !!(closed && st.fillColor), opacity: 1 };
   }
+  // The layer's colours with a picked line type's dash (none picked: the layer's own).
+  function mapLineStyleFor(layer, closed, line) {
+    const st = mapLineStyle(layer, closed);
+    const t = line ? fbGeo.lineType(line) : null;
+    if (t) st.dashArray = t.dash || null;
+    return st;
+  }
 
   function MapFigureNameSheet({ defaultName, onSave, onClose }) {
     const trapRef = useRef(null);
@@ -8018,7 +8073,7 @@
   }
 
   // A manual figure (editable) or a code line (read-only, can become a figure).
-  function MapFigureSheet({ line, locked, onClose, onRename, onLayer, onReverse, onDelete, onConvert }) {
+  function MapFigureSheet({ line, table, locked, onClose, onRename, onCode, onReverse, onDelete, onConvert }) {
     const isCode = line.source === 'code';
     const [editName, setEditName] = useState(null);
     const [confirmDel, setConfirmDel] = useState(false);
@@ -8030,7 +8085,7 @@
       <MapDockSheet label={`Figure ${line.name}`} onClose={onClose} maxH="60%">
         <div className="flex items-center justify-between gap-2 mb-1">
           <span className="font-heading text-[11px] tracking-[0.12em] uppercase px-2 py-0.5 rounded-md bg-fb-accent-pale text-fb-cover-deep">
-            {fbGeo.figureLayer(line.layer).label} · {line.closed ? 'closed' : 'line'}{isCode ? ' · from codes' : ''}
+            {line.codeName || fbGeo.figureLayer(line.layer).label} · {line.closed ? 'closed' : 'line'}{isCode ? ' · from codes' : ''}
           </span>
           <button type="button" aria-label="Close figure" onClick={onClose} className="w-11 h-11 -mr-2 flex items-center justify-center text-fb-ink-muted active:bg-fb-page-deep rounded-xl"><Ico.Close /></button>
         </div>
@@ -8073,14 +8128,8 @@
 
         {!isCode && (
           <div className="mb-3">
-            <p className={MAP_LBL + ' mb-1.5'}>Layer</p>
-            <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-              {fbGeo.FIGURE_LAYERS.map(l => (
-                <button key={l.id} type="button" disabled={!canEdit} aria-pressed={line.layer === l.id} onClick={() => onLayer(l.id)}
-                  className={`h-9 px-3 rounded-lg text-sm font-semibold border inline-flex items-center flex-shrink-0 whitespace-nowrap disabled:opacity-60 ${line.layer === l.id
-                    ? 'bg-fb-cover border-fb-cover text-white' : 'bg-fb-page-alt border-fb-border text-fb-heading'}`}>{l.label}</button>
-              ))}
-            </div>
+            <p className={MAP_LBL + ' mb-1.5'}>Linework code</p>
+            <LineCodeChips table={table} value={line.fig.code || null} onPick={onCode} disabled={!canEdit} />
           </div>
         )}
 
@@ -8167,11 +8216,18 @@
       const ll = fbGeo.toLatLon(c.N, c.E, crsId);
       return ll ? [ll.lat, ll.lon] : null;
     };
+    // A figure drawn with a linework code follows that code's look (layer colour,
+    // line type) as the code is edited; one without keeps its own layer.
+    const table = fbGeo.lineCodeTable(project);
+    const rowOf = code => (code ? table.find(t => t.code === code) : null) || null;
+    const codeName = row => (row ? row.label || row.code : null);
     const figs = fbGeo.getFigures(project).map(f => {
       const r = fbGeo.resolveFigure(f, lookup);
+      const row = rowOf(f.code);
       return {
-        key: 'fig:' + f.id, fig: f, source: 'figure', name: f.name || fbGeo.figureLayer(f.layer).label,
-        layer: f.layer, closed: r.closed, r, lls: r.verts.map(toLL).filter(Boolean),
+        key: 'fig:' + f.id, fig: f, source: 'figure', name: f.name || codeName(row) || fbGeo.figureLayer(f.layer).label,
+        layer: row ? row.layer : f.layer, line: row ? row.line || null : null, codeName: codeName(row),
+        closed: r.closed, r, lls: r.verts.map(toLL).filter(Boolean),
         labelLL: r.closed && r.verts.length >= 3 ? labelAt(r.verts) : null,
       };
     });
@@ -8181,7 +8237,8 @@
     const codes = fbGeo.codeLines(project, hidePages).filter(c => !taken.has(run(c.pts))).map(c => {
       const area = c.closed ? fbGeo.shoelaceArea(c.pts) : null;
       return {
-        key: 'code:' + c.name, code: c, source: 'code', name: c.name, layer: c.layer, closed: c.closed,
+        key: 'code:' + c.name, code: c, source: 'code', name: c.name, layer: c.layer, line: c.line || null,
+        codeName: codeName(rowOf(c.code)), closed: c.closed,
         r: { verts: c.pts, missing: [], closed: c.closed, length: fbGeo.pathLength(c.pts, c.closed), area },
         lls: c.pts.map(toLL).filter(Boolean), labelLL: c.closed ? labelAt(c.pts) : null,
       };
@@ -8366,7 +8423,7 @@
       const lineTap = key => e => { L.DomEvent.stopPropagation(e); hRef.current.lineTap && hRef.current.lineTap(key); };
       lines.forEach(l => {
         if (!(l.source === 'code' ? prefs.codeLines : prefs.lines) || l.lls.length < 2) return;
-        const style = { ...mapLineStyle(l.layer, l.closed), renderer: lay.renderer };
+        const style = { ...mapLineStyleFor(l.layer, l.closed, l.line), renderer: lay.renderer };
         if (l.source === 'code') style.opacity = 0.8;   // computed lines read a touch lighter
         (l.closed && l.lls.length >= 3 ? L.polygon(l.lls, style) : L.polyline(l.lls, style)).on('click', lineTap(l.key)).addTo(lay.lines);
         if (l.labelLL) {
@@ -8532,7 +8589,7 @@
       }
       if (draft && draft.pts.length) {
         const lls = draft.pts.map(v => feats.byId[v.id] && feats.byId[v.id].ll).filter(Boolean);
-        const style = { ...mapLineStyle(draft.layer, false), renderer: lay.renderer, interactive: false };
+        const style = { ...mapLineStyleFor(draft.layer, false, draft.line), renderer: lay.renderer, interactive: false };
         if (lls.length >= 2) L.polyline(draft.kind === 'polygon' && lls.length >= 3 ? lls.concat([lls[0]]) : lls, style).addTo(lay.sel);
         lls.forEach((ll, i) => L.circleMarker(ll, { renderer: lay.renderer, radius: i ? 7 : 9, color: FBC.ink, weight: 2, fill: false, interactive: false }).addTo(lay.sel));
       }
@@ -8834,7 +8891,8 @@
     function startFigure() {
       if (locked) return;
       setSheet(null); setSelId(null); setNavId(null);
-      setDraft({ kind: 'line', layer: 'lot', pts: [] });
+      const first = fbGeo.lineCodeTable(DB.getProject(projectId))[0];
+      setDraft({ kind: 'line', code: first ? first.code : null, layer: first ? first.layer : 'other', line: first ? first.line || null : null, label: first ? first.label || first.code : null, pts: [] });
       setMode('figure');
     }
     function cancelFigure() { setDraft(null); setMode(null); if (sheet === 'figname') setSheet(null); }
@@ -8856,6 +8914,7 @@
         id: 'fig_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
         name, kind: draft.kind, layer: draft.layer, pts: draft.pts, createdAt: new Date().toISOString(),
       };
+      if (draft.code) fig.code = draft.code;   // its style follows that linework code
       saveFigures(list => [...list, fig]);
       setDraft(null); setMode(null); setSheet(null);
       toast.success(`${name} saved`);
@@ -9038,13 +9097,8 @@
                 <button type="button" disabled={!draft.pts.length} onClick={() => setDraft({ ...draft, pts: draft.pts.slice(0, -1) })}
                   className="h-9 px-3 rounded-lg text-[13px] font-semibold whitespace-nowrap bg-fb-page-alt border border-fb-border text-fb-heading active:bg-fb-page-deep disabled:opacity-50">Undo last</button>
               </div>
-              <div role="group" aria-label="Layer" className="flex gap-1.5 overflow-x-auto pb-0.5">
-                {fbGeo.FIGURE_LAYERS.map(l => (
-                  <button key={l.id} type="button" aria-pressed={draft.layer === l.id} onClick={() => setDraft({ ...draft, layer: l.id })}
-                    className={`h-9 px-3 rounded-lg text-sm font-semibold border inline-flex items-center flex-shrink-0 whitespace-nowrap ${draft.layer === l.id
-                      ? 'bg-fb-cover border-fb-cover text-white' : 'bg-fb-page-alt border-fb-border text-fb-heading'}`}>{l.label}</button>
-                ))}
-              </div>
+              <LineCodeChips table={fbGeo.lineCodeTable(project)} value={draft.code}
+                onPick={row => setDraft({ ...draft, code: row.code, layer: row.layer, line: row.line || null, label: row.label || row.code })} />
               <p className="text-xs text-fb-ink-muted mt-1.5">Tap points in order{draft.kind === 'polygon' ? ' — tap the first again to close' : ''}.</p>
             </div>
           ) : banner ? (
@@ -9207,20 +9261,20 @@
             }} />
         )}
         {sheet === 'figname' && draft && (
-          <MapFigureNameSheet defaultName={fbGeo.nextFigureName(project, draft.layer)} onSave={finishFigure} onClose={() => setSheet(null)} />
+          <MapFigureNameSheet defaultName={fbGeo.nextFigureName(project, draft.layer, draft.label)} onSave={finishFigure} onClose={() => setSheet(null)} />
         )}
         {sheet === 'figure' && openLine && (
-          <MapFigureSheet key={openLine.key} line={openLine} locked={locked}
+          <MapFigureSheet key={openLine.key} line={openLine} table={fbGeo.lineCodeTable(project)} locked={locked}
             onClose={() => { setSheet(null); setLineKey(null); }}
             onRename={name => editFigure(openLine.fig.id, f => ({ ...f, name }))}
-            onLayer={layer => editFigure(openLine.fig.id, f => ({ ...f, layer }))}
+            onCode={row => editFigure(openLine.fig.id, f => ({ ...f, code: row.code, layer: row.layer }))}
             onReverse={() => editFigure(openLine.fig.id, f => ({ ...f, pts: f.pts.slice().reverse() }))}
             onDelete={() => { saveFigures(list => list.filter(f => !(f && f.id === openLine.fig.id))); setSheet(null); setLineKey(null); toast.success(`${openLine.name} deleted`); }}
             onConvert={() => {
               const c = openLine.code;
               const fig = {
                 id: 'fig_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-                name: c.name, kind: c.closed ? 'polygon' : 'line', layer: c.layer,
+                name: c.name, kind: c.closed ? 'polygon' : 'line', layer: c.layer, code: c.code,
                 pts: c.pts.map(p => ({ id: p.id, num: p.number })), createdAt: new Date().toISOString(),
               };
               saveFigures(list => [...list, fig]);

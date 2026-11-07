@@ -924,6 +924,20 @@ ${wpts}${trks ? '\n' + trks : ''}
   ];
   const figureLayer = id => FIGURE_LAYERS.find(l => l.id === id) || FIGURE_LAYERS[FIGURE_LAYERS.length - 1];
 
+  // Line types — the sketch page's list (sketch.js reads it from here), so a
+  // linework code draws with the same dash as a sketch line. `dash` is in
+  // drawing units at a ~1.8 px stroke; '' is solid.
+  const LINE_TYPES = [
+    { id: 'solid',   label: 'Solid',      dash: '' },
+    { id: 'dashed',  label: 'Dashed',     dash: '8,5' },
+    { id: 'centre',  label: 'Centreline', dash: '20,5,5,5' },
+    { id: 'dotted',  label: 'Dotted',     dash: '2,6' },
+    { id: 'dashdot', label: 'Dash-dot',   dash: '12,5,2,5' },
+  ];
+  const lineType = id => LINE_TYPES.find(t => t.id === id) || null;
+  // The type a code shows when none was picked: the nearest to its layer's look.
+  const layerLineType = layer => (layer === 'lot' ? 'dashed' : layer === 'fence' ? 'dashdot' : 'solid');
+
   function getFigures(project) {
     return Array.isArray(project && project.figures)
       ? project.figures.filter(f => f && f.id && Array.isArray(f.pts)) : [];
@@ -955,8 +969,10 @@ ${wpts}${trks ? '\n' + trks : ''}
     };
   }
   // "Lot 1", "Lot 2"… — the next free number for that layer.
-  function nextFigureName(project, layer) {
-    const label = figureLayer(layer).label;
+  // label: the linework code's name (or the code) the figure is drawn with;
+  // without one, the layer's name.
+  function nextFigureName(project, layer, codeLabel) {
+    const label = String(codeLabel || '').trim() || figureLayer(layer).label;
     const used = new Set(getFigures(project).map(f => String(f.name || '').trim().toLowerCase()));
     let n = 1;
     while (used.has(`${label} ${n}`.toLowerCase())) n++;
@@ -1027,6 +1043,7 @@ ${wpts}${trks ? '\n' + trks : ''}
         if (label) row.label = label;   // the name typed over the layer's
         const symbol = cleanMapSym(x.symbol);
         if (symbol) row.symbol = symbol;   // the map symbol every point with this code gets
+        if (lineType(x.line)) row.line = x.line;   // a picked line type (else the layer's look)
         return row;
       });
   }
@@ -1049,7 +1066,7 @@ ${wpts}${trks ? '\n' + trks : ''}
       if (!t) return;
       const ctl = toks.slice(1).filter(w => LINE_CONTROLS.indexOf(w) !== -1);
       if (ctl.indexOf('B') !== -1) end(t.code);
-      if (!open[t.code]) open[t.code] = { code: t.code, label: t.label, layer: t.layer, closed: t.closed, pts: [], first: p };
+      if (!open[t.code]) open[t.code] = { code: t.code, label: t.label, layer: t.layer, line: t.line, closed: t.closed, pts: [], first: p };
       open[t.code].pts.push(p);
       if (ctl.indexOf('CLO') !== -1) { open[t.code].closed = true; end(t.code); }
       else if (ctl.indexOf('E') !== -1) end(t.code);
@@ -1061,7 +1078,9 @@ ${wpts}${trks ? '\n' + trks : ''}
     const count = {};
     return done.map(s => {
       count[s.code] = (count[s.code] || 0) + 1;
-      return { code: s.code, layer: s.layer, closed: s.closed && s.pts.length >= 3, name: `${s.label || s.code} ${count[s.code]}`, pts: s.pts };
+      const out = { code: s.code, layer: s.layer, closed: s.closed && s.pts.length >= 3, name: `${s.label || s.code} ${count[s.code]}`, pts: s.pts };
+      if (s.line) out.line = s.line;
+      return out;
     });
   }
   // hidePages: Points page ids whose points don't draw lines (a Map page's choice).
@@ -1256,7 +1275,7 @@ ${wpts}${trks ? '\n' + trks : ''}
     DEFAULT_SYMBOL_CODES, SYMBOL_CODE_KINDS, parseCodeList, symbolCodes, pointCode, pointSymbol, withCodeSymbol,
     mediaForPoint, convertGrid, gridInverse, fmtAzimuth, fmtQuadrant, fmtThin,
     shoelaceArea, pathLength, fmtArea, GRID_STEPS, gridStep,
-    FIGURE_LAYERS, figureLayer, getFigures, vertexLookup, resolveFigure, nextFigureName, figureLabelPoint,
+    FIGURE_LAYERS, figureLayer, LINE_TYPES, lineType, layerLineType, getFigures, vertexLookup, resolveFigure, nextFigureName, figureLabelPoint,
     remapFigureRows, figureLinework, lineworkCoords,
     DEFAULT_LINE_CODES, LINE_CONTROLS, lineCodeTable, parseCodeLines, codeLines,
     GPS_GRID_DECIMALS, GPS_ELEV_DECIMALS,
