@@ -839,7 +839,7 @@
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.212';
+  const APP_VERSION = '1.213';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -6108,9 +6108,24 @@
     const last = pdf.getNumberOfPages(), total = last - firstSheet + 1;
     for (let s = firstSheet; s <= last; s++) {
       pdf.setPage(s);
-      _pdfNotebookFooter(pdf, s - firstSheet + 1, total, W, H, margin, exportTs);
+      // A landscape print-area sheet is 297 × 210: its footer follows its own size.
+      const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
+      _pdfNotebookFooter(pdf, s - firstSheet + 1, total, pw || W, ph || H, margin, exportTs);
     }
     return total;
+  }
+
+  // jsPDF's bare addPage() repeats the previous sheet's size, so after a
+  // landscape print area every following sheet would turn landscape too. On an
+  // A4 export a bare call means A4 portrait; only a landscape area asks otherwise.
+  function _pdfA4(pdf) {
+    const add = pdf.addPage.bind(pdf);
+    pdf.addPage = (format, orientation) => add(format || 'a4', orientation || 'portrait');
+    return pdf;
+  }
+  // Sheet size for a sketch print area: A4 landscape for orient 'land', else the export's portrait W × H.
+  function _pdfAreaDims(area, W, H) {
+    return fbPrint.isLand(area) ? { W: Math.max(W, H), H: Math.min(W, H), orient: 'landscape' } : { W, H, orient: 'portrait' };
   }
 
   // Rasterise an SVG string to a PNG data URL — the same html2canvas route the
@@ -6564,7 +6579,7 @@
       const CR  = [255, 255, 255];  // white
       const BRD = [200, 200, 200];  // border grey
 
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pdf = _pdfA4(new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' }));
       const F   = _initPDFFonts();
       // Export timestamp — used in per-page footer
       const exportTs = new Date().toLocaleString('en-CA', {
@@ -6679,7 +6694,9 @@
       const firstSheet = pdf.getNumberOfPages() + 1;   // cover and contents come before it
 
       for (const page of exportPages) {
-        pdf.addPage();
+        // A sketch whose first print area is landscape starts on a landscape sheet.
+        const _firstArea = page.type === 'sketch' ? fbPrint.sorted(fbPrint.normalize(page.printAreas))[0] : null;
+        pdf.addPage('a4', _pdfAreaDims(_firstArea, W, H).orient);
         const sheetNo = pdf.getNumberOfPages() - firstSheet + 1;
         const meta = { data:   { label: 'Data',   color: '#606060', bg: '#EEEEEE' },
                        sketch: { label: 'Sketch', color: '#606060', bg: '#EEEEEE' },
@@ -6709,9 +6726,10 @@
             await _pdfSketchSheet(pdf, page, page.viewBox, _skImgMap, { W, H, margin, contentY });
           }
           for (const [i, area] of areas.entries()) {
-            if (i > 0) pdf.addPage();
-            const contentY = _pdfAreaHeader(pdf, page, area, meta, W, H, margin, F);
-            await _pdfSketchSheet(pdf, page, fbPrint.frameRect(area), _skImgMap, { W, H, margin, contentY });
+            const d = _pdfAreaDims(area, W, H);
+            if (i > 0) pdf.addPage('a4', d.orient);
+            const contentY = _pdfAreaHeader(pdf, page, area, meta, d.W, d.H, margin, F);
+            await _pdfSketchSheet(pdf, page, fbPrint.frameRect(area), _skImgMap, { W: d.W, H: d.H, margin, contentY });
           }
 
         } else if (page.type === 'map') {
@@ -7042,7 +7060,9 @@
         obstructions: { label: 'Obstructions' },
       };
       const meta = metaMap[page.type] || metaMap.data;
-      const pdf  = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      // A sketch whose first print area is landscape opens on a landscape sheet.
+      const _firstArea = page.type === 'sketch' ? fbPrint.sorted(fbPrint.normalize(page.printAreas))[0] : null;
+      const pdf  = _pdfA4(new jsPDF({ orientation: _pdfAreaDims(_firstArea, W, H).orient, unit: 'mm', format: 'a4' }));
       const F    = _initPDFFonts();
       const exportTsSP = new Date().toLocaleString('en-CA', {
         year: 'numeric', month: 'short', day: 'numeric',
@@ -7053,7 +7073,7 @@
         : page.type === 'obstructions' ? { ...page, title: _sitePdfTitle(page) } : page;
       // A sketch with print areas opens on its first area (see the sketch branch).
       const areas = page.type === 'sketch' ? fbPrint.sorted(fbPrint.normalize(page.printAreas)) : [];
-      const contentY = areas.length ? _pdfAreaHeader(pdf, page, areas[0], meta, W, H, margin, F)
+      const contentY = areas.length ? _pdfAreaHeader(pdf, page, areas[0], meta, _pdfAreaDims(areas[0], W, H).W, _pdfAreaDims(areas[0], W, H).H, margin, F)
                      : page.type === 'map' ? _pdfMapHeader(pdf, page, _pdfMapFrames(page)[0], meta, W, H, margin, F)
                                     : _pdfPageHeader(pdf, headPage, meta, W, H, margin, F);
 
@@ -7068,8 +7088,9 @@
         const _skImgMap2 = _skImgIds2.length > 0 ? await photoDB.getMany(_skImgIds2) : {};
         if (areas.length === 0) await _pdfSketchSheet(pdf, page, page.viewBox, _skImgMap2, { W, H, margin, contentY, quiet: true });
         for (const [i, area] of areas.entries()) {
-          const y = i === 0 ? contentY : (pdf.addPage(), _pdfAreaHeader(pdf, page, area, meta, W, H, margin, F));
-          await _pdfSketchSheet(pdf, page, fbPrint.frameRect(area), _skImgMap2, { W, H, margin, contentY: y, quiet: true });
+          const d = _pdfAreaDims(area, W, H);
+          const y = i === 0 ? contentY : (pdf.addPage('a4', d.orient), _pdfAreaHeader(pdf, page, area, meta, d.W, d.H, margin, F));
+          await _pdfSketchSheet(pdf, page, fbPrint.frameRect(area), _skImgMap2, { W: d.W, H: d.H, margin, contentY: y, quiet: true });
         }
       } else if (page.type === 'title') {
         // ── TITLE PAGE — professional cover sheet ──────────────────────────────

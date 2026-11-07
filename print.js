@@ -1,9 +1,10 @@
 // FieldBook sketch print-area engine — window.fbPrint
 //
 // A print area is a frame on a sketch that prints as a PDF page of its own.
-// It is stored on the sketch page as { id, label, x, y, w }: its top-left
-// corner and its width, in sketch world px. Its height is never stored — it
-// always comes from the paper, so a frame cannot drift off the page's shape.
+// It is stored on the sketch page as { id, label, x, y, w, orient? }: its
+// top-left corner and its width, in sketch world px, and orient: 'land' for a
+// landscape sheet (absent = portrait). Its height is never stored — it always
+// comes from the paper, so a frame cannot drift off the page's shape.
 //
 // Plain JS, no React and no DOM: sketch.js draws and drags the frames,
 // index.html prints them. Runs in Node too, for the tests (test-print.js).
@@ -14,26 +15,42 @@
   // The drawable area of a sketch page in the PDF, in mm: A4 portrait with
   // 14 mm margins, less the 23 mm header band and the 14 mm footer strip.
   // exportProjectPDF / exportSinglePagePDF print a frame into exactly this box.
+  // A landscape sheet (A4 turned, same margins, header and footer) leaves
+  // 269 × 145 mm: the title block stays across the top, so the box is not
+  // simply the portrait one turned.
   const PAPER = { w: 182, h: 232 };
   const RATIO = PAPER.h / PAPER.w;
+  const PAPER_LAND = { w: 269, h: 145 };
+  const isLand = a => !!a && a.orient === 'land';
+  const paperOf = a => (isLand(a) ? PAPER_LAND : PAPER);
+  const ratioOf = a => { const p = paperOf(a); return p.h / p.w; };
 
   // (multiplied before dividing, so a 182 px frame is exactly 232 px tall)
-  function frameRect(a) { return { x: a.x, y: a.y, w: a.w, h: a.w * PAPER.h / PAPER.w }; }
-  const centre = a => ({ x: a.x + a.w / 2, y: a.y + a.w * RATIO / 2 });
+  function frameRect(a) { const p = paperOf(a); return { x: a.x, y: a.y, w: a.w, h: a.w * p.h / p.w }; }
+  const centre = a => ({ x: a.x + a.w / 2, y: a.y + frameRect(a).h / 2 });
 
   // ─── Print scale ───────────────────────────────────────────────────────────
   // The frame's width on the ground over the paper's width. `pxPerMetre` is
   // the sketch's world px per metre at 1:1 (PIXELS_PER_METER in sketch.js).
   function frameScale(a, scaleDenom, pxPerMetre) {
-    return (a.w * scaleDenom / pxPerMetre) / (PAPER.w / 1000);
+    return (a.w * scaleDenom / pxPerMetre) / (paperOf(a).w / 1000);
   }
-  function widthForScale(denom, scaleDenom, pxPerMetre) {
-    return denom * (PAPER.w / 1000) * pxPerMetre / scaleDenom;
+  // `a` (optional) picks the paper: a landscape frame is wider at the same scale.
+  function widthForScale(denom, scaleDenom, pxPerMetre, a) {
+    return denom * (paperOf(a).w / 1000) * pxPerMetre / scaleDenom;
   }
   // The frame resized about its centre to print at exactly 1:denom.
   function setScale(a, denom, scaleDenom, pxPerMetre) {
-    const c = centre(a), w = widthForScale(denom, scaleDenom, pxPerMetre);
-    return { ...a, x: c.x - w / 2, y: c.y - w * RATIO / 2, w };
+    const c = centre(a), w = widthForScale(denom, scaleDenom, pxPerMetre, a);
+    return { ...a, x: c.x - w / 2, y: c.y - w * ratioOf(a) / 2, w };
+  }
+  // The frame turned to the other orientation about its centre, at the same
+  // print scale (so a landscape frame is wider and shorter on the sketch).
+  function flip(a, scaleDenom, pxPerMetre) {
+    const denom = frameScale(a, scaleDenom, pxPerMetre);
+    const { orient, ...rest } = a;
+    const turned = isLand(a) ? rest : { ...rest, orient: 'land' };
+    return setScale({ ...turned, x: a.x, y: centre(a).y - frameRect(turned).h / 2 }, denom, scaleDenom, pxPerMetre);
   }
   // "1:250" for a round scale, "≈1:247" for whatever a drag left behind.
   function scaleText(denom) {
@@ -51,19 +68,23 @@
   function resize(a, corner, pt, minW) {
     const r = frameRect(a), west = corner.includes('w'), north = corner.includes('n');
     const ax = west ? r.x + r.w : r.x, ay = north ? r.y + r.h : r.y;        // the fixed corner
-    const w = Math.max(minW, Math.abs(pt.x - ax), Math.abs(pt.y - ay) / RATIO);
-    return { ...a, x: west ? ax - w : ax, y: north ? ay - w * RATIO : ay, w };
+    const k = ratioOf(a);
+    const w = Math.max(minW, Math.abs(pt.x - ax), Math.abs(pt.y - ay) / k);
+    return { ...a, x: west ? ax - w : ax, y: north ? ay - w * k : ay, w };
   }
   // The frame a drag from p0 to p1 draws, or null while it is still under minW.
-  function fromDrag(p0, p1, minW) {
-    const w = Math.max(Math.abs(p1.x - p0.x), Math.abs(p1.y - p0.y) / RATIO);
+  // `land` draws a landscape frame.
+  function fromDrag(p0, p1, minW, land) {
+    const o = land ? { orient: 'land' } : {}, k = ratioOf(o);
+    const w = Math.max(Math.abs(p1.x - p0.x), Math.abs(p1.y - p0.y) / k);
     if (w < minW) return null;
-    return { x: p1.x < p0.x ? p0.x - w : p0.x, y: p1.y < p0.y ? p0.y - w * RATIO : p0.y, w };
+    return { x: p1.x < p0.x ? p0.x - w : p0.x, y: p1.y < p0.y ? p0.y - w * k : p0.y, w, ...o };
   }
   // A frame centred in a view, filling `fill` of whichever way is tighter.
-  function fitView(view, fill) {
-    const w = Math.min(view.w, view.h / RATIO) * (fill || 0.8);
-    return { x: view.x + (view.w - w) / 2, y: view.y + (view.h - w * RATIO) / 2, w };
+  function fitView(view, fill, land) {
+    const o = land ? { orient: 'land' } : {}, k = ratioOf(o);
+    const w = Math.min(view.w, view.h / k) * (fill || 0.8);
+    return { x: view.x + (view.w - w) / 2, y: view.y + (view.h - w * k) / 2, w, ...o };
   }
 
   // ─── Labels ────────────────────────────────────────────────────────────────
@@ -110,7 +131,8 @@
       return pt.x >= r.x && pt.x <= r.x + r.w && pt.y >= r.y && pt.y <= r.y + r.h;
     });
     if (!inside.length) return null;
-    return { id: inside.reduce((best, a) => (a.w < best.w ? a : best)).id, part: 'body' };
+    const area = a => { const r = frameRect(a); return r.w * r.h; };
+    return { id: inside.reduce((best, a) => (area(a) < area(best) ? a : best)).id, part: 'body' };
   }
 
   // ─── Stored data ───────────────────────────────────────────────────────────
@@ -123,7 +145,7 @@
     (Array.isArray(raw) ? raw : []).forEach(a => {
       if (!a || !fin(a.x) || !fin(a.y) || !fin(a.w) || a.w <= 0) return;
       const label = /^[A-Z]+$/.test(String(a.label || '')) && !out.some(b => b.label === a.label) ? a.label : nextLabel(out);
-      out.push({ id: a.id ? String(a.id) : newId(), label, x: a.x, y: a.y, w: a.w });
+      out.push({ id: a.id ? String(a.id) : newId(), label, x: a.x, y: a.y, w: a.w, ...(isLand(a) ? { orient: 'land' } : {}) });
     });
     return out;
   }
@@ -151,11 +173,11 @@
   }
   const groundWidth = f => f.w * groundFactor(f);
   // The print scale denominator: ground width over the paper's 182 mm.
-  const mapScale = f => groundWidth(f) / (PAPER.w / 1000);
+  const mapScale = f => groundWidth(f) / (paperOf(f).w / 1000);
   // The frame resized about its centre to print at exactly 1:denom.
   function mapSetScale(f, denom) {
-    const c = centre(f), w = denom * (PAPER.w / 1000) / groundFactor(f);
-    return { ...f, x: c.x - w / 2, y: c.y - w * RATIO / 2, w };
+    const c = centre(f), w = denom * (paperOf(f).w / 1000) / groundFactor(f);
+    return { ...f, x: c.x - w / 2, y: c.y - w * ratioOf(f) / 2, w };
   }
   // Lat/lng (N/E on Local) of the four corners, for Leaflet.
   function frameCorners(f) {
@@ -208,7 +230,7 @@
 
   const api = {
     mapFrames, mapFramesPatch,
-    PAPER, RATIO, frameRect, frameScale, widthForScale, setScale, scaleText,
+    PAPER, RATIO, PAPER_LAND, paperOf, isLand, flip, frameRect, frameScale, widthForScale, setScale, scaleText,
     move, resize, fromDrag, fitView,
     labelAt, nextLabel, sorted, primary, hit, normalize, newId,
     toWorld, fromWorld, groundWidth, mapScale, mapSetScale, frameCorners, tileZoom, tilePlan, normalizeMapFrame,

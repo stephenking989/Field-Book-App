@@ -1502,6 +1502,25 @@ function PrintScaleInput({ value, onCommit }) {
   );
 }
 
+// PRINT AREA ORIENTATION — portrait | landscape, a two-button switch on the
+// frame bar. With a frame selected it turns that frame (same centre, same
+// print scale); with none it sets the orientation the next frame is drawn in.
+function PrintOrientToggle({ land, onPick }) {
+  const btn = on => `h-6 w-7 flex items-center justify-center border border-fb-border ${on ? 'bg-fb-accent text-white' : 'bg-fb-page-alt text-fb-ink-muted'}`;
+  return (
+    <div role="group" aria-label="Page orientation" data-print-orient="" className="flex flex-shrink-0">
+      <button type="button" title="Portrait page" aria-label="Portrait" aria-pressed={!land}
+        onClick={() => onPick(false)} className={btn(!land)}>
+        <svg width="10" height="13" viewBox="0 0 10 13" fill="none" stroke="currentColor" strokeWidth="1.4"><rect x="1" y="1" width="8" height="11" rx="1"/></svg>
+      </button>
+      <button type="button" title="Landscape page" aria-label="Landscape" aria-pressed={land}
+        onClick={() => onPick(true)} className={`${btn(land)} border-l-0`}>
+        <svg width="13" height="10" viewBox="0 0 13 10" fill="none" stroke="currentColor" strokeWidth="1.4"><rect x="1" y="1" width="11" height="8" rx="1"/></svg>
+      </button>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // RIGHT PANEL SECTIONS — each one folds away under its title
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3046,6 +3065,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
   const [printAreas, setPrintAreas] = useState(() => fbPrint.normalize(page.printAreas));
   const [printSel, setPrintSel] = useState(null);          // id of the frame being edited
   const [printDraft, setPrintDraft] = useState(null);      // a frame being drawn, before it is released
+  const [printLand, setPrintLand] = useState(false);       // the bar's orientation for the next frame (not saved)
   const [showPrintAreas, setShowPrintAreas] = useState(page.printAreasHidden !== true);
   const printAreasRef = useRef(printAreas);
   const printDragRef = useRef(null);                       // { mode, id, start, x, y, before, moved }
@@ -3952,19 +3972,25 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     DB.updatePage(projectId, page.id, { printAreasHidden: !next });
   }
   function addPrintArea(frame) {
-    const a = { id: fbPrint.newId(), label: fbPrint.nextLabel(printAreasRef.current), x: frame.x, y: frame.y, w: frame.w };
+    const a = { id: fbPrint.newId(), label: fbPrint.nextLabel(printAreasRef.current), x: frame.x, y: frame.y, w: frame.w,
+      ...(fbPrint.isLand(frame) ? { orient: 'land' } : {}) };
     putPrintAreas([...printAreasRef.current, a]);
     setPrintSel(a.id);
     if (!showPrintAreas) togglePrintAreas();
   }
   // A frame is moved by its body and resized by a corner — always at the
   // paper's ratio, with the opposite corner fixed.
+  // Orientation for the next frame: the selected frame's, else the bar's choice.
+  function nextPrintLand() {
+    const sel = printAreasRef.current.find(a => a.id === printSel);
+    return sel ? fbPrint.isLand(sel) : printLand;
+  }
   function dragPrintArea(pt, e) {
     const d = printDragRef.current;
     if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;     // not a drag yet
     d.moved = true;
     const minW = 24 * viewBox.w / (svgSizeRef.current.w || viewBox.w);
-    if (d.mode === 'new') { setPrintDraft(fbPrint.fromDrag(d.start, pt, minW)); return; }
+    if (d.mode === 'new') { setPrintDraft(fbPrint.fromDrag(d.start, pt, minW, d.land)); return; }
     const orig = d.before.find(a => a.id === d.id);
     if (!orig) return;
     const next = d.mode === 'move' ? fbPrint.move(orig, pt.x - d.start.x, pt.y - d.start.y) : fbPrint.resize(orig, d.mode, pt, minW);
@@ -3975,7 +4001,7 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     printDragRef.current = null;
     setPrintDraft(null);
     if (d.mode !== 'new') { if (d.moved) putPrintAreas(printAreasRef.current); return; }
-    const frame = d.moved ? fbPrint.fromDrag(d.start, pt, 24 * viewBox.w / (svgSizeRef.current.w || viewBox.w)) : null;
+    const frame = d.moved ? fbPrint.fromDrag(d.start, pt, 24 * viewBox.w / (svgSizeRef.current.w || viewBox.w), d.land) : null;
     if (frame) addPrintArea(frame);
     else if (!d.moved) setPrintSel(null);                                         // a tap on empty space lets go
   }
@@ -4484,7 +4510,8 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
     if (tool === 'print-area') {
       const on = showPrintAreas ? fbPrint.hit(printAreasRef.current, pt, 14 * ps, printSel) : null;
       printDragRef.current = { mode: on ? (on.part === 'body' ? 'move' : on.part) : 'new', id: on ? on.id : null,
-                               start: pt, x: e.clientX, y: e.clientY, before: printAreasRef.current, moved: false };
+                               start: pt, x: e.clientX, y: e.clientY, before: printAreasRef.current, moved: false,
+                               land: on ? false : nextPrintLand() };
       if (on) setPrintSel(on.id);
       return;
     }
@@ -9422,7 +9449,13 @@ function SketchPage({ page, projectId, onReload, onBack, prevPageId, nextPageId,
               <div style={{ position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 3,
                 display: 'flex', alignItems: 'center', gap: 6, maxWidth: '96%', padding: '5px 6px', whiteSpace: 'nowrap',
                 background: PT.bg, border: `1px solid ${PT.border}`, color: PT.text, fontFamily: FBF.sketch, fontSize: 11 }}>
-                <button onClick={() => addPrintArea(fbPrint.fitView(viewBox, 0.8))} style={stripBtn}>＋ Area</button>
+                <button onClick={() => addPrintArea(fbPrint.fitView(viewBox, 0.8, nextPrintLand()))} style={stripBtn}>＋ Area</button>
+                <PrintOrientToggle land={sel ? fbPrint.isLand(sel) : printLand}
+                  onPick={land => {
+                    setPrintLand(land);
+                    if (sel && fbPrint.isLand(sel) !== land)
+                      putPrintAreas(printAreasRef.current.map(a => (a.id === sel.id ? fbPrint.flip(a, scaleDenom, PIXELS_PER_METER) : a)));
+                  }} />
                 {sel ? (
                   <>
                     <span style={{ fontWeight: 700 }}>{sel.label}</span>
