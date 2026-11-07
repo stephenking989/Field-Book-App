@@ -27,19 +27,35 @@
 
   <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone@8.0.7/babel.min.js"></script>
   <script>
     // Boot timing: one console line per stage, ms since the page started loading.
     window.fbBootLog = function (label, extra) {
       try { console.log('[boot] ' + label + ' ' + Math.round(performance.now()) + 'ms' + (extra ? ' ' + extra : '')); } catch (e) {}
     };
-    fbBootLog('babel ready');
-    // JSX only. The default presets (react + env) spend ~80 % of the compile
-    // down-levelling syntax every browser we support already runs.
-    Babel.registerPreset('fb-jsx', { presets: [[Babel.availablePresets.react, { runtime: 'classic' }]] });
-    // Babel compiles the text/babel scripts on window DOMContentLoaded; this
-    // document listener runs just before it.
-    document.addEventListener('DOMContentLoaded', function () { fbBootLog('babel start'); });
+    // Babel is loaded only when a script has to be compiled (see the code cache
+    // at the end of <body>). Keep this URL pinned and identical to sw.js BABEL_URL.
+    window.FB_BABEL_URL = 'https://unpkg.com/@babel/standalone@8.0.7/babel.min.js';
+    window.fbLoadBabel = function () {
+      if (window._fbBabelP) return window._fbBabelP;
+      window._fbBabelP = new Promise(function (resolve, reject) {
+        function ready() {
+          // JSX only. The default presets (react + env) spend ~80 % of the compile
+          // down-levelling syntax every browser we support already runs.
+          if (!Babel.availablePresets['fb-jsx']) {
+            Babel.registerPreset('fb-jsx', { presets: [[Babel.availablePresets.react, { runtime: 'classic' }]] });
+          }
+          fbBootLog('babel ready');
+          resolve(window.Babel);
+        }
+        if (window.Babel) { ready(); return; }
+        var s = document.createElement('script');
+        s.src = window.FB_BABEL_URL;
+        s.onload = ready;
+        s.onerror = function () { window._fbBabelP = null; reject(new Error('Babel did not load')); };
+        document.head.appendChild(s);
+      });
+      return window._fbBabelP;
+    };
   </script>
   <script src="https://cdn.jsdelivr.net/npm/hyperformula@2.6.1/dist/hyperformula.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
@@ -813,15 +829,17 @@
 <body>
 <div id="root"></div>
 
-<script type="text/babel" data-presets="fb-jsx">
-  fbBootLog('index compiled');
+<!-- The app. JSX source: not run by the browser (unknown type). The code cache
+     at the end of <body> compiles it with Babel, or reuses the compiled copy. -->
+<script type="text/fb-jsx" id="fb-app-src">
+  fbBootLog('index running');
   const { useState, useEffect, useRef, useCallback } = React;
 
   // App version — shown in HomePage footer so Steve can visually confirm which
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.207';
+  const APP_VERSION = '1.208';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -19002,7 +19020,135 @@
   });
 </script>
 
-<!-- Sketch engine — loads async, resolves _sketchPromise when ready -->
-<script type="text/babel" data-presets="fb-jsx" src="./sketch.js"></script>
+<!-- Code cache: runs the app (above) and then the sketch engine (sketch.js, which
+     resolves _sketchPromise). Each source is hashed; when the hash matches the
+     compiled copy stored in IndexedDB 'fieldbook-code', that copy runs and
+     Babel is never loaded. Otherwise Babel compiles it exactly as its own
+     <script type="text/babel"> handling did (same options, `fb-jsx` preset),
+     and the result is stored for next time. Only code is stored here — never
+     project data, which lives in 'fieldbook-data'. -->
+<script>
+(function () {
+  // Part of the key: a different Babel or preset must never reuse old output.
+  var KEY_VER = 'babel@8.0.7|fb-jsx|1';
+  var DB_NAME = 'fieldbook-code', STORE = 'code';
+  var RETRY = 'fb_code_retry';
+
+  function openDB() {
+    return new Promise(function (resolve, reject) {
+      var rq = indexedDB.open(DB_NAME, 1);
+      rq.onupgradeneeded = function () { rq.result.createObjectStore(STORE); };
+      rq.onsuccess = function () { resolve(rq.result); };
+      rq.onerror = function () { reject(rq.error); };
+      rq.onblocked = function () { reject(new Error('blocked')); };
+    });
+  }
+  var dbP = null;
+  function db() { return dbP || (dbP = openDB()); }
+  function req(mode, fn) {
+    return db().then(function (d) {
+      return new Promise(function (resolve, reject) {
+        var tx = d.transaction(STORE, mode), r = fn(tx.objectStore(STORE));
+        tx.oncomplete = function () { resolve(r && r.result); };
+        tx.onerror = tx.onabort = function () { reject(tx.error); };
+      });
+    });
+  }
+  function timeout(p, ms) {
+    return Promise.race([p, new Promise(function (_, rej) { setTimeout(function () { rej(new Error('timeout')); }, ms); })]);
+  }
+  window.fbCodeCache = {
+    clear: function () { return req('readwrite', function (st) { return st.clear(); }); },
+    get: function (name) { return req('readonly', function (st) { return st.get(name); }); },
+  };
+
+  // SHA-256 of the source (the WebCrypto digest is native and fast); FNV-1a
+  // twice over where crypto.subtle is missing (non-secure origins).
+  function hash(text) {
+    if (window.crypto && crypto.subtle && window.TextEncoder) {
+      return crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)).then(function (buf) {
+        return Array.from(new Uint8Array(buf), function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+      });
+    }
+    var h1 = 0x811c9dc5, h2 = 0x01000193 ^ text.length;
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 16777619); h2 = Math.imul(h2 ^ c, 2246822519);
+    }
+    return Promise.resolve('fnv' + (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16) + text.length);
+  }
+
+  // Run compiled code as a classic script in the global scope, as Babel does.
+  function run(code) {
+    var el = document.createElement('script');
+    el.text = code;
+    document.head.appendChild(el);
+  }
+
+  function load(name, filename, src, useCache) {
+    var t0 = performance.now();
+    return hash(src).then(function (h) {
+      var key = KEY_VER + '|' + h;
+      var cached = useCache ? timeout(window.fbCodeCache.get(name), 3000).catch(function () { return null; }) : Promise.resolve(null);
+      return cached.then(function (rec) {
+        if (rec && rec.key === key && typeof rec.code === 'string' && rec.code.length === rec.len) {
+          fbBootLog(name + ' cache hit', '(lookup ' + Math.round(performance.now() - t0) + 'ms)');
+          run(rec.code);
+          return 'hit';
+        }
+        fbBootLog(name + ' cache miss');
+        return window.fbLoadBabel().then(function (B) {
+          var t1 = performance.now();
+          // The same options Babel's own text/babel handling uses.
+          var code = B.transform(src, {
+            filename: filename, presets: ['fb-jsx'], plugins: undefined,
+            sourceMaps: 'inline', sourceFileName: filename, targets: { browsers: undefined },
+          }).code;
+          fbBootLog(name + ' compiled', '(' + Math.round(performance.now() - t1) + 'ms)');
+          run(code);
+          req('readwrite', function (st) { return st.put({ key: key, code: code, len: code.length, at: Date.now() }, name); })
+            .catch(function (e) { console.warn('FieldBook: code cache not saved', e); });
+          return 'miss';
+        });
+      });
+    });
+  }
+
+  // A cached copy that ran but didn't finish (its marker is missing) is thrown
+  // away and the page reloads once, compiling fresh. Can't happen while the
+  // key matches, but a stored copy must never be able to brick the app.
+  function check(name, ok, how) {
+    if (ok || how !== 'hit') return;
+    if (sessionStorage.getItem(RETRY)) { console.error('FieldBook: ' + name + ' failed to start after a fresh compile'); return; }
+    sessionStorage.setItem(RETRY, '1');
+    window.fbCodeCache.clear().catch(function () {}).then(function () { location.reload(); });
+    throw new Error('stale code cache: ' + name);
+  }
+
+  var useCache = true;
+  try { useCache = !sessionStorage.getItem(RETRY); } catch (e) {}
+  var sketchSrc = fetch('./sketch.js').then(function (r) {
+    if (!r.ok) throw new Error('sketch.js → HTTP ' + r.status);
+    return r.text();
+  });
+  var appSrc = document.getElementById('fb-app-src').textContent;
+  load('index', 'Inline Babel script', appSrc, useCache)
+    .then(function (how) { check('index', !!window._fb, how); return sketchSrc; })
+    .then(function (src) { return load('sketch', new URL('./sketch.js', location.href).href, src, useCache); })
+    .then(function (how) {
+      check('sketch', typeof window.SketchPage === 'function', how);
+      try { if (useCache === false) sessionStorage.removeItem(RETRY); } catch (e) {}
+    })
+    .catch(function (e) {
+      console.error('FieldBook: app code failed to load', e);
+      if (!document.getElementById('root').children.length) {
+        document.getElementById('root').innerHTML =
+          '<p class="p-6 text-base text-fb-text">FieldBook could not start: ' +
+          String(e && e.message || e).replace(/</g, '&lt;') +
+          '. Connect to the internet once and reopen the app.</p>';
+      }
+    });
+})();
+</script>
 </body>
 </html>

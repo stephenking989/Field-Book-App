@@ -1,6 +1,7 @@
 // =============================================================================
 // SKETCH ENGINE  —  sketch.js
-// Loaded by index.html via <script type="text/babel" src="./sketch.js">.
+// Loaded by index.html's code cache (end of <body>): fetched, compiled with
+// Babel `fb-jsx` or taken from the compiled copy, then run after the app.
 // Depends on window._fb (set by index.html before this script runs):
 //   window._fb.DB            — data-layer object
 //   window._fb.PageHeaderStrip — shared page-header component
@@ -10528,6 +10529,6 @@ window._fbSketchUtils = {
 window.SketchPage = SketchPage;
 if (window.fbBootLog) {
   const r = performance.getEntriesByName(new URL('./sketch.js', location.href).href)[0];
-  window.fbBootLog('sketch compiled', r ? `(fetched ${Math.round(r.responseEnd)}ms)` : '');
+  window.fbBootLog('sketch running', r ? `(fetched ${Math.round(r.responseEnd)}ms)` : '');
 }
 window._resolveSketch();

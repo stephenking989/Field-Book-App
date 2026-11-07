@@ -4,7 +4,7 @@
 // Bump this string every time you deploy new code.
 // The activate handler deletes any cache with a different name, forcing
 // browsers and installed PWAs to discard stale files and re-fetch everything.
-const CACHE_NAME = 'fieldbook-v1.207';
+const CACHE_NAME = 'fieldbook-v1.208';
 
 // OpenStreetMap tiles the Map page has shown, kept for offline use. This cache
 // is NOT versioned and survives every CACHE_NAME bump. Only tiles the user
@@ -45,13 +45,23 @@ function fetchFresh(url) {
   });
 }
 
+// Babel is fetched by the page only when the code cache misses — that is, on
+// the first launch after an update. That launch may be offline, and the old
+// cache (which held Babel) is gone by then, so keep a copy in this version's
+// cache. Best effort: a failure here must never fail the install. Keep this
+// URL identical to FB_BABEL_URL in index.html.
+const BABEL_URL = 'https://unpkg.com/@babel/standalone@8.0.7/babel.min.js';
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     // Fetch everything first so a failed download leaves nothing half-written;
     // a failed install is simply retried the next time the app is opened.
     Promise.all(APP_SHELL.map(fetchFresh)).then((responses) => {
       return caches.open(CACHE_NAME).then((cache) => {
-        return Promise.all(APP_SHELL.map((url, i) => cache.put(url, responses[i])));
+        return Promise.all(APP_SHELL.map((url, i) => cache.put(url, responses[i])))
+          .then(() => fetch(BABEL_URL, { mode: 'cors', cache: 'reload' })
+            .then((r) => (r.ok ? cache.put(BABEL_URL, r) : null))
+            .catch(() => {}));
       });
     })
   );
