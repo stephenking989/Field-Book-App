@@ -28,6 +28,19 @@
   <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone@8.0.7/babel.min.js"></script>
+  <script>
+    // Boot timing: one console line per stage, ms since the page started loading.
+    window.fbBootLog = function (label, extra) {
+      try { console.log('[boot] ' + label + ' ' + Math.round(performance.now()) + 'ms' + (extra ? ' ' + extra : '')); } catch (e) {}
+    };
+    fbBootLog('babel ready');
+    // JSX only. The default presets (react + env) spend ~80 % of the compile
+    // down-levelling syntax every browser we support already runs.
+    Babel.registerPreset('fb-jsx', { presets: [[Babel.availablePresets.react, { runtime: 'classic' }]] });
+    // Babel compiles the text/babel scripts on window DOMContentLoaded; this
+    // document listener runs just before it.
+    document.addEventListener('DOMContentLoaded', function () { fbBootLog('babel start'); });
+  </script>
   <script src="https://cdn.jsdelivr.net/npm/hyperformula@2.6.1/dist/hyperformula.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -800,14 +813,15 @@
 <body>
 <div id="root"></div>
 
-<script type="text/babel">
+<script type="text/babel" data-presets="fb-jsx">
+  fbBootLog('index compiled');
   const { useState, useEffect, useRef, useCallback } = React;
 
   // App version — shown in HomePage footer so Steve can visually confirm which
   // build the PWA is actually running (SW caching on Android makes this
   // otherwise invisible). Format: 1.<sw-cache-bump>. Must stay in sync with
   // CACHE_NAME in sw.js (e.g. 'fieldbook-v1.118' ↔ '1.118').
-  const APP_VERSION = '1.206';
+  const APP_VERSION = '1.207';
 
   // Local-date YYYY-MM-DD (NOT UTC). `new Date().toISOString()` returns UTC,
   // which rolls to the *next* calendar day in western timezones after early
@@ -1300,6 +1314,7 @@
   // projects into IndexedDB. localStorage copies are removed only after the
   // IDB transaction commits, so an interrupted migration just re-runs.
   const _dataReady = (async () => {
+    fbBootLog('data start');
     const ls = _readLocalStorageProjects();
     let stored;
     try {
@@ -1314,17 +1329,23 @@
       _backend = 'ls';
       _projectCache = ls.projects;
       _indexCache = _buildIndex(ls.index, ls.projects);
+      fbBootLog('data ready', `localStorage fallback, ${Object.keys(ls.projects).length} projects`);
       return;
     }
 
+    fbBootLog('data read', `${Object.keys(stored).length} records`);
+    const tParse = performance.now();
+    let parsedBytes = 0;
     const projects = {};
     let index = null;
     Object.keys(stored).forEach(k => {
       try {
+        parsedBytes += (stored[k] || '').length;
         if (k === INDEX_KEY) index = JSON.parse(stored[k]);
         else { const p = JSON.parse(stored[k]); if (p && p.id) projects[p.id] = p; }
       } catch {}
     });
+    fbBootLog('data ready', `${Object.keys(projects).length} projects, ${(parsedBytes / 1e6).toFixed(2)} MB parsed in ${Math.round(performance.now() - tParse)}ms`);
     // A project already in IDB is the live copy; only bring over new ones.
     const migrated = Object.keys(ls.projects).filter(id => !projects[id]);
     migrated.forEach(id => { projects[id] = ls.projects[id]; });
@@ -18704,6 +18725,7 @@
     const [installPrompt, setInstallPrompt] = useState(null);
     const [pendingFileImport, setPendingFileImport] = useState(null);
 
+    useEffect(() => { fbBootLog('first render', route.view); }, []);
     useEffect(() => {
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('./sw.js')
@@ -18981,6 +19003,6 @@
 </script>
 
 <!-- Sketch engine — loads async, resolves _sketchPromise when ready -->
-<script type="text/babel" src="./sketch.js"></script>
+<script type="text/babel" data-presets="fb-jsx" src="./sketch.js"></script>
 </body>
 </html>

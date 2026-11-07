@@ -8,8 +8,12 @@
 // which unblocks the ReactDOM.createRoot() call in index.html.
 // =============================================================================
 
-const { useState, useEffect, useRef } = React;
-const { DB, PageHeaderStrip, photoDB } = window._fb;
+// useState / useEffect / useRef, DB, PageHeaderStrip and photoDB are NOT
+// declared here: index.html's script declares them at top level, and every
+// classic script shares one global scope. The scripts are compiled JSX-only
+// (`fb-jsx`), so `const` stays `const`, and declaring one twice is a
+// SyntaxError that stops this whole file. (The old default `env` preset turned
+// them into `var`s, which hid this.) index.html's script always runs first.
 
 
 
@@ -10522,4 +10526,8 @@ window._fbSketchUtils = {
   wrapText,
 };
 window.SketchPage = SketchPage;
+if (window.fbBootLog) {
+  const r = performance.getEntriesByName(new URL('./sketch.js', location.href).href)[0];
+  window.fbBootLog('sketch compiled', r ? `(fetched ${Math.round(r.responseEnd)}ms)` : '');
+}
 window._resolveSketch();
